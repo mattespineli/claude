@@ -765,7 +765,7 @@ def add_found(entries):
     return new
 
 
-def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4, fills=None):
+def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4, cut=None):
     """Anti-aliased circle icon as rows of hex colors (supersampled; no Pillow needed).
 
     mode: "full" (filled), "live" (ring + left half filled), anything else (ring only).
@@ -773,7 +773,10 @@ def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4, fills=None)
     c = size / 2
     R = c - margin
     f, b = _rgb(fg), _rgb(bg)
-    lf, rf = fills if fills else {"full": (1, 1), "live": (1, 0)}.get(mode, (0, 0))  # left/right half fill, 0..1
+    # The fill is the part of the disc left of x = cut (so it wipes in/out horizontally):
+    # full -> everything, live -> left half, anything else -> nothing.
+    if cut is None:
+        cut = {"full": R + 1, "live": 0}.get(mode, -R - 1)
     rows = []
     for py in range(size):
         row = []
@@ -784,7 +787,7 @@ def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4, fills=None)
                     x = px + (sx + 0.5) / ss - c
                     y = py + (sy + 0.5) / ss - c
                     d = (x * x + y * y) ** 0.5
-                    on = (R - ring <= d <= R) or (d <= R * (lf if x < 0 else rf))
+                    on = (R - ring <= d <= R) or (d <= R and x < cut)
                     hit += on
             a = hit / (ss * ss)
             row.append("#%02x%02x%02x" % tuple(round(bc + (fc - bc) * a) for fc, bc in zip(f, b)))
@@ -897,19 +900,6 @@ def run_gui():
         except Exception:
             pass
 
-    def set_redraw(on):
-        """Windows: suspend/resume painting of the content canvas (WM_SETREDRAW) to avoid flicker."""
-        if sys.platform != "win32":
-            return
-        try:
-            import ctypes
-            hwnd = canvas.winfo_id()
-            ctypes.windll.user32.SendMessageW(hwnd, 0x000B, 1 if on else 0, 0)
-            if on:  # RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
-                ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x0001 | 0x0080 | 0x0100)
-        except Exception:
-            pass
-
     menu_state = {"top": None}
 
     def close_menu(_=None):
@@ -996,41 +986,6 @@ def run_gui():
         c.bind("<ButtonRelease-1>", lambda e: command() if 0 <= e.x <= w and 0 <= e.y <= 28 else None)
         return c
 
-    def rounded_card(parent, color, radius=10, inset=4):
-        """Frame on a rounded-rectangle background; pack children into the returned frame.
-
-        cv._sync() sizes the card immediately (no waiting for <Configure>), which keeps new content
-        from flashing at the canvas default size when it is swapped in.
-        """
-        cv = tk.Canvas(parent, bg=parent.cget("bg"), highlightthickness=0, width=1, height=1)
-        inner = tk.Frame(cv, bg=color, padx=6, pady=3)
-        win_id = cv.create_window(inset, inset, window=inner, anchor="nw")
-
-        shape = {"id": None}
-
-        def draw(w):
-            h = inner.winfo_reqheight() + 2 * inset
-            cv.configure(height=h, width=inner.winfo_reqwidth() + 2 * inset)  # natural width drives window width
-            pts = rr_points(0, 0, w - 1, h - 1, radius)
-            if shape["id"] is None:
-                shape["id"] = cv.create_polygon(pts, smooth=True, fill=color, outline=color)
-                cv.tag_lower(shape["id"])
-            else:
-                cv.coords(shape["id"], *pts)  # cheaper than recreating the polygon every animation frame
-            cv.itemconfigure(win_id, width=max(w - 2 * inset, 1))
-
-        def redraw(_=None):
-            draw(max(cv.winfo_width(), 1))
-
-        def sync():
-            inner.update_idletasks()
-            draw(max(canvas.winfo_width(), inner.winfo_reqwidth() + 2 * inset))
-
-        cv._sync = sync
-        cv.bind("<Configure>", redraw)
-        inner.bind("<Configure>", redraw)
-        return cv, inner
-
     def styled_option(parent, var, values, command=None, width=None):
         om = tk.OptionMenu(parent, var, *values, **({"command": command} if command else {}))
         om.config(bg=PANEL, fg=FG, activebackground=HOVER, activeforeground=FG, relief="flat", bd=0,
@@ -1071,7 +1026,8 @@ def run_gui():
     refresh_btn.create_image(17, 17, image=refresh_img)
     view_imgs = {}
     icon = {"busy": False, "rows": {}}
-    ICON_FILLS = {"full": (1, 1), "live": (1, 0), "title": (0, 0)}
+    ICON_R = 34 / 2 - 5.0
+    ICON_CUT = {"full": ICON_R + 1, "live": 0.0, "title": -ICON_R - 1}  # wipe position of the fill
     ICON_FRAMES = 10
 
     def icon_precompute():
@@ -1083,8 +1039,8 @@ def run_gui():
             for k in range(1, ICON_FRAMES + 1):
                 t = k / ICON_FRAMES
                 e = t * t * (3 - 2 * t)
-                fills = tuple(x + (y - x) * e for x, y in zip(ICON_FILLS[a], ICON_FILLS[b]))
-                frames.append(aa_circle_pixels(34, "", FG, BG, fills=fills, ss=3))
+                cut = ICON_CUT[a] + (ICON_CUT[b] - ICON_CUT[a]) * e
+                frames.append(aa_circle_pixels(34, "", FG, BG, cut=cut, ss=3))
             icon["rows"][(a, b)] = frames
 
     def icon_image(rows):
@@ -1125,8 +1081,8 @@ def run_gui():
     container.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 0))
     container.grid_rowconfigure(0, weight=1)
     container.grid_columnconfigure(0, weight=1)
-    canvas = tk.Canvas(container, bg=BG, highlightthickness=0, width=260, height=100)
-    scroll = tk.Canvas(container, width=8, bg=BG, highlightthickness=0, cursor="arrow")
+    canvas = tk.Canvas(container, bg=BG, highlightthickness=0, width=330, height=100)
+    scroll = tk.Canvas(container, width=8, height=1, bg=BG, highlightthickness=0, cursor="arrow")
     sb = {"lo": 0.0, "hi": 1.0, "off": 0.0, "hover": False}
 
     def sb_draw():
@@ -1164,12 +1120,10 @@ def run_gui():
     scroll.bind("<Configure>", lambda e: sb_draw())
     canvas.configure(yscrollcommand=sb_set)
     canvas.grid(row=0, column=0, sticky="nsew")
-    body = tk.Frame(canvas, bg=BG)
-    body_id = canvas.create_window((0, 0), window=body, anchor="nw")
     user_sized = {"on": False}
     view_tween = {"on": False}
     MIN_W, MIN_H = 240, 120
-    MIN_BODY_W = 300  # wide enough for an expanded game, so expanding never changes the window width
+    MIN_BODY_W = 330  # wide enough for an expanded game, so expanding never changes the window width
 
     def tween(h0, h1, setter, done=None, duration=0.24):
         import time
@@ -1184,39 +1138,48 @@ def run_gui():
                 done()
         step()
 
-    def fit(_=None):
-        """Keep scroll region in sync; auto-size to content until the user resizes."""
-        if session.get("anim_n"):
-            return  # an expand/collapse is animating; animate() calls fit() once it ends
-        canvas.configure(scrollregion=canvas.bbox("all"))
+    def update_scrollbar():
         target = canvas.winfo_height()
-        if not user_sized["on"]:
-            max_h = int(root.winfo_screenheight() * 0.7)
-            target = min(body.winfo_reqheight(), max_h)
-            canvas.configure(width=max(body.winfo_reqwidth(), MIN_BODY_W))
-            if view_tween["on"]:
-                pass  # a view change is animating the height; it calls fit() again when done
-            elif view_tween.pop("next", False) and canvas.winfo_height() != target:
-                view_tween["on"] = True
-
-                def finish():
-                    view_tween["on"] = False
-                    fit()
-                tween(canvas.winfo_height(), target, lambda h: canvas.configure(height=max(int(h), 1)), finish)
-            else:
-                canvas.configure(height=target)
-        need = body.winfo_reqheight() > target
+        need = session["total"] > target
         if need and not scroll.winfo_ismapped():
             scroll.grid(row=0, column=1, sticky="ns")
         elif not need and scroll.winfo_ismapped():
             scroll.grid_remove()
             canvas.yview_moveto(0)
 
-    def on_canvas(e):
-        canvas.itemconfigure(body_id, width=e.width)
-        fit()
+    def fit(_=None):
+        """Auto-size the window to the drawn content (until the user resizes) and sync the scrollbar."""
+        if session["anims"]:
+            return  # an expand/collapse is animating; it calls fit() again when done
+        if not user_sized["on"]:
+            max_h = int(root.winfo_screenheight() * 0.7)
+            target = min(session["total"], max_h)
+            canvas.configure(width=MIN_BODY_W)
+            if view_tween["on"]:
+                pass  # a view change is animating the height; it calls fit() again when done
+            elif view_tween.pop("next", False):
+                start = view_tween.pop("from", canvas.winfo_height())  # "from" is set when leaving Title (height 1)
+                if start == target:
+                    canvas.configure(height=target)
+                else:
+                    view_tween["on"] = True
 
-    body.bind("<Configure>", fit)
+                    def finish():
+                        view_tween["on"] = False
+                        fit()
+                    tween(start, target, lambda h: canvas.configure(height=max(int(h), 1)), finish)
+            else:
+                canvas.configure(height=target)
+        update_scrollbar()
+
+    canvas_w = {"w": 0}
+
+    def on_canvas(e):
+        if e.width != canvas_w["w"]:  # width changed (user resize): relayout the text
+            canvas_w["w"] = e.width
+            draw_all()
+        update_scrollbar()
+
     canvas.bind("<Configure>", on_canvas)
 
     def wheel(e):
@@ -1288,6 +1251,7 @@ def run_gui():
         view_tween["next"] = True  # fit() will animate the height to the new content
         if cur == "title":
             canvas.configure(height=1)
+            view_tween["from"] = 1
         apply_layout()
         if last:
             render(*last["args"])
@@ -1300,18 +1264,52 @@ def run_gui():
     topmost = tk.BooleanVar(value=True)
     pins = load_pinned()
 
-    def section(title):
-        tk.Label(body, text=title, bg=BG, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
+    # ------------------------------------------------------------------------------------------
+    # Canvas renderer. Everything is drawn on one canvas instead of one widget per label, so a redraw
+    # (refresh, expand, collapse, view change) is a single repaint and cannot flicker.
+    # ------------------------------------------------------------------------------------------
+    import time as _time
+    FONTS = {"name": ("Segoe UI", 10, "bold"), "line": ("Segoe UI", 9), "detb": ("Segoe UI", 9, "bold"),
+             "sec": ("Segoe UI", 8, "bold"), "hdr": ("Segoe UI", 9, "bold"), "small": ("Segoe UI", 8),
+             "smallb": ("Segoe UI", 8, "bold")}
+    PAD, GAP = 10, 6
+    last = {}
+    session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
+               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False}
 
-    def draw_graphic(parent, g):
-        if isinstance(g, list):
-            for item in g:
-                draw_graphic(parent, item)
-            return
-        bg = parent.cget("bg")
-        if g["kind"] == "periods":
-            W, H = 240, 24
-            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
+    def gkey(g):
+        return f'{g["league"]}:{g["id"]}'
+
+    def ctext(x, y, s_, font, fill, width=None, anchor="nw", tags=()):
+        kw = {"text": s_, "font": font, "fill": fill, "anchor": anchor, "tags": tags}
+        if width:
+            kw["width"] = int(width)
+        i = canvas.create_text(x, y, **kw)
+        b_ = canvas.bbox(i)
+        return i, (b_[3] - b_[1] if b_ else 0)
+
+    class Off:
+        """Draw with coordinates relative to (ox, oy), so the graphics code can use local coordinates."""
+        def __init__(self, ox, oy):
+            self.ox, self.oy = ox, oy
+
+        def __getattr__(self, name):
+            fn = getattr(canvas, name)
+            if not name.startswith("create_"):
+                return fn
+
+            def call(*args, **kw):
+                flat = []
+                for a_ in args:
+                    flat.extend(a_) if isinstance(a_, (list, tuple)) else flat.append(a_)
+                return fn(*[v + (self.ox if k % 2 == 0 else self.oy) for k, v in enumerate(flat)], **kw)
+            return call
+
+    def graphic_one(ox, oy, g, bg):
+        c = Off(ox, oy)
+        kind = g["kind"]
+        if kind == "periods":
+            W = 240
             n, gap = len(g["fills"]), 3
             seg = (W - gap * (n - 1)) / n
             for i, f in enumerate(g["fills"]):
@@ -1319,25 +1317,22 @@ def run_gui():
                 c.create_rectangle(x, 14, x + seg, 20, fill="#33333d", outline="")
                 if f > 0:
                     c.create_rectangle(x, 14, x + seg * f, 20, fill="#34d399" if f < 1 else "#4a4a55", outline="")
-            c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=("Segoe UI", 8, "bold"))
-            c.pack(anchor="w", pady=(2, 0))
-        elif g["kind"] == "versus":
-            W, H = 240, 30
-            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
-            total = g["a"] + g["b"]
-            split = W * g["a"] / total
+            c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=FONTS["smallb"])
+            return 24
+        if kind == "versus":
+            W = 240
+            split = W * g["a"] / (g["a"] + g["b"])
             c.create_rectangle(0, 16, split, 24, fill=g.get("a_color", "#60a5fa"), outline="")
             c.create_rectangle(split, 16, W, 24, fill=g.get("b_color", "#f59e0b"), outline="")
             fmt = lambda v: f"{v:g}"
-            c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=("Segoe UI", 8))
-            c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=("Segoe UI", 8))
-            c.create_text(W, 6, text=f'{fmt(g["b"])} {g["b_name"]}', anchor="e", fill=FG, font=("Segoe UI", 8))
-            c.pack(anchor="w", pady=(2, 0))
-        elif g["kind"] == "timeline":
-            W, H = 240, 44
+            c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=FONTS["small"])
+            c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=FONTS["small"])
+            c.create_text(W, 6, text=f'{fmt(g["b"])} {g["b_name"]}', anchor="e", fill=FG, font=FONTS["small"])
+            return 30
+        if kind == "timeline":
+            W = 240
             span = 90 if g["minute"] <= 90 else 120
             px = lambda m: 6 + (W - 12) * min(m, span) / span
-            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
             c.create_line(6, 22, W - 6, 22, fill="#33333d", width=4, capstyle="round")
             c.create_line(6, 22, px(g["minute"]), 22, fill="#34d399", width=4, capstyle="round")
             for m in (45, 90):
@@ -1349,29 +1344,26 @@ def run_gui():
                 else:
                     c.create_rectangle(x - 3, y - 4, x + 3, y + 4, fill="#fbbf24" if ev["kind"] == "yellow" else "#ef4444", outline="")
             c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
-            c.pack(anchor="w", pady=(2, 0))
-        elif g["kind"] == "baseball":
-            c = tk.Canvas(parent, width=130, height=44, bg=bg, highlightthickness=0)
+            return 44
+        if kind == "baseball":
             def base(cx, cy, on):
                 r = 5
                 hl = g.get("color", "#fbbf24")
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else bg,
                                  outline=hl if on else DIM, width=2)
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
-            # count: balls (0-3), strikes (0-2), outs (0-3)
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
                                                             ("O", min(g["outs"], 3), 3, "#f87171"))):
                 y = 8 + row * 14
-                c.create_text(52, y, text=label, anchor="w", fill=DIM, font=("Segoe UI", 8, "bold"))
+                c.create_text(52, y, text=label, anchor="w", fill=DIM, font=FONTS["smallb"])
                 for i in range(total):
                     on = i < n
                     c.create_oval(66 + i * 12, y - 4, 74 + i * 12, y + 4, fill=color if on else bg,
                                   outline=color if on else DIM, width=1)
-            c.pack(anchor="w", pady=(2, 0))
-        elif g["kind"] == "football":
-            W, H = 240, 24
-            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
+            return 44
+        if kind == "football":
+            W = 240
             px = lambda yd: W * yd / 100
             c.create_rectangle(0, 14, W, 20, fill="#33333d", outline="")
             if g["red"]:
@@ -1380,50 +1372,56 @@ def run_gui():
                 c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
             bx = px(g["x"])
             c.create_oval(bx - 5, 12, bx + 5, 22, fill=g.get("color", "#34d399"), outline=FG)
-            c.create_text(0, 6, text=f"{g['off']} \u25b6", anchor="w", fill=FG, font=("Segoe UI", 8, "bold"))
-            c.create_text(W, 6, text=g["def"], anchor="e", fill=DIM, font=("Segoe UI", 8, "bold"))
-            c.pack(anchor="w", pady=(2, 0))
+            c.create_text(0, 6, text=f"{g['off']} ▶", anchor="w", fill=FG, font=FONTS["smallb"])
+            c.create_text(W, 6, text=g["def"], anchor="e", fill=DIM, font=FONTS["smallb"])
+            return 24
+        return 0
 
-    def gkey(g):
-        return f'{g["league"]}:{g["id"]}'
+    def graphics(ox, oy, gs, bg):
+        h = 0
+        for g in ([gs] if isinstance(gs, dict) else gs):
+            h += 2 + graphic_one(ox, oy + h + 2, g, bg)
+        return h
 
-    def draw_details(parent, bgc, d):
-        small = ("Segoe UI", 8)
+    def draw_details(x, y, w, bgc, d):
+        """Expanded-game section; returns its height."""
+        y0 = y
         if d is None:
-            tk.Label(parent, text="Loading details...", bg=bgc, fg=DIM, font=small, anchor="w").pack(fill="x", pady=(6, 0))
-            return
+            _, h = ctext(x, y + 6, "Loading details...", FONTS["small"], DIM)
+            return 6 + h
         if "error" in d:
-            tk.Label(parent, text="Details unavailable", bg=bgc, fg=COLORS["err"], font=small, anchor="w").pack(fill="x", pady=(6, 0))
-            return
-        tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(6, 4))
+            _, h = ctext(x, y + 6, "Details unavailable", FONTS["small"], COLORS["err"])
+            return 6 + h
+        canvas.create_line(x, y + 6, x + w, y + 6, fill=DIM)
+        y += 11
         if d.get("home_win") is not None:
             hw = round(d["home_win"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
-            draw_graphic(parent, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
-                                  "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb})
-        if d["scoring"]:
-            tk.Label(parent, text="Scoring", bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(4, 0))
-            for when, text in d["scoring"]:
-                tk.Label(parent, text=(f"{when} · " if when else "") + text, bg=bgc, fg=FG, font=small, anchor="w",
-                         justify="left", wraplength=280).pack(fill="x")
-        if d["plays"]:
-            tk.Label(parent, text="Recent plays", bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(4, 0))
-            for when, text in d["plays"][:8]:
-                tk.Label(parent, text=(f"{when} · " if when else "") + text, bg=bgc, fg=FG, font=small, anchor="w",
-                         justify="left", wraplength=280).pack(fill="x")
+            y += graphics(x, y, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
+                                 "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc)
+        for title, items in (("Scoring", d["scoring"]), ("Recent plays", d["plays"][:8])):
+            if items:
+                _, h = ctext(x, y + 4, title, FONTS["smallb"], DIM)
+                y += 4 + h
+                for when, text in items:
+                    _, h = ctext(x, y, (f"{when} · " if when else "") + text, FONTS["small"], FG, width=w)
+                    y += h
         if d["stats"]:
-            tk.Label(parent, text="Team stats", bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(4, 0))
-            grid = tk.Frame(parent, bg=bgc)
-            grid.pack(fill="x")
-            grid.grid_columnconfigure(1, weight=1)
-            tk.Label(grid, text=d["away_abbr"], bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), width=8, anchor="e").grid(row=0, column=0)
-            tk.Label(grid, text=d["home_abbr"], bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), width=8, anchor="w").grid(row=0, column=2)
-            for i, (label, a, h) in enumerate(d["stats"], start=1):
-                tk.Label(grid, text=a, bg=bgc, fg=FG, font=small, width=8, anchor="e").grid(row=i, column=0)
-                tk.Label(grid, text=label, bg=bgc, fg=DIM, font=small).grid(row=i, column=1)
-                tk.Label(grid, text=h, bg=bgc, fg=FG, font=small, width=8, anchor="w").grid(row=i, column=2)
+            _, h = ctext(x, y + 4, "Team stats", FONTS["smallb"], DIM)
+            y += 4 + h
+            mid = x + w / 2
+            ctext(mid - 60, y, d["away_abbr"], FONTS["smallb"], DIM, anchor="ne")
+            _, h = ctext(mid + 60, y, d["home_abbr"], FONTS["smallb"], DIM, anchor="nw")
+            y += h
+            for label, a_, h_ in d["stats"]:
+                ctext(mid - 60, y, a_, FONTS["small"], FG, anchor="ne")
+                ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
+                _, h = ctext(mid + 60, y, h_, FONTS["small"], FG, anchor="nw")
+                y += h
         if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None):
-            tk.Label(parent, text="No extra details from ESPN for this game", bg=bgc, fg=DIM, font=small, anchor="w").pack(fill="x")
+            _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
+            y += h
+        return y - y0
 
     def fetch_details(g):
         try:
@@ -1431,325 +1429,253 @@ def run_gui():
         except Exception as ex:
             session["details"][gkey(g)] = {"error": str(ex)[:60]}
 
-    last = {}
-    # in-session only: expanded games, cached details, animation bookkeeping
-    session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "wraps": {}, "heights": {},
-               "anim_in": set(), "pending": [], "sig": None, "groups": {}, "rows": {}}
+    def new_hit(payload):
+        tag = f"hit{len(session['hits'])}"
+        session["hits"][tag] = payload
+        return tag
 
-    # ---- smooth expand / collapse -------------------------------------------------
-    def animate(wrap, inner, key, start, target, done=None, collapse=False):
-        """Ease `wrap` from `start` to `target` px. Time-based (no slow-down when frames are dropped).
-
-        The window is pre-sized for the end state and fit() is paused while animating, so each frame only
-        moves the content instead of also resizing the whole window.
-        """
-        import time
-        duration = 0.22
-        session["anim_n"] = session.get("anim_n", 0) + 1
-        if not collapse and not user_sized["on"]:
-            want = body.winfo_reqheight() + (target - start)
-            canvas.configure(height=max(canvas.winfo_height(), min(want, int(root.winfo_screenheight() * 0.7))))
-
-        def finish():
-            session["anim_n"] = max(session.get("anim_n", 1) - 1, 0)
-            if session["anim_n"] == 0:
-                try:
-                    fit()
-                except tk.TclError:
-                    pass
-        t0 = time.perf_counter()
-        token = object()
-        session.setdefault("anims", {})[key] = token  # a newer animation for this key cancels this one
-
-        def step():
-            if session["anims"].get(key) is not token:
-                finish()
-                return
-            try:
-                p = min((time.perf_counter() - t0) / duration, 1.0)
-                e = p * p * (3 - 2 * p)  # smoothstep
-                wrap.configure(height=max(int(start + (target - start) * e), 1))
-                if p < 1.0:
-                    root.after(6, step)
-                    return
-                if not collapse:
-                    wrap.pack_propagate(True)
-                    inner.place_forget()
-                    inner.pack(fill="x")
-                    session["heights"][key] = target
-            except tk.TclError:
-                finish()
-                return  # widgets were replaced by a re-render mid-animation
-            if done:
-                done()
-            finish()
-        step()
-
-    def reveal(parent, key, bg, after=None):
-        """Frame to build collapsible content into; grows downward if `key` was just opened."""
-        wrap = tk.Frame(parent, bg=bg)
-        wrap.pack(fill="x", **({"after": after} if after is not None else {}))
-        inner = tk.Frame(wrap, bg=bg)
-        session["wraps"][key] = (wrap, inner)
-        if key in session["anim_in"]:
-            session["anim_in"].discard(key)
-            start = session["heights"].get(key, 0)
-            wrap.pack_propagate(False)
-            wrap.configure(height=max(start, 1))
-            inner.place(x=0, y=0, relwidth=1)
-            session["pending"].append((wrap, inner, key, start))
+    def visible(spec, H, final=False):
+        """Pixels of a collapsible block that are showing right now (eased)."""
+        if spec["opening"]:
+            a_ = spec["from"] if spec["from"] is not None else 0
+            b_ = H
         else:
-            inner.pack(fill="x")
-        return inner
+            a_ = spec["from"] if spec["from"] is not None else H
+            b_ = 0
+        if final:
+            return b_
+        p = min((_time.perf_counter() - spec["t0"]) / spec["dur"], 1.0)
+        return a_ + (b_ - a_) * p * p * (3 - 2 * p)
 
-    def collapse_then(key, action):
-        """Shrink the open content for `key` upward, then run `action` (state change + re-render)."""
-        try:
-            wrap, inner = session["wraps"][key]
-            h = inner.winfo_height()
-            if h <= 1:
-                raise KeyError
-            wrap.pack_propagate(False)
-            wrap.configure(height=h)
-            inner.pack_forget()
-            inner.place(x=0, y=0, relwidth=1)
-            animate(wrap, inner, key, h, 0, done=action, collapse=True)
-        except (KeyError, tk.TclError):
-            action()
+    def draw_card(r, x, y, w, final):
+        tint = r.get("tint")
+        bgc = blend(BG, tint, 0.22) if tint else BG
+        cx0, cw_ = x + 2, w - 4
+        tags = ()
+        if r.get("game") or r.get("url"):
+            tags = (new_hit(("game", r)),)
+        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc) if tint else None
+        hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
+        ix, ww = cx0 + PAD, cw_ - 2 * PAD
+        yy = y + GAP
+        _, h = ctext(ix, yy, r["name"], FONTS["name"], FG, width=ww, tags=tags)
+        yy += h
+        if r["line"]:
+            _, h = ctext(ix, yy, r["line"], FONTS["line"], DIM, width=ww, tags=tags)
+            yy += h
+        _, h = ctext(ix, yy, r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
+                     COLORS.get(r["state"], FG), width=ww, tags=tags)
+        yy += h
+        if r.get("graphic"):
+            yy += graphics(ix, yy, r["graphic"], bgc)
+        if r.get("info"):
+            _, h = ctext(ix, yy, r["info"], FONTS["line"], DIM, width=ww, tags=tags)
+            yy += h
+        g = r.get("game")
+        if g and gkey(g) in session["expanded"]:
+            key = "game:" + gkey(g)
+            y0 = yy
+            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)))
+            spec = session["anims"].get(key)
+            vis = visible(spec, H, final) if spec else H
+            if vis < H - 0.5:
+                canvas.create_rectangle(cx0 - 1, y0 + vis + GAP, cx0 + cw_ + 1, y0 + H + GAP + 3, fill=BG, outline="")
+            yy = y0 + vis
+            session["vis"][key] = vis
+        bottom = yy + GAP
+        if bgid:
+            canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
+        if hit:
+            canvas.coords(hit, cx0 + 3, y + 3, cx0 + cw_ - 3, bottom - 3)
+        return bottom + GAP
 
-    def run_pending():
-        """Start the grow animations queued by reveal()."""
-        root.update_idletasks()
-        for wrap, inner, key, start in session["pending"]:
-            try:
-                animate(wrap, inner, key, start, inner.winfo_reqheight())
-            except tk.TclError:
-                pass
-        session["pending"] = []
+    def draw_group(n, x, y, w, final):
+        key = n["key"]
+        spec = session["anims"].get(key)
+        closing = bool(spec) and not spec["opening"]
+        tag = new_hit(("group", n))
+        r_ = canvas.create_rectangle(x, y, x + w, y + 22, fill=BG, outline="", tags=(tag,))
+        arrow = "▾ " if (n["open"] and not closing) else "▸ "
+        _, h = ctext(x + n["indent"] + 2, y + 4, arrow + n["text"], FONTS["hdr"], n["color"], tags=(tag,))
+        canvas.coords(r_, x, y, x + w, y + h + 8)
+        y += h + 8
+        if n["open"] or spec:
+            y0 = y
+            y = draw_nodes(n["children"], x, y, w, final)
+            H = y - y0
+            vis = visible(spec, H, final) if spec else H
+            if vis < H - 0.5:
+                canvas.create_rectangle(x - 1, y0 + vis, x + w + 1, y0 + H + 3, fill=BG, outline="")
+                y = y0 + vis
+            session["vis"][key] = vis
+        return y
 
-    def drop_wrap(key):
-        wrap_inner = session["wraps"].pop(key, None)
-        if wrap_inner:
-            try:
-                wrap_inner[0].destroy()
-            except tk.TclError:
-                pass
+    def draw_nodes(nodes, x, y, w, final):
+        for n in nodes:
+            t = n["t"]
+            if t == "section":
+                _, h = ctext(x + 2, y + 8, n["text"], FONTS["sec"], DIM)
+                y += 8 + h + 4
+            elif t == "text":
+                _, h = ctext(x + 2, y + 4, n["text"], FONTS["line"], DIM)
+                y += 4 + h + 4
+            elif t == "card":
+                y = draw_card(n["row"], x, y, w, final)
+            elif t == "group":
+                y = draw_group(n, x, y, w, final)
+        return y
 
-    def compute_sig():
-        return json.dumps([last["args"], ui_state, sorted(session["expanded"]),
-                           {k: session["details"].get(k) for k in session["expanded"]}, session.get("live")],
-                          default=str, sort_keys=True)
+    def group_node(key, text, color, indent, persist, default, children):
+        store = ui_state if persist else session
+        return {"t": "group", "key": key, "text": text, "color": color, "indent": indent, "persist": persist,
+                "default": default, "open": bool(store.get(key, default)), "children": children}
 
-    def rebuild_in_place(key, build):
-        """Replace the content of an open section without redrawing the panel, animating the height change."""
-        try:
-            wrap, inner = session["wraps"][key]
-            start = wrap.winfo_height()  # visible height (an earlier animation may still be running)
-            wrap.pack_propagate(False)
-            wrap.configure(height=max(start, 1))
-            inner.pack_forget()
-            for ch in inner.winfo_children():
-                ch.destroy()
-            inner.place(x=0, y=0, relwidth=1)
-            build(inner)
-            root.update_idletasks()
-            animate(wrap, inner, key, start, inner.winfo_reqheight())
-        except (KeyError, tk.TclError):
-            pass
+    def cards(rows, extra_line=False):
+        return [{"t": "card", "row": dict(r, line=r.get("extra", r.get("line", ""))) if extra_line else r} for r in rows]
 
-    def toggle_expand(g):
-        k = gkey(g)
-        wk = "game:" + k
-        rec = session["rows"].get(k)
-        if k in session["expanded"]:
-            session["expanded"].discard(k)
-            session["sig"] = compute_sig()
-            collapse_then(wk, lambda: drop_wrap(wk))
-            return
-        session["expanded"].add(k)
-        session["games"][k] = g
-        session["details"].pop(k, None)
-        session["heights"].pop(wk, None)
-        session["sig"] = compute_sig()
-        if rec is None:
-            render(*last["args"])
-            return
-        row, bgc = rec
-        session["anim_in"].add(wk)
-        draw_details(reveal(row, wk, bgc), bgc, None)
-        run_pending()
-
-        def work():
-            fetch_details(g)
-
-            def arrived():
-                if k not in session["expanded"]:
-                    return
-                session["sig"] = compute_sig()
-                rebuild_in_place(wk, lambda inner: draw_details(inner, bgc, session["details"].get(k)))
-            root.after(0, arrived)
-        threading.Thread(target=work, daemon=True).start()
-
-    def add_rows(rows, parent=None):
-        parent = parent or body
-        for r in rows:
-            tint = r.get("tint")
-            bgc = blend(BG, tint, 0.22) if tint else BG
-            card = None
-            if tint:
-                card, row = rounded_card(parent, bgc)
-                card.pack(fill="x", pady=3)
-            else:
-                row = tk.Frame(parent, bg=bgc)
-                row.pack(fill="x", pady=3)
-            row._url = r.get("url")  # found by the right-click handler via the widget hierarchy
-            row._game = r.get("game")
-            if r.get("game"):
-                session["rows"][gkey(r["game"])] = (row, bgc)
-            tk.Label(row, text=r["name"], bg=bgc, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
-            if r["line"]:
-                tk.Label(row, text=r["line"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
-            tk.Label(row, text=r["detail"], bg=bgc, fg=COLORS.get(r["state"], FG),
-                     font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
-            if r.get("graphic"):
-                draw_graphic(row, r["graphic"])
-            if r.get("info"):
-                tk.Label(row, text=r["info"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x")
-            g = r.get("game")
-            if g:
-                for ch in row.winfo_children():
-                    ch.configure(cursor="hand2")
-                if gkey(g) in session["expanded"]:
-                    draw_details(reveal(row, "game:" + gkey(g), bgc), bgc, session["details"].get(gkey(g)))
-            if card is not None:
-                card._sync()
-
-    def toggle(key):
-        g = session["groups"].get(key)
-        if g is None:
-            return
-        new_open = not g["open"]
-        if g["persist"]:
-            ui_state[key] = new_open
-            save_state(ui_state)
-        else:
-            session[key] = new_open
-        g["open"] = new_open
-        try:
-            g["hdr"].config(text=("\u25be " if new_open else "\u25b8 ") + g["text"])
-        except tk.TclError:
-            return
-        session["sig"] = compute_sig()
-        if new_open:
-            session["anim_in"].add(key)
-            g["build"](reveal(g["parent"], key, BG, after=g["hdr"]))
-            run_pending()
-        else:
-            collapse_then(key, lambda: drop_wrap(key))
-
-    def header_label(text, key, is_open, color, indent=0, persist=True, parent=None, build=None):
-        parent = parent or body
-        hdr = tk.Label(parent, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
-                       font=("Segoe UI", 9, "bold"), anchor="w", cursor="hand2")
-        hdr.pack(fill="x", pady=(4, 0), padx=(indent, 0))
-        session["groups"][key] = {"hdr": hdr, "text": text, "persist": persist, "parent": parent,
-                                  "build": build, "open": is_open}
-        hdr.bind("<ButtonRelease-1>", lambda e: toggle(key))
-
-    def league_groups(rows, prefix, default_open=False, indent=14, parent=None):
-        parent = parent or body
+    def league_nodes(rows, prefix, default_open=False, indent=14):
+        out = []
         for league in dict.fromkeys(r["league"] for r in rows):
             games = [r for r in rows if r["league"] == league]
             live_n = sum(r["state"] == "in" for r in games)
-            key = f"{prefix}:{league}"
-            is_open = ui_state.get(key, default_open or live_n > 0 if prefix == "leagues" else default_open)
-            rows_ = [dict(r, line=r.get("extra", r.get("line", ""))) for r in games]
-            header_label(f"{league} · {len(games)}" + (f" · {live_n} live" if live_n and prefix == "leagues" else ""),
-                         key, is_open, COLORS["in"] if live_n and prefix == "leagues" else FG, indent=indent, parent=parent,
-                         build=lambda inner, rows_=rows_: add_rows(rows_, parent=inner))
-            if is_open:
-                add_rows(rows_, parent=reveal(parent, key, BG))
+            is_leagues = prefix == "leagues"
+            out.append(group_node(
+                f"{prefix}:{league}",
+                f"{league} · {len(games)}" + (f" · {live_n} live" if live_n and is_leagues else ""),
+                COLORS["in"] if live_n and is_leagues else FG, indent, True,
+                (live_n > 0) if is_leagues else default_open, cards(games, True)))
+        return out
 
-    def render(results, pin_results, playoffs, leagues=()):
-        nonlocal body
-        last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
-        stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
-        any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
-        if any_live != session.get("any_live"):
-            session["any_live"] = any_live
-            schedule()  # switch between normal and live cadence right away
-        # Nothing changed since the last draw: leave the window alone (no flicker).
-        sig = compute_sig()
-        if sig == session["sig"]:
-            return
-        session["sig"] = sig
-
-        # Build the new content off-screen, then swap it in so the window never shows a blank frame.
-        old = body
-        body = tk.Frame(canvas, bg=BG)
-        session["wraps"] = {}
-        session["groups"] = {}
-        session["rows"] = {}
-        session["pending"] = []
+    def build_nodes():
+        results, pin_results, playoffs, leagues = last["args"]
         live_view = ui_state.get("view", "full") == "live"
         if live_view:
             results = [r for r in results if r["state"] == "in"]
             pin_results = [r for r in pin_results if r["state"] == "in"]
             playoffs = [r for r in playoffs if r["state"] == "in"]
             leagues = [r for r in leagues if r["state"] == "in"]
-            if not (results or pin_results or playoffs or leagues):
-                tk.Label(body, text="No live games", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", pady=4)
+        nodes = []
+        if live_view and not (results or pin_results or playoffs or leagues):
+            nodes.append({"t": "text", "text": "No live games"})
         if pin_results:
-            section("Tracked Games")
-            add_rows(pin_results)
+            nodes += [{"t": "section", "text": "Tracked Games"}] + cards(pin_results)
         if results:
-            section("My Teams")
-            add_rows(results)
+            nodes += [{"t": "section", "text": "My Teams"}] + cards(results)
         elif not (pin_results or playoffs or leagues or live_view):
-            tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
+            nodes.append({"t": "text", "text": "No games in the next 7 days"})
         if leagues:
-            section("Leagues")
-            league_groups(leagues, "leagues", indent=0)
+            nodes += [{"t": "section", "text": "Leagues"}] + league_nodes(leagues, "leagues", indent=0)
         if playoffs:
-            section("Playoffs")
+            nodes.append({"t": "section", "text": "Playoffs"})
             live = [r for r in playoffs if r["state"] == "in"]
-            upcoming = [r for r in playoffs if r["state"] == "pre"]
-            previous = [r for r in playoffs if r["state"] == "post"]
-            if live and not session["live_prev"]:
-                session["live"] = True  # newly live games open automatically
-            session["live_prev"] = len(live)
             if live:
-                is_open = session.get("live", True)
-                header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False,
-                             build=lambda inner, live=live: add_rows(live, parent=inner))
-                if is_open:
-                    add_rows(live, parent=reveal(body, "live", BG))
-            for title, rows, key in (("Upcoming Today", upcoming, "upcoming"), ("Previous", previous, "previous")):
+                nodes.append(group_node("live", f"Live · {len(live)}", COLORS["in"], 0, False, True, cards(live, True)))
+            for title, state, key in (("Upcoming Today", "pre", "upcoming"), ("Previous", "post", "previous")):
+                rows = [r for r in playoffs if r["state"] == state]
                 if rows:
-                    is_open = ui_state.get(key, False)
-                    header_label(f"{title} · {len(rows)}", key, is_open, FG,
-                                 build=lambda inner, rows=rows, key=key: league_groups(rows, key, parent=inner))
-                    if is_open:
-                        inner = reveal(body, key, BG)
-                        league_groups(rows, key, parent=inner)
-        nonlocal body_id
-        set_redraw(False)  # Windows creates a native window per widget: paint the swap in one go
-        try:
-            new_id = canvas.create_window(0, 0, window=body, anchor="nw")
-            canvas.itemconfigure(new_id, width=max(canvas.winfo_width(), 1))
-            body.bind("<Configure>", fit)
-            old_id, body_id = body_id, new_id
-            root.update_idletasks()
-            canvas.delete(old_id)
-            old.destroy()
-        finally:
-            set_redraw(True)
-        for wrap, inner, key, start in session["pending"]:
-            try:
-                animate(wrap, inner, key, start, inner.winfo_reqheight())
-            except tk.TclError:
-                pass
-        session["pending"] = []
+                    nodes.append(group_node(key, f"{title} · {len(rows)}", FG, 0, True, False, league_nodes(rows, key)))
+        return nodes
+
+    def draw_all(final=False):
+        if not last:
+            return 0
+        canvas.delete("all")
+        session["hits"].clear()
+        cw = max(canvas.winfo_width(), MIN_BODY_W)
+        y = draw_nodes(build_nodes(), 0, 2, cw, final)
+        total = int(y + 4)
+        canvas.configure(scrollregion=(0, 0, cw, total))
+        session["total"] = total
+        return total
+
+    def compute_sig():
+        return json.dumps([last["args"], ui_state, sorted(session["expanded"]),
+                           {k: session["details"].get(k) for k in session["expanded"]}, session.get("live")],
+                          default=str, sort_keys=True)
+
+    # ---- animations: expand / collapse of games and groups -------------------------
+    def anim_step():
+        now = _time.perf_counter()
+        finished = [k for k, sp in session["anims"].items() if now - sp["t0"] >= sp["dur"]]
+        draw_all()
+        if finished:
+            for k in finished:
+                cb = session["anims"].pop(k).get("on_done")
+                if cb:
+                    cb()
+            session["sig"] = compute_sig()
+            draw_all()
+        if session["anims"]:
+            root.after(6, anim_step)
+        else:
+            session["looping"] = False
+            fit()
+
+    def start_anim(key, opening, from_px=None, on_done=None, dur=0.22):
+        session["anims"][key] = {"t0": _time.perf_counter(), "dur": dur, "opening": opening, "from": from_px,
+                                 "on_done": on_done}
+        if not user_sized["on"]:  # size the window for the end state once, so frames only move content
+            total = draw_all(final=True)
+            canvas.configure(height=max(canvas.winfo_height(), min(total, int(root.winfo_screenheight() * 0.7))))
+        if not session["looping"]:
+            session["looping"] = True
+            root.after(0, anim_step)
+
+    def set_open(n, value):
+        store = ui_state if n["persist"] else session
+        store[n["key"]] = value
+        if n["persist"]:
+            save_state(ui_state)
+
+    def toggle_group(n):
+        key = n["key"]
+        if key in session["anims"]:
+            return
+        store = ui_state if n["persist"] else session
+        if store.get(key, n["default"]):
+            start_anim(key, False, on_done=lambda: set_open(n, False))  # shrink first, then flip the state
+        else:
+            set_open(n, True)
+            start_anim(key, True)
+
+    def toggle_expand(g):
+        k = gkey(g)
+        key = "game:" + k
+        if key in session["anims"]:
+            return
+        if k in session["expanded"]:
+            start_anim(key, False, on_done=lambda: session["expanded"].discard(k))
+            return
+        session["expanded"].add(k)
+        session["games"][k] = g
+        session["details"].pop(k, None)
+        start_anim(key, True)
+
+        def work():
+            fetch_details(g)
+
+            def arrived():
+                if k in session["expanded"]:  # grow from the "Loading" height to the full details
+                    start_anim(key, True, from_px=session["vis"].get(key))
+            root.after(0, arrived)
+        threading.Thread(target=work, daemon=True).start()
+
+    def render(results, pin_results, playoffs, leagues=()):
+        last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
+        stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
+        any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
+        if any_live != session.get("any_live"):
+            session["any_live"] = any_live
+            schedule()  # switch between normal and live cadence right away
+        live_now = sum(r["state"] == "in" for r in playoffs)
+        if live_now and not session["live_prev"]:
+            session["live"] = True  # newly live playoff games open automatically
+        session["live_prev"] = live_now
+        sig = compute_sig()
+        if sig == session["sig"]:
+            return  # nothing changed
+        session["sig"] = sig
+        draw_all()
         fit()
 
     def refresh():
@@ -1925,18 +1851,29 @@ def run_gui():
             drag["moved"] = True
             root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
 
-    def game_at(widget):
-        while widget is not None:
-            g = getattr(widget, "_game", None)
-            if g:
-                return g
-            widget = getattr(widget, "master", None)
+    def hit_at(e):
+        if e.widget is not canvas:
+            return None
+        x, y = canvas.canvasx(e.x), canvas.canvasy(e.y)
+        for i in reversed(canvas.find_overlapping(x, y, x, y)):
+            for t in canvas.gettags(i):
+                if t in session["hits"]:
+                    return session["hits"][t]
         return None
 
     def on_release(e):
-        g = game_at(e.widget)
-        if g and not drag.get("moved"):
-            toggle_expand(g)
+        h = hit_at(e)
+        if not h or drag.get("moved"):
+            return
+        if h[0] == "group":
+            toggle_group(h[1])
+        elif h[1].get("game"):
+            toggle_expand(h[1]["game"])
+
+    def on_motion(e):
+        h = hit_at(e)
+        canvas.configure(cursor="hand2" if h and (h[0] == "group" or h[1].get("game")) else "")
+    canvas.bind("<Motion>", on_motion)
 
     def restart():
         """Start a fresh copy of this script (picks up code changes from git pull), then close this one."""
@@ -1968,16 +1905,9 @@ def run_gui():
         threading.Thread(target=work, daemon=True).start()
 
 
-    def game_url_at(widget):
-        while widget is not None:
-            url = getattr(widget, "_url", None)
-            if url:
-                return url
-            widget = getattr(widget, "master", None)
-        return None
-
     def popup(e):
-        url = game_url_at(e.widget)
+        h = hit_at(e)
+        url = h[1].get("url") if h and h[0] == "game" else None
         items = []
         if url:
             import webbrowser
