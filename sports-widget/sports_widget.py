@@ -144,8 +144,7 @@ def situation_text(sport, comp):
         lines.append(" · ".join(p for p in parts if p))
     elif sport == "baseball" and ("balls" in sit or "outs" in sit):
         bases = [n for n, k in (("1st", "onFirst"), ("2nd", "onSecond"), ("3rd", "onThird")) if sit.get(k)]
-        lines.append(" · ".join([f'{sit.get("balls", 0)}-{sit.get("strikes", 0)}, {sit.get("outs", 0)} out',
-                                 "Runners: " + ", ".join(bases) if bases else "Bases empty"]))
+        lines.append("Runners: " + ", ".join(bases) if bases else "Bases empty")
         who = []
         for label, k in (("AB", "batter"), ("P", "pitcher")):
             a = (sit.get(k) or {}).get("athlete", sit.get(k) or {})
@@ -173,7 +172,8 @@ def _situation_graphic(sport, comp):
         side = "away" if half.startswith("top") else "home" if half.startswith("bot") else ""
         batting = next((c for c in comp.get("competitors", []) if c.get("homeAway") == side), {})
         return {"kind": "baseball", "bases": [bool(sit.get(k)) for k in ("onFirst", "onSecond", "onThird")],
-                "outs": int(sit.get("outs") or 0), "color": team_colors(batting, "#fbbf24") if batting else "#fbbf24"}
+                "outs": int(sit.get("outs") or 0), "balls": int(sit.get("balls") or 0),
+                "strikes": int(sit.get("strikes") or 0), "color": team_colors(batting, "#fbbf24") if batting else "#fbbf24"}
     if sport == "football" and sit:
         teams = {}
         for c in comp.get("competitors", []):
@@ -828,17 +828,23 @@ def run_gui():
             c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "baseball":
-            c = tk.Canvas(parent, width=130, height=24, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=130, height=44, bg=BG, highlightthickness=0)
             def base(cx, cy, on):
                 r = 5
                 hl = g.get("color", "#fbbf24")
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else BG,
                                  outline=hl if on else DIM, width=2)
-            base(21, 6, g["bases"][1]); base(29, 14, g["bases"][0]); base(13, 14, g["bases"][2])
-            c.create_text(52, 5, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
-            for i in range(3):
-                c.create_oval(54 + i * 14, 14, 62 + i * 14, 22, fill="#f87171" if i < g["outs"] else BG,
-                              outline="#f87171" if i < g["outs"] else DIM, width=1)
+            base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
+            # count: balls (0-3), strikes (0-2), outs (0-3)
+            for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
+                                                            ("S", min(g["strikes"], 2), 2, "#fbbf24"),
+                                                            ("O", min(g["outs"], 3), 3, "#f87171"))):
+                y = 8 + row * 14
+                c.create_text(52, y, text=label, anchor="w", fill=DIM, font=("Segoe UI", 8, "bold"))
+                for i in range(total):
+                    on = i < n
+                    c.create_oval(66 + i * 12, y - 4, 74 + i * 12, y + 4, fill=color if on else BG,
+                                  outline=color if on else DIM, width=1)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "football":
             W, H = 240, 24

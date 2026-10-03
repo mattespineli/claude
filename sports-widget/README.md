@@ -34,5 +34,5 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 Right-click → **Settings...** to adjust opacity (30-100%) and refresh cadence (15 seconds to 15 minutes). Live MLB games show a base diamond with outs; live NFL games show a field-position strip (ball, first-down line, red zone).
 
 ## Live-game graphics
-Football: field-position strip. Baseball: base diamond and outs. Basketball/hockey: period progress bar. Hockey: shots-on-goal comparison. Soccer: match timeline (goals, cards) and possession bar.
+Football: field-position strip. Baseball: base diamond plus ball/strike/out dots. Basketball/hockey: period progress bar. Hockey: shots-on-goal comparison. Soccer: match timeline (goals, cards) and possession bar.
 Preview them with fake data: `python sports_widget.py --demo` (see `demo.png`).
