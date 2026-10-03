@@ -971,13 +971,14 @@ def run_gui():
     body_id = canvas.create_window((0, 0), window=body, anchor="nw")
     user_sized = {"on": False}
     MIN_W, MIN_H = 240, 120
+    MIN_BODY_W = 300  # wide enough for an expanded game, so expanding never changes the window width
 
     def fit(_=None):
         """Keep scroll region in sync; auto-size to content until the user resizes."""
         canvas.configure(scrollregion=canvas.bbox("all"))
         if not user_sized["on"]:
             max_h = int(root.winfo_screenheight() * 0.7)
-            canvas.configure(width=max(body.winfo_reqwidth(), 200), height=min(body.winfo_reqheight(), max_h))
+            canvas.configure(width=max(body.winfo_reqwidth(), MIN_BODY_W), height=min(body.winfo_reqheight(), max_h))
         need = body.winfo_reqheight() > canvas.winfo_height()
         if need and not scroll.winfo_ismapped():
             scroll.grid(row=0, column=1, sticky="ns")
