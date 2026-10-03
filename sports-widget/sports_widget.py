@@ -1164,6 +1164,12 @@ def run_gui():
     menu.add_checkbutton(label="Always on top", variable=topmost,
                          command=lambda: root.attributes("-topmost", topmost.get()))
     menu.add_separator()
+    def restart():
+        """Start a fresh copy of this script (picks up code changes from git pull), then close this one."""
+        import subprocess
+        subprocess.Popen([sys.executable, os.path.abspath(__file__)] + sys.argv[1:], cwd=HERE)
+        root.destroy()
+    menu.add_command(label="Restart", command=restart)
     menu.add_command(label="Quit", command=root.destroy)
     menu_pos = {}
     def popup(e):

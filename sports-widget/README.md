@@ -33,6 +33,8 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
 
+Right-click → **Restart** to relaunch the widget after a `git pull`.
+
 Right-click → **Settings...** to adjust opacity (30-100%, slider or typed value) and refresh cadence (15 seconds to 15 minutes). Live MLB games show a base diamond with outs; live NFL games show a field-position strip (ball, first-down line, red zone).
 
 ## Live-game graphics
