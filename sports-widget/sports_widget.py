@@ -144,7 +144,20 @@ PLAYOFF_LEAGUES = [("NBA", "basketball", "nba"), ("NFL", "football", "nfl"), ("M
                    ("WNBA", "basketball", "wnba"), ("NHL", "hockey", "nhl")]
 
 
-def playoff_games():
+_POST_WORDS = ("wild card", "division series", "championship series", "world series", "finals",
+               "semifinal", "round 1", "round 2", "conference", "playoff")
+
+
+def is_postseason(e):
+    season = e.get("season", {})
+    if season.get("type") == 3 or "post" in str(season.get("slug", "")).lower():
+        return True
+    comp = (e.get("competitions") or [{}])[0]
+    note = " ".join(n.get("headline", "") for n in comp.get("notes", [])).lower()
+    return any(w in note for w in _POST_WORDS)
+
+
+def playoff_games(debug=False):
     """Postseason games that are live or scheduled today in the major pro leagues."""
     today = datetime.now().astimezone().date()
     rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
@@ -152,10 +165,14 @@ def playoff_games():
     for name, sport, league in PLAYOFF_LEAGUES:
         try:
             events = fetch_scoreboard(sport, league, rng)
-        except Exception:
+        except Exception as ex:
+            if debug:
+                print(f"{name}: error {ex}")
             continue
+        if debug:
+            print(f"{name}: {len(events)} events, season types {sorted({str(e.get('season', {}).get('type')) for e in events})}")
         for e in events:
-            if e.get("season", {}).get("type") != 3 or not e.get("competitions"):
+            if not e.get("competitions") or not is_postseason(e):
                 continue
             summ = summarize_game(e)
             if not summ:
@@ -191,7 +208,13 @@ def fetch_scoreboard(sport, league, date):
     url = SCOREBOARD.format(sport=sport, league=league, date=date)
     req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
     with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r).get("events", [])
+        data = json.load(r)
+    # Some responses only carry the season at league level; copy it onto events.
+    lg_season = (data.get("leagues") or [{}])[0].get("season", {})
+    events = data.get("events", [])
+    for e in events:
+        e.setdefault("season", lg_season if lg_season.get("type") else data.get("season", {}))
+    return events
 
 
 def summarize_game(event):
@@ -472,7 +495,10 @@ def run_gui():
 
 
 if __name__ == "__main__":
-    if "--find" in sys.argv:  # --find "san diego state" [--add]
+    if "--debug-playoffs" in sys.argv:
+        for r in playoff_games(debug=True):
+            print(f'  {r["name"]} | {r["line"]} | {r["detail"]}')
+    elif "--find" in sys.argv:  # --find "san diego state" [--add]
         name = sys.argv[sys.argv.index("--find") + 1]
         hits = find_teams(name)
         for h in hits:
