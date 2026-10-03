@@ -35,6 +35,8 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
 
+Switching views (Full/Live/Title) animates the window height and the circle icon fills smoothly.
+
 Use the refresh button (left of the view button) to refresh immediately. Everything that expands or collapses animates smoothly.
 
 Click a game to expand it (win probability, recent plays, scoring, team stats from ESPN); click again to collapse.

@@ -765,7 +765,7 @@ def add_found(entries):
     return new
 
 
-def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4):
+def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4, fills=None):
     """Anti-aliased circle icon as rows of hex colors (supersampled; no Pillow needed).
 
     mode: "full" (filled), "live" (ring + left half filled), anything else (ring only).
@@ -773,6 +773,7 @@ def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4):
     c = size / 2
     R = c - margin
     f, b = _rgb(fg), _rgb(bg)
+    lf, rf = fills if fills else {"full": (1, 1), "live": (1, 0)}.get(mode, (0, 0))  # left/right half fill, 0..1
     rows = []
     for py in range(size):
         row = []
@@ -783,7 +784,7 @@ def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4):
                     x = px + (sx + 0.5) / ss - c
                     y = py + (sy + 0.5) / ss - c
                     d = (x * x + y * y) ** 0.5
-                    on = (R - ring <= d <= R) or (d <= R and (mode == "full" or (mode == "live" and x < 0)))
+                    on = (R - ring <= d <= R) or (d <= R * (lf if x < 0 else rf))
                     hit += on
             a = hit / (ss * ss)
             row.append("#%02x%02x%02x" % tuple(round(bc + (fc - bc) * a) for fc, bc in zip(f, b)))
@@ -896,6 +897,19 @@ def run_gui():
         except Exception:
             pass
 
+    def set_redraw(on):
+        """Windows: suspend/resume painting of the content canvas (WM_SETREDRAW) to avoid flicker."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            hwnd = canvas.winfo_id()
+            ctypes.windll.user32.SendMessageW(hwnd, 0x000B, 1 if on else 0, 0)
+            if on:  # RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW
+                ctypes.windll.user32.RedrawWindow(hwnd, None, None, 0x0001 | 0x0080 | 0x0100)
+        except Exception:
+            pass
+
     menu_state = {"top": None}
 
     def close_menu(_=None):
@@ -983,13 +997,16 @@ def run_gui():
         return c
 
     def rounded_card(parent, color, radius=10, inset=4):
-        """Frame on a rounded-rectangle background; pack children into the returned frame."""
-        cv = tk.Canvas(parent, bg=parent.cget("bg"), highlightthickness=0)
+        """Frame on a rounded-rectangle background; pack children into the returned frame.
+
+        cv._sync() sizes the card immediately (no waiting for <Configure>), which keeps new content
+        from flashing at the canvas default size when it is swapped in.
+        """
+        cv = tk.Canvas(parent, bg=parent.cget("bg"), highlightthickness=0, width=1, height=1)
         inner = tk.Frame(cv, bg=color, padx=6, pady=3)
         win_id = cv.create_window(inset, inset, window=inner, anchor="nw")
 
-        def redraw(_=None):
-            w = cv.winfo_width()
+        def draw(w):
             h = inner.winfo_reqheight() + 2 * inset
             cv.configure(height=h, width=inner.winfo_reqwidth() + 2 * inset)  # natural width drives window width
             cv.delete("bg")
@@ -997,6 +1014,14 @@ def run_gui():
             cv.tag_lower("bg")
             cv.itemconfigure(win_id, width=max(w - 2 * inset, 1))
 
+        def redraw(_=None):
+            draw(max(cv.winfo_width(), 1))
+
+        def sync():
+            inner.update_idletasks()
+            draw(max(canvas.winfo_width(), inner.winfo_reqwidth() + 2 * inset))
+
+        cv._sync = sync
         cv.bind("<Configure>", redraw)
         inner.bind("<Configure>", redraw)
         return cv, inner
@@ -1040,13 +1065,51 @@ def run_gui():
     refresh_img.put(" ".join("{" + " ".join(row) + "}" for row in aa_refresh_pixels(34, FG, BG)))
     refresh_btn.create_image(17, 17, image=refresh_img)
     view_imgs = {}
+    icon = {"busy": False, "rows": {}}
+    ICON_FILLS = {"full": (1, 1), "live": (1, 0), "title": (0, 0)}
+    ICON_FRAMES = 10
 
-    def draw_view_icon(mode):
-        """Full = filled circle, Live = half-filled, Title = empty (anti-aliased bitmap)."""
+    def icon_precompute():
+        """Render the fill-transition frames in the background (pure Python, ~0.3 s)."""
+        order = ["full", "live", "title"]
+        for i, a in enumerate(order):
+            b = order[(i + 1) % 3]
+            frames = []
+            for k in range(1, ICON_FRAMES + 1):
+                t = k / ICON_FRAMES
+                e = t * t * (3 - 2 * t)
+                fills = tuple(x + (y - x) * e for x, y in zip(ICON_FILLS[a], ICON_FILLS[b]))
+                frames.append(aa_circle_pixels(34, "", FG, BG, fills=fills, ss=3))
+            icon["rows"][(a, b)] = frames
+
+    def icon_image(rows):
+        img = tk.PhotoImage(width=34, height=34)
+        img.put(" ".join("{" + " ".join(row) + "}" for row in rows))
+        return img
+
+    def draw_view_icon(mode, animate_from=None):
+        """Full = filled circle, Live = half-filled, Title = empty (anti-aliased; transitions animate the fill)."""
+        if icon["busy"] and animate_from is None:
+            return  # an animation is running; it draws the final state itself
+        frames = icon["rows"].get((animate_from, mode)) if animate_from else None
+        if frames:
+            icon["busy"] = True
+            keep = []
+
+            def play(i=0):
+                if i < len(frames):
+                    img = icon_image(frames[i])
+                    keep.append(img)
+                    view_btn.delete("all")
+                    view_btn.create_image(17, 17, image=img)
+                    root.after(18, lambda: play(i + 1))
+                else:
+                    icon["busy"] = False
+                    draw_view_icon(mode)
+            play()
+            return
         if mode not in view_imgs:
-            img = tk.PhotoImage(width=34, height=34)
-            img.put(" ".join("{" + " ".join(row) + "}" for row in aa_circle_pixels(34, mode, FG, BG)))
-            view_imgs[mode] = img
+            view_imgs[mode] = icon_image(aa_circle_pixels(34, mode, FG, BG))
         view_btn.delete("all")
         view_btn.create_image(17, 17, image=view_imgs[mode])
 
@@ -1099,16 +1162,40 @@ def run_gui():
     body = tk.Frame(canvas, bg=BG)
     body_id = canvas.create_window((0, 0), window=body, anchor="nw")
     user_sized = {"on": False}
+    view_tween = {"on": False}
     MIN_W, MIN_H = 240, 120
     MIN_BODY_W = 300  # wide enough for an expanded game, so expanding never changes the window width
+
+    def tween(h0, h1, setter, done=None, steps=14):
+        def step(i=1):
+            t = i / steps
+            setter(h0 + (h1 - h0) * t * t * (3 - 2 * t))
+            if i < steps:
+                root.after(14, lambda: step(i + 1))
+            elif done:
+                done()
+        step()
 
     def fit(_=None):
         """Keep scroll region in sync; auto-size to content until the user resizes."""
         canvas.configure(scrollregion=canvas.bbox("all"))
+        target = canvas.winfo_height()
         if not user_sized["on"]:
             max_h = int(root.winfo_screenheight() * 0.7)
-            canvas.configure(width=max(body.winfo_reqwidth(), MIN_BODY_W), height=min(body.winfo_reqheight(), max_h))
-        need = body.winfo_reqheight() > canvas.winfo_height()
+            target = min(body.winfo_reqheight(), max_h)
+            canvas.configure(width=max(body.winfo_reqwidth(), MIN_BODY_W))
+            if view_tween["on"]:
+                pass  # a view change is animating the height; it calls fit() again when done
+            elif view_tween.pop("next", False) and canvas.winfo_height() != target:
+                view_tween["on"] = True
+
+                def finish():
+                    view_tween["on"] = False
+                    fit()
+                tween(canvas.winfo_height(), target, lambda h: canvas.configure(height=max(int(h), 1)), finish)
+            else:
+                canvas.configure(height=target)
+        need = body.winfo_reqheight() > target
         if need and not scroll.winfo_ismapped():
             scroll.grid(row=0, column=1, sticky="ns")
         elif not need and scroll.winfo_ismapped():
@@ -1165,10 +1252,32 @@ def run_gui():
             fit()
 
     def cycle_view(_=None):
+        if view_tween["on"] or icon["busy"]:
+            return  # let the running transition finish
         order = [m for m, _ in VIEWS]
         cur = ui_state.get("view", "full")
-        ui_state["view"] = order[(order.index(cur) + 1) % len(order)] if cur in order else "full"
+        new = order[(order.index(cur) + 1) % len(order)] if cur in order else "full"
+        ui_state["view"] = new
         save_state(ui_state)
+        draw_view_icon(new, animate_from=cur)
+        if user_sized["on"]:  # fixed-size window: just swap the content
+            apply_layout()
+            if last:
+                render(*last["args"])
+            return
+        if new == "title":
+            view_tween["on"] = True
+
+            def finish():
+                view_tween["on"] = False
+                apply_layout()
+                if last:
+                    render(*last["args"])
+            tween(canvas.winfo_height(), 1, lambda h: canvas.configure(height=max(int(h), 1)), finish)
+            return
+        view_tween["next"] = True  # fit() will animate the height to the new content
+        if cur == "title":
+            canvas.configure(height=1)
         apply_layout()
         if last:
             render(*last["args"])
@@ -1402,6 +1511,7 @@ def run_gui():
         for r in rows:
             tint = r.get("tint")
             bgc = blend(BG, tint, 0.22) if tint else BG
+            card = None
             if tint:
                 card, row = rounded_card(parent, bgc)
                 card.pack(fill="x", pady=3)
@@ -1425,6 +1535,8 @@ def run_gui():
                     ch.configure(cursor="hand2")
                 if gkey(g) in session["expanded"]:
                     draw_details(reveal(row, "game:" + gkey(g), bgc), bgc, session["details"].get(gkey(g)))
+            if card is not None:
+                card._sync()
 
     def toggle(key, was_open, persist=True):
         def apply():
@@ -1518,10 +1630,18 @@ def run_gui():
                     if is_open:
                         inner = reveal(body, key, BG)
                         league_groups(rows, key, parent=inner)
-        canvas.itemconfigure(body_id, window=body)
-        body.bind("<Configure>", fit)
-        old.destroy()
-        root.update_idletasks()
+        nonlocal body_id
+        set_redraw(False)  # Windows creates a native window per widget: paint the swap in one go
+        try:
+            new_id = canvas.create_window(0, 0, window=body, anchor="nw")
+            canvas.itemconfigure(new_id, width=max(canvas.winfo_width(), 1))
+            body.bind("<Configure>", fit)
+            old_id, body_id = body_id, new_id
+            root.update_idletasks()
+            canvas.delete(old_id)
+            old.destroy()
+        finally:
+            set_redraw(True)
         for wrap, inner, key, start in session["pending"]:
             try:
                 animate(wrap, inner, key, start, inner.winfo_reqheight())
@@ -1777,6 +1897,7 @@ def run_gui():
     root.bind("<Button-3>", popup)
     root.update_idletasks()
     apply_layout()
+    threading.Thread(target=icon_precompute, daemon=True).start()
     try:
         round_corners(root)
     except Exception:
