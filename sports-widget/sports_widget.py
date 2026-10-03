@@ -25,6 +25,7 @@ LEAGUES = [
     ("MLB", "baseball", "mlb"), ("NHL", "hockey", "nhl"),
     ("Premier League", "soccer", "eng.1"), ("La Liga", "soccer", "esp.1"),
     ("Champions League", "soccer", "uefa.champions"), ("MLS", "soccer", "usa.1"),
+    ("Boxing", "boxing", "boxing"),
 ]
 
 
@@ -61,7 +62,8 @@ def summarize_event(event, team_abbr):
     detail = comp.get("status", {}).get("type", {}).get("shortDetail", "")
     me = opp = None
     for c in comp.get("competitors", []):
-        if c.get("team", {}).get("abbreviation", "").lower() == team_abbr.lower():
+        t = c.get("team", {})
+        if team_abbr.lower() in (t.get("abbreviation", "").lower(), str(t.get("id", c.get("id", ""))).lower()):
             me = c
         else:
             opp = c
@@ -162,11 +164,16 @@ def summarize_game(event):
     comp = event["competitions"][0]
     status = comp.get("status", {}).get("type", {})
     state, detail = status.get("state", "pre"), status.get("shortDetail", "")
-    cs = {c.get("homeAway"): c for c in comp.get("competitors", [])}
+    comps = comp.get("competitors", [])
+    cs = {c.get("homeAway"): c for c in comps}
     home, away = cs.get("home"), cs.get("away")
+    if (not home or not away) and len(comps) == 2:  # fights: no home/away
+        home, away = comps[1], comps[0]
     if not home or not away:
         return None
-    ab = lambda c: c.get("team", {}).get("abbreviation", "?")
+    def ab(c):
+        a = c.get("athlete", {})
+        return c.get("team", {}).get("abbreviation") or a.get("shortName") or a.get("displayName", "?")
     if state == "pre":
         when = _parse_date(event.get("date"))
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail

@@ -1,10 +1,65 @@
 {
   "refresh_seconds": 60,
   "teams": [
-    {"sport": "basketball", "league": "nba", "team": "lal"},
-    {"sport": "football", "league": "nfl", "team": "dal"},
-    {"sport": "baseball", "league": "mlb", "team": "nyy"},
-    {"sport": "hockey", "league": "nhl", "team": "bos"},
-    {"sport": "soccer", "league": "eng.1", "team": "arsenal"}
+    {
+      "sport": "baseball",
+      "league": "mlb",
+      "team": "sf"
+    },
+    {
+      "sport": "football",
+      "league": "nfl",
+      "team": "sf"
+    },
+    {
+      "sport": "basketball",
+      "league": "nba",
+      "team": "gs"
+    },
+    {
+      "sport": "basketball",
+      "league": "wnba",
+      "team": "gs"
+    },
+    {
+      "sport": "baseball",
+      "league": "mlb",
+      "team": "nyy"
+    },
+    {
+      "sport": "hockey",
+      "league": "nhl",
+      "team": "nj"
+    },
+    {
+      "sport": "football",
+      "league": "college-football",
+      "team": "21"
+    },
+    {
+      "sport": "basketball",
+      "league": "mens-college-basketball",
+      "team": "21"
+    },
+    {
+      "sport": "basketball",
+      "league": "womens-college-basketball",
+      "team": "21"
+    },
+    {
+      "sport": "baseball",
+      "league": "college-baseball",
+      "team": "21"
+    },
+    {
+      "sport": "softball",
+      "league": "college-softball",
+      "team": "21"
+    },
+    {
+      "sport": "volleyball",
+      "league": "womens-college-volleyball",
+      "team": "21"
+    }
   ]
 }
