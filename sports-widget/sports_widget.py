@@ -503,10 +503,14 @@ def run_gui():
     root.configure(bg=BG)
     root.overrideredirect(True)
     root.attributes("-topmost", True)
-    try:
-        root.attributes("-alpha", 0.95)
-    except tk.TclError:
-        pass
+    ui_state = load_state()
+
+    def set_alpha(v):
+        try:
+            root.attributes("-alpha", max(0.3, min(1.0, float(v))))
+        except tk.TclError:
+            pass
+    set_alpha(ui_state.get("opacity", 0.95))
     root.geometry("+40+40")
 
     header = tk.Label(root, text="Sports Tracker", bg=BG, fg=DIM, font=("Segoe UI", 9, "bold"), anchor="w")
@@ -519,8 +523,43 @@ def run_gui():
     container.grid_rowconfigure(0, weight=1)
     container.grid_columnconfigure(0, weight=1)
     canvas = tk.Canvas(container, bg=BG, highlightthickness=0, width=260, height=100)
-    scroll = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
-    canvas.configure(yscrollcommand=scroll.set)
+    scroll = tk.Canvas(container, width=8, bg=BG, highlightthickness=0, cursor="arrow")
+    sb = {"lo": 0.0, "hi": 1.0, "off": 0.0, "hover": False}
+
+    def sb_draw():
+        scroll.delete("all")
+        h = scroll.winfo_height()
+        y0, y1 = sb["lo"] * h, sb["hi"] * h
+        if y1 - y0 < 24:
+            y1 = y0 + 24
+        color = "#8a8f98" if sb["hover"] else "#4a4a55"
+        scroll.create_line(4, y0 + 3, 4, max(y1 - 3, y0 + 4), width=5, capstyle="round", fill=color)
+
+    def sb_set(lo, hi):
+        sb["lo"], sb["hi"] = float(lo), float(hi)
+        sb_draw()
+
+    def sb_press(e):
+        h = max(scroll.winfo_height(), 1)
+        if sb["lo"] * h <= e.y <= sb["hi"] * h:
+            sb["off"] = e.y / h - sb["lo"]
+        else:  # click in the trough: centre the thumb there
+            sb["off"] = (sb["hi"] - sb["lo"]) / 2
+            canvas.yview_moveto(e.y / h - sb["off"])
+
+    def sb_drag(e):
+        canvas.yview_moveto(e.y / max(scroll.winfo_height(), 1) - sb["off"])
+
+    def sb_hover(on):
+        sb["hover"] = on
+        sb_draw()
+
+    scroll.bind("<Button-1>", sb_press)
+    scroll.bind("<B1-Motion>", sb_drag)
+    scroll.bind("<Enter>", lambda e: sb_hover(True))
+    scroll.bind("<Leave>", lambda e: sb_hover(False))
+    scroll.bind("<Configure>", lambda e: sb_draw())
+    canvas.configure(yscrollcommand=sb_set)
     canvas.grid(row=0, column=0, sticky="nsew")
     body = tk.Frame(canvas, bg=BG)
     body_id = canvas.create_window((0, 0), window=body, anchor="nw")
@@ -587,12 +626,15 @@ def run_gui():
             if r.get("info"):
                 tk.Label(row, text=r["info"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
 
-    ui_state = load_state()
     last = {}
+    session = {"live_prev": 0}  # in-session only: live games re-open themselves when they appear
 
-    def toggle(key, was_open):
-        ui_state[key] = not was_open
-        save_state(ui_state)
+    def toggle(key, was_open, persist=True):
+        if persist:
+            ui_state[key] = not was_open
+            save_state(ui_state)
+        else:
+            session[key] = not was_open
         render(*last["args"])
 
     def render(results, pin_results, playoffs):
@@ -608,20 +650,39 @@ def run_gui():
             tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
         if playoffs:
             section("PLAYOFFS")
-            for league in dict.fromkeys(r["league"] for r in playoffs):
-                games = [r for r in playoffs if r["league"] == league]
-                live = sum(r["state"] == "in" for r in games)
-                key = f"playoffs:{league}"
-                # Default: open only leagues with a live game; the user's choice wins afterwards.
-                is_open = ui_state.get(key, live > 0)
-                label = f"{league} · {len(games)} game{'s' if len(games) != 1 else ''}" + (f" · {live} live" if live else "")
-                hdr = tk.Label(body, text=("\u25be " if is_open else "\u25b8 ") + label, bg=BG,
-                               fg=COLORS["in"] if live else FG, font=("Segoe UI", 9, "bold"),
-                               anchor="w", cursor="hand2")
-                hdr.pack(fill="x", pady=(4, 0))
-                hdr.bind("<ButtonRelease-1>", lambda e, k=key, o=is_open: toggle(k, o))
+            live = [r for r in playoffs if r["state"] == "in"]
+            upcoming = [r for r in playoffs if r["state"] == "pre"]
+            previous = [r for r in playoffs if r["state"] == "post"]
+            if live and not session["live_prev"]:
+                session["live"] = True  # newly live games open automatically
+            session["live_prev"] = len(live)
+
+            def header_label(text, key, is_open, color, indent=0, persist=True):
+                hdr = tk.Label(body, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
+                               font=("Segoe UI", 9, "bold"), anchor="w", cursor="hand2")
+                hdr.pack(fill="x", pady=(4, 0), padx=(indent, 0))
+                hdr.bind("<ButtonRelease-1>", lambda e: toggle(key, is_open, persist))
+
+            def league_groups(rows, prefix):
+                for league in dict.fromkeys(r["league"] for r in rows):
+                    games = [r for r in rows if r["league"] == league]
+                    key = f"{prefix}:{league}"
+                    is_open = ui_state.get(key, True)
+                    header_label(f"{league} · {len(games)}", key, is_open, FG, indent=14)
+                    if is_open:
+                        add_rows([dict(r, line=r.get("extra", "")) for r in games])
+
+            if live:
+                is_open = session.get("live", True)
+                header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False)
                 if is_open:
-                    add_rows([dict(r, line=r.get("extra", "")) for r in games])
+                    add_rows(live)
+            for title, rows, key in (("Upcoming today", upcoming, "upcoming"), ("Previous", previous, "previous")):
+                if rows:
+                    is_open = ui_state.get(key, False)
+                    header_label(f"{title} · {len(rows)}", key, is_open, FG)
+                    if is_open:
+                        league_groups(rows, key)
         last.update(args=(results, pin_results, playoffs))
         header.config(text="Sports Tracker · Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
 
@@ -688,6 +749,36 @@ def run_gui():
         tk.Button(win, text="Track selected", command=add).pack(pady=(0, 10))
         load()
 
+    def settings_dialog():
+        win = tk.Toplevel(root)
+        win.title("Settings")
+        win.configure(bg=BG)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        tk.Label(win, text="Opacity", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, padx=14, pady=(14, 4), sticky="w")
+        val = tk.Label(win, bg=BG, fg=DIM, font=("Segoe UI", 9))
+        val.grid(row=0, column=1, padx=14, pady=(14, 4), sticky="e")
+
+        def on_scale(v):
+            pct = int(float(v))
+            val.config(text=f"{pct}%")
+            set_alpha(pct / 100)
+
+        def on_release(_):
+            ui_state["opacity"] = round(scale.get() / 100, 2)
+            save_state(ui_state)
+
+        scale = tk.Scale(win, from_=30, to=100, orient="horizontal", showvalue=False, length=240, command=on_scale,
+                         bg=BG, fg=FG, troughcolor="#33333d", highlightthickness=0, bd=0, sliderrelief="flat",
+                         activebackground="#8a8f98")
+        scale.set(int(ui_state.get("opacity", 0.95) * 100))
+        scale.grid(row=1, column=0, columnspan=2, padx=14, pady=(0, 8))
+        scale.bind("<ButtonRelease-1>", on_release)
+        tk.Button(win, text="Close", command=win.destroy, bg="#33333d", fg=FG, relief="flat",
+                  activebackground="#44444f", activeforeground=FG).grid(row=2, column=1, padx=14, pady=(0, 14), sticky="e")
+        win.update_idletasks()
+        win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
+
     def untrack_menu(event):
         m = tk.Menu(root, tearoff=0)
         for p in list(pins):
@@ -714,6 +805,7 @@ def run_gui():
     menu.add_command(label="Track a game...", command=track_dialog)
     menu.add_command(label="Untrack a game...", command=lambda: untrack_menu(menu_pos["e"]))
     menu.add_command(label="Refresh", command=refresh)
+    menu.add_command(label="Settings...", command=settings_dialog)
     menu.add_checkbutton(label="Always on top", variable=topmost,
                          command=lambda: root.attributes("-topmost", topmost.get()))
     menu.add_separator()
