@@ -97,9 +97,9 @@ def summarize_event(event, team_abbr):
 STAT_SPECS = {
     "basketball": [("Fouls", ("fouls", "personalFouls", "teamFouls", "totalFouls")),
                    ("Reb", ("rebounds", "totalRebounds")), ("TO", ("turnovers", "totalTurnovers"))],
-    "hockey": [("SOG", ("shotsOnGoal", "shotsTotal", "shots")), ("Hits", ("hits",)),
+    "hockey": [("Hits", ("hits",)),
                ("PIM", ("penaltyMinutes", "penaltyMins"))],
-    "soccer": [("Poss", ("possessionPct", "possession")), ("Shots", ("totalShots", "shots")),
+    "soccer": [("Shots", ("totalShots", "shots")),
                ("On target", ("shotsOnTarget",)), ("Corners", ("wonCorners", "corners")),
                ("Fouls", ("foulsCommitted", "fouls")), ("Yellow", ("yellowCards",)), ("Red", ("redCards",))],
     "football": [("Yards", ("totalYards",)), ("TO", ("turnovers",))],
@@ -164,7 +164,7 @@ def situation_text(sport, comp):
     return "\n".join(l for l in lines if l)
 
 
-def situation_graphic(sport, comp):
+def _situation_graphic(sport, comp):
     """Data for the live-game graphic: baseball diamond or football field position."""
     sit = comp.get("situation") or {}
     if sport == "baseball" and ("onFirst" in sit or "outs" in sit):
@@ -195,6 +195,82 @@ def situation_graphic(sport, comp):
     return None
 
 
+PERIODS = {  # (sport, league) -> (regulation periods, minutes per period, overtime minutes)
+    ("basketball", "nba"): (4, 12, 5), ("basketball", "wnba"): (4, 10, 5),
+    ("basketball", "mens-college-basketball"): (2, 20, 5), ("basketball", "womens-college-basketball"): (4, 10, 5),
+    ("hockey", "nhl"): (3, 20, 5),
+}
+
+
+def _num(v):
+    try:
+        return float(str(v).replace("%", "").strip())
+    except ValueError:
+        return None
+
+
+def _minute(text):
+    m = re.match(r"\s*(\d+)", str(text or ""))
+    return int(m.group(1)) if m else None
+
+
+def _versus(label, comp, names):
+    cs = comp.get("competitors", [])
+    if len(cs) != 2:
+        return None
+    vals = [_num(_stat(c, names)) for c in cs]
+    if None in vals or sum(vals) <= 0:
+        return None
+    ab = [c.get("team", {}).get("abbreviation", "") for c in cs]
+    return {"kind": "versus", "label": label, "a_name": ab[0], "a": vals[0], "b_name": ab[1], "b": vals[1]}
+
+
+def situation_graphic(sport, comp, league=""):
+    """Graphics for a live game: list of dicts, or None."""
+    out = []
+    status = comp.get("status", {})
+    if (sport, league) in PERIODS or (sport in ("basketball", "hockey") and not league):
+        n, mins, ot = PERIODS.get((sport, league), (4, 12, 5) if sport == "basketball" else (3, 20, 5))
+        period, clock = int(status.get("period") or 0), status.get("clock")
+        if period >= 1 and clock is not None:
+            segs = max(n, period)
+            fills = []
+            for i in range(1, segs + 1):
+                length = mins * 60 if i <= n else ot * 60
+                if i < period:
+                    fills.append(1.0)
+                elif i == period:
+                    fills.append(max(0.0, min(1.0, 1 - float(clock) / length)))
+                else:
+                    fills.append(0.0)
+            name = (f"Q{period}" if sport == "basketball" and n == 4 else f"H{period}" if sport == "basketball"
+                    else f"P{period}") if period <= n else ("OT" if period == n + 1 else f"{period - n}OT")
+            out.append({"kind": "periods", "fills": fills, "reg": n, "label": f'{name} {status.get("displayClock", "")}'.strip()})
+    if sport == "hockey":
+        v = _versus("Shots on goal", comp, ("shotsOnGoal", "shotsTotal", "shots"))
+        if v:
+            out.append(v)
+    if sport == "soccer":
+        minute = _minute(status.get("displayClock"))
+        if minute is not None:
+            cs = comp.get("competitors", [])
+            home = next((str(c.get("id", c.get("team", {}).get("id", ""))) for c in cs if c.get("homeAway") == "home"), "")
+            events = []
+            for d in comp.get("details", []) or []:
+                kind = "goal" if d.get("scoringPlay") else "red" if d.get("redCard") else "yellow" if d.get("yellowCard") else None
+                m = _minute((d.get("clock") or {}).get("displayValue"))
+                if kind and m is not None:
+                    events.append({"min": m, "kind": kind, "home": str((d.get("team") or {}).get("id", "")) == home})
+            out.append({"kind": "timeline", "minute": minute, "events": events})
+        v = _versus("Possession", comp, ("possessionPct", "possession"))
+        if v:
+            out.append(v)
+    core = _situation_graphic(sport, comp)
+    if core:
+        out.append(core)
+    return out or None
+
+
 def live_info(entry, event):
     """Fetch the scoreboard entry for a live game (schedule data lacks situation)."""
     today = datetime.now().astimezone().date()
@@ -203,7 +279,7 @@ def live_info(entry, event):
         for e in fetch_scoreboard(entry["sport"], entry["league"], rng):
             if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
                 comp = e["competitions"][0]
-                return situation_text(entry["sport"], comp), situation_graphic(entry["sport"], comp)
+                return situation_text(entry["sport"], comp), situation_graphic(entry["sport"], comp, entry["league"])
     except Exception:
         pass
     return "", None
@@ -317,7 +393,7 @@ def playoff_games(debug=False, days=7):
                    "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
-                   "graphic": situation_graphic(sport, comp) if state == "in" else None}
+                   "graphic": situation_graphic(sport, comp, league) if state == "in" else None}
             teams = frozenset((league, str(c.get("team", {}).get("id", c.get("id", "")))) for c in comp.get("competitors", []))
             row["_teams"] = teams
             key = (league, teams)
@@ -442,7 +518,7 @@ def pinned_status(pin):
             if s:
                 return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
                         "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else "",
-                        "graphic": situation_graphic(pin["sport"], e["competitions"][0]) if s[0] == "in" else None}
+                        "graphic": situation_graphic(pin["sport"], e["competitions"][0], pin["league"]) if s[0] == "in" else None}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
 
 
@@ -652,7 +728,52 @@ def run_gui():
         tk.Label(body, text=title, bg=BG, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
 
     def draw_graphic(parent, g):
-        if g["kind"] == "baseball":
+        if isinstance(g, list):
+            for item in g:
+                draw_graphic(parent, item)
+            return
+        if g["kind"] == "periods":
+            W, H = 240, 24
+            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            n, gap = len(g["fills"]), 3
+            seg = (W - gap * (n - 1)) / n
+            for i, f in enumerate(g["fills"]):
+                x = i * (seg + gap)
+                c.create_rectangle(x, 14, x + seg, 20, fill="#33333d", outline="")
+                if f > 0:
+                    c.create_rectangle(x, 14, x + seg * f, 20, fill="#34d399" if f < 1 else "#4a4a55", outline="")
+            c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=("Segoe UI", 8, "bold"))
+            c.pack(anchor="w", pady=(2, 0))
+        elif g["kind"] == "versus":
+            W, H = 240, 30
+            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            total = g["a"] + g["b"]
+            split = W * g["a"] / total
+            c.create_rectangle(0, 16, split, 24, fill="#60a5fa", outline="")
+            c.create_rectangle(split, 16, W, 24, fill="#f59e0b", outline="")
+            fmt = lambda v: f"{v:g}"
+            c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=("Segoe UI", 8))
+            c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=("Segoe UI", 8))
+            c.create_text(W, 6, text=f'{fmt(g["b"])} {g["b_name"]}', anchor="e", fill=FG, font=("Segoe UI", 8))
+            c.pack(anchor="w", pady=(2, 0))
+        elif g["kind"] == "timeline":
+            W, H = 240, 44
+            span = 90 if g["minute"] <= 90 else 120
+            px = lambda m: 6 + (W - 12) * min(m, span) / span
+            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            c.create_line(6, 22, W - 6, 22, fill="#33333d", width=4, capstyle="round")
+            c.create_line(6, 22, px(g["minute"]), 22, fill="#34d399", width=4, capstyle="round")
+            for m in (45, 90):
+                c.create_line(px(m), 17, px(m), 27, fill="#4a4a55")
+            for ev in g["events"]:
+                x, y = px(ev["min"]), 9 if ev["home"] else 35
+                if ev["kind"] == "goal":
+                    c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=FG, outline="")
+                else:
+                    c.create_rectangle(x - 3, y - 4, x + 3, y + 4, fill="#fbbf24" if ev["kind"] == "yellow" else "#ef4444", outline="")
+            c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
+            c.pack(anchor="w", pady=(2, 0))
+        elif g["kind"] == "baseball":
             c = tk.Canvas(parent, width=150, height=62, bg=BG, highlightthickness=0)
             def base(cx, cy, on):
                 r = 8
@@ -923,7 +1044,46 @@ def run_gui():
     root.mainloop()
 
 
+def demo_data():
+    """Fake live games for every sport, built through the real graphic/text code paths."""
+    st = lambda n, v: {"name": n, "displayValue": str(v)}
+    team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
+                                              "team": {"id": i, "abbreviation": a}}
+    def row(name, sport, league, line, detail, comp):
+        return {"name": name, "state": "in", "line": line, "detail": detail,
+                "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
+    nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
+           "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
+    mlb = {"competitors": [team("1", "away", "SF", 3), team("2", "home", "LAD", 2)],
+           "situation": {"balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
+                         "batter": {"athlete": {"shortName": "M. Chapman"}}, "pitcher": {"athlete": {"shortName": "T. Glasnow"}}}}
+    nba = {"status": {"period": 3, "clock": 312.0, "displayClock": "5:12"},
+           "competitors": [team("9", "away", "GS", 78, [st("fouls", 9), st("rebounds", 31)]),
+                           team("2", "home", "BOS", 74, [st("fouls", 12), st("rebounds", 28)])]}
+    nhl = {"status": {"period": 2, "clock": 407.0, "displayClock": "6:47"}, "situation": {"powerPlay": True, "powerPlayTeam": "NJ"},
+           "competitors": [team("1", "away", "NJ", 2, [st("shotsOnGoal", 24)]), team("2", "home", "BOS", 1, [st("shotsOnGoal", 17)])]}
+    soc = {"status": {"displayClock": "67'"},
+           "details": [{"scoringPlay": True, "clock": {"displayValue": "23'"}, "team": {"id": "1"}},
+                       {"yellowCard": True, "clock": {"displayValue": "41'"}, "team": {"id": "2"}},
+                       {"scoringPlay": True, "clock": {"displayValue": "55'"}, "team": {"id": "2"}},
+                       {"redCard": True, "clock": {"displayValue": "62'"}, "team": {"id": "2"}}],
+           "competitors": [team("1", "home", "ARS", 1, [st("possessionPct", 61), st("totalShots", 12)]),
+                           team("2", "away", "CHE", 1, [st("possessionPct", 39), st("totalShots", 6)])]}
+    return [row("San Francisco 49ers", "football", "nfl", "@ Dallas Cowboys", "21-17  Q3 5:12", nfl),
+            row("San Francisco Giants", "baseball", "mlb", "@ Los Angeles Dodgers", "3-2  Bot 7th", mlb),
+            row("Golden State Warriors", "basketball", "nba", "@ Boston Celtics", "78-74  Q3 5:12", nba),
+            row("New Jersey Devils", "hockey", "nhl", "@ Boston Bruins", "2-1  P2 6:47", nhl),
+            row("Arsenal", "soccer", "eng.1", "vs Chelsea", "1-1  67'", soc)]
+
+
 if __name__ == "__main__":
+    if "--demo" in sys.argv:  # preview the live-game graphics with fake data (no network)
+        fetch_all = lambda entries: demo_data()
+        fetch_pinned = lambda pins: []
+        playoff_games = lambda: []
+        STATE = os.path.join(HERE, "demo_state.json")
+        run_gui()
+        sys.exit()
     if "--debug-live" in sys.argv:  # show what ESPN sends for live games, to tune extra info
         seen = {(t["sport"], t["league"]) for t in load_config()["teams"]} | {(sp, lg) for _, sp, lg in PLAYOFF_LEAGUES}
         today = datetime.now().astimezone().date()
