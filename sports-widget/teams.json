@@ -1,0 +1,10 @@
+{
+  "refresh_seconds": 60,
+  "teams": [
+    {"sport": "basketball", "league": "nba", "team": "lal"},
+    {"sport": "football", "league": "nfl", "team": "dal"},
+    {"sport": "baseball", "league": "mlb", "team": "nyy"},
+    {"sport": "hockey", "league": "nhl", "team": "bos"},
+    {"sport": "soccer", "league": "eng.1", "team": "arsenal"}
+  ]
+}
