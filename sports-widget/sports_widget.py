@@ -190,7 +190,9 @@ def _situation_graphic(sport, comp):
             return None
         dist = sit.get("distance")
         first = min(100, x + int(dist)) if dist not in (None, "") else None
+        off_c = next((c for c in comp.get("competitors", []) if str(c.get("id", c.get("team", {}).get("id", ""))) == poss), {})
         return {"kind": "football", "x": max(0, min(100, x)), "first": first, "off": off, "def": defn,
+                "color": team_colors(off_c, "#34d399"),
                 "red": bool(sit.get("isRedZone")) or x >= 80}
     return None
 
@@ -840,7 +842,7 @@ def run_gui():
             if g["first"] is not None:
                 c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
             bx = px(g["x"])
-            c.create_oval(bx - 5, 12, bx + 5, 22, fill="#34d399", outline=FG)
+            c.create_oval(bx - 5, 12, bx + 5, 22, fill=g.get("color", "#34d399"), outline=FG)
             c.create_text(0, 6, text=f"{g['off']} \u25b6", anchor="w", fill=FG, font=("Segoe UI", 8, "bold"))
             c.create_text(W, 6, text=g["def"], anchor="e", fill=DIM, font=("Segoe UI", 8, "bold"))
             c.pack(anchor="w", pady=(2, 0))
@@ -1081,7 +1083,8 @@ def run_gui():
     root.mainloop()
 
 
-TEAM_COLORS = {"NJ": {"color": "ce1126", "alternateColor": "000000"}, "BOS": {"color": "000000", "alternateColor": "fdb71a"},
+TEAM_COLORS = {"SF": {"color": "aa0000", "alternateColor": "b3995d"}, "DAL": {"color": "041e42", "alternateColor": "869397"},
+               "NJ": {"color": "ce1126", "alternateColor": "000000"}, "BOS": {"color": "000000", "alternateColor": "fdb71a"},
                "ARS": {"color": "ef0107", "alternateColor": "ffffff"}, "CHE": {"color": "034694", "alternateColor": "ffffff"}}
 
 
