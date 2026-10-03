@@ -115,7 +115,7 @@ def _same_day(event, now_iso):
 def team_status(entry):
     data = fetch_schedule(entry)
     team = data.get("team", {})
-    name = team.get("displayName") or entry["team"].upper()
+    name = entry.get("label") or team.get("displayName") or entry["team"].upper()
     event = pick_event(data.get("events", []))
     if not event:
         return None
