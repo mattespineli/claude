@@ -236,14 +236,21 @@ def playoff_games(debug=False, days=7):
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else ""}
-            key = (league, frozenset(str(c.get("team", {}).get("id", c.get("id", ""))) for c in comp.get("competitors", [])))
+            teams = frozenset((league, str(c.get("team", {}).get("id", c.get("id", "")))) for c in comp.get("competitors", []))
+            row["_teams"] = teams
+            key = (league, teams)
             cur = best.get(key)
             # lower priority number wins; within completed games the most recent wins
             if cur is None or prio < cur[0] or (prio == cur[0] == 2 and row["_date"] > cur[1]):
                 best[key] = (prio, row["_date"], row)
     rows = sorted((v for v in best.values()), key=lambda v: (v[0], v[1] if v[0] < 2 else ""))
-    done = sorted((v for v in rows if v[0] == 2), key=lambda v: v[1], reverse=True)
-    return [v[2] for v in rows if v[0] < 2] + [v[2] for v in done]
+    # Completed games: only each team's most recent one (newest first).
+    seen, done = set(), []
+    for v in sorted((v for v in rows if v[0] == 2), key=lambda v: v[1], reverse=True):
+        if v[2]["_teams"] - seen:
+            done.append(v[2])
+            seen |= v[2]["_teams"]
+    return [v[2] for v in rows if v[0] < 2] + done
 
 
 def load_pinned():
