@@ -293,7 +293,7 @@ def run_gui():
         pass
     root.geometry("+40+40")
 
-    header = tk.Label(root, text="My Teams", bg=BG, fg=DIM, font=("Segoe UI", 9, "bold"), anchor="w")
+    header = tk.Label(root, text="Sports Tracker", bg=BG, fg=DIM, font=("Segoe UI", 9, "bold"), anchor="w")
     header.pack(fill="x", padx=12, pady=(8, 2))
     body = tk.Frame(root, bg=BG)
     body.pack(fill="both", padx=12, pady=(0, 10))
@@ -315,7 +315,7 @@ def run_gui():
             tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
             tk.Label(row, text=r["detail"], bg=BG, fg=COLORS.get(r["state"], FG),
                      font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
-        header.config(text="My Teams · " + datetime.now().strftime("%I:%M %p").lstrip("0"))
+        header.config(text="Sports Tracker · " + datetime.now().strftime("%I:%M %p").lstrip("0"))
 
     def refresh():
         def work():
