@@ -4,62 +4,74 @@
     {
       "sport": "baseball",
       "league": "mlb",
-      "team": "sf"
+      "team": "sf",
+      "label": "SF Giants"
     },
     {
       "sport": "football",
       "league": "nfl",
-      "team": "sf"
+      "team": "sf",
+      "label": "SF 49ers"
     },
     {
       "sport": "basketball",
       "league": "nba",
-      "team": "gs"
+      "team": "gs",
+      "label": "Warriors"
     },
     {
       "sport": "basketball",
       "league": "wnba",
-      "team": "gs"
+      "team": "gs",
+      "label": "Valkyries"
     },
     {
       "sport": "baseball",
       "league": "mlb",
-      "team": "nyy"
+      "team": "nyy",
+      "label": "Yankees"
     },
     {
       "sport": "hockey",
       "league": "nhl",
-      "team": "nj"
+      "team": "nj",
+      "label": "Devils"
     },
     {
       "sport": "football",
       "league": "college-football",
-      "team": "21"
+      "team": "21",
+      "label": "SDSU Football"
     },
     {
       "sport": "basketball",
       "league": "mens-college-basketball",
-      "team": "21"
+      "team": "21",
+      "label": "SDSU Men's Basketball"
     },
     {
       "sport": "basketball",
       "league": "womens-college-basketball",
-      "team": "21"
+      "team": "21",
+      "label": "SDSU Women's Basketball"
     },
     {
       "sport": "baseball",
       "league": "college-baseball",
-      "team": "21"
+      "team": "21",
+      "label": "SDSU Baseball"
     },
     {
-      "sport": "softball",
+      "sport": "baseball",
       "league": "college-softball",
-      "team": "21"
+      "team": "21",
+      "label": "SDSU Softball"
     },
     {
       "sport": "volleyball",
       "league": "womens-college-volleyball",
-      "team": "21"
+      "team": "21",
+      "label": "SDSU Volleyball"
     }
   ]
 }

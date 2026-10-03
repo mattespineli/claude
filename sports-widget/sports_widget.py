@@ -134,7 +134,8 @@ def fetch_all(entries):
             if r:
                 out.append(r)
         except Exception as ex:  # network / schema errors shouldn't kill the widget
-            out.append({"name": e["team"].upper(), "state": "err", "line": "Unavailable", "detail": str(ex)[:40]})
+            out.append({"name": e.get("label", e["team"].upper()), "state": "err",
+                        "line": f'{e["sport"]}/{e["league"]}', "detail": str(ex)[:40]})
     return out
 
 
