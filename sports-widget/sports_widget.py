@@ -667,7 +667,7 @@ def run_gui():
                 for league in dict.fromkeys(r["league"] for r in rows):
                     games = [r for r in rows if r["league"] == league]
                     key = f"{prefix}:{league}"
-                    is_open = ui_state.get(key, True)
+                    is_open = ui_state.get(key, False)
                     header_label(f"{league} · {len(games)}", key, is_open, FG, indent=14)
                     if is_open:
                         add_rows([dict(r, line=r.get("extra", "")) for r in games])
