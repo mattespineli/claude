@@ -281,6 +281,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+                   "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else ""}
             teams = frozenset((league, str(c.get("team", {}).get("id", c.get("id", "")))) for c in comp.get("competitors", []))
@@ -298,6 +299,25 @@ def playoff_games(debug=False, days=7):
             done.append(v[2])
         seen |= v[2]["_teams"]
     return [v[2] for v in rows if v[0] < 2] + done
+
+
+STATE = os.path.join(HERE, "state.json")
+
+
+def load_state():
+    try:
+        with open(STATE, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_state(state):
+    try:
+        with open(STATE, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+    except OSError:
+        pass
 
 
 def load_pinned():
@@ -560,11 +580,20 @@ def run_gui():
             row = tk.Frame(body, bg=BG)
             row.pack(fill="x", pady=3)
             tk.Label(row, text=r["name"], bg=BG, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
-            tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
+            if r["line"]:
+                tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
             tk.Label(row, text=r["detail"], bg=BG, fg=COLORS.get(r["state"], FG),
                      font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
             if r.get("info"):
                 tk.Label(row, text=r["info"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
+
+    ui_state = load_state()
+    last = {}
+
+    def toggle(key, was_open):
+        ui_state[key] = not was_open
+        save_state(ui_state)
+        render(*last["args"])
 
     def render(results, pin_results, playoffs):
         for w in body.winfo_children():
@@ -579,7 +608,21 @@ def run_gui():
             tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
         if playoffs:
             section("PLAYOFFS")
-            add_rows(playoffs)
+            for league in dict.fromkeys(r["league"] for r in playoffs):
+                games = [r for r in playoffs if r["league"] == league]
+                live = sum(r["state"] == "in" for r in games)
+                key = f"playoffs:{league}"
+                # Default: open only leagues with a live game; the user's choice wins afterwards.
+                is_open = ui_state.get(key, live > 0)
+                label = f"{league} · {len(games)} game{'s' if len(games) != 1 else ''}" + (f" · {live} live" if live else "")
+                hdr = tk.Label(body, text=("\u25be " if is_open else "\u25b8 ") + label, bg=BG,
+                               fg=COLORS["in"] if live else FG, font=("Segoe UI", 9, "bold"),
+                               anchor="w", cursor="hand2")
+                hdr.pack(fill="x", pady=(4, 0))
+                hdr.bind("<ButtonRelease-1>", lambda e, k=key, o=is_open: toggle(k, o))
+                if is_open:
+                    add_rows([dict(r, line=r.get("extra", "")) for r in games])
+        last.update(args=(results, pin_results, playoffs))
         header.config(text="Sports Tracker · Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
 
     def refresh():
