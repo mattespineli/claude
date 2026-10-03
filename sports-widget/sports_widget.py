@@ -698,8 +698,16 @@ def run_gui():
     set_alpha(ui_state.get("opacity", 0.95))
     root.geometry("+40+40")
 
-    header = tk.Label(root, text="Sports Tracker", bg=BG, fg=DIM, font=("Segoe UI", 9, "bold"), anchor="w")
-    header.pack(fill="x", padx=12, pady=(8, 2))
+    hbar = tk.Frame(root, bg=BG)
+    hbar.pack(fill="x", padx=12, pady=(8, 2))
+    titles = tk.Frame(hbar, bg=BG)
+    titles.pack(side="left", fill="x", expand=True)
+    header = tk.Label(titles, text="Sports Tracker", bg=BG, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w")
+    header.pack(fill="x")
+    stamp = tk.Label(titles, text="", bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w")
+    stamp.pack(fill="x")
+    view_btn = tk.Label(hbar, bg="#33333d", fg=FG, font=("Segoe UI", 8, "bold"), padx=7, pady=1, cursor="hand2")
+    view_btn.pack(side="right", padx=(8, 0))
     # Resize grip (bottom-right) packed first so it stays visible; content scrolls above it.
     grip = tk.Label(root, text="\u25e2", bg=BG, fg=DIM, cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner", font=("Segoe UI", 9))
     grip.pack(side="bottom", anchor="se", padx=2)
@@ -789,6 +797,38 @@ def run_gui():
         root.geometry("")
         root.geometry(f"+{root.winfo_x()}+{root.winfo_y()}")
         fit()
+    VIEWS = [("full", "Full"), ("live", "Live"), ("title", "Title")]
+    layout = {}
+
+    def apply_layout():
+        mode = ui_state.get("view", "full")
+        view_btn.config(text=dict(VIEWS).get(mode, "Full"))
+        if mode == "title":
+            stamp.pack_forget()
+        elif not stamp.winfo_manager():
+            stamp.pack(fill="x")
+        if mode == "title" and container.winfo_manager():
+            width = root.winfo_width()
+            grip.pack_forget()
+            container.pack_forget()
+            root.update_idletasks()
+            root.geometry(f"{width}x{root.winfo_reqheight()}")
+        elif mode != "title" and not container.winfo_manager():
+            grip.pack(side="bottom", anchor="se", padx=2)
+            container.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 0))
+            if not user_sized["on"]:
+                root.geometry("")
+            fit()
+
+    def cycle_view(_=None):
+        order = [m for m, _ in VIEWS]
+        cur = ui_state.get("view", "full")
+        ui_state["view"] = order[(order.index(cur) + 1) % len(order)] if cur in order else "full"
+        save_state(ui_state)
+        apply_layout()
+        if last:
+            render(*last["args"])
+    view_btn.bind("<ButtonRelease-1>", cycle_view)
     grip.bind("<Button-1>", grip_start)
     grip.bind("<B1-Motion>", grip_move)
     grip.bind("<Double-Button-1>", grip_reset)
@@ -908,15 +948,23 @@ def run_gui():
         render(*last["args"])
 
     def render(results, pin_results, playoffs):
+        last["args"] = (results, pin_results, playoffs)  # unfiltered, so view changes can re-render
         for w in body.winfo_children():
             w.destroy()
+        live_view = ui_state.get("view", "full") == "live"
+        if live_view:
+            results = [r for r in results if r["state"] == "in"]
+            pin_results = [r for r in pin_results if r["state"] == "in"]
+            playoffs = [r for r in playoffs if r["state"] == "in"]
+            if not (results or pin_results or playoffs):
+                tk.Label(body, text="No live games", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", pady=4)
         if pin_results:
             section("Tracked Games")
             add_rows(pin_results)
         if results:
             section("My Teams")
             add_rows(results)
-        elif not (pin_results or playoffs):
+        elif not (pin_results or playoffs or live_view):
             tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
         if playoffs:
             section("Playoffs")
@@ -953,8 +1001,7 @@ def run_gui():
                     header_label(f"{title} · {len(rows)}", key, is_open, FG)
                     if is_open:
                         league_groups(rows, key)
-        last.update(args=(results, pin_results, playoffs))
-        header.config(text="Sports Tracker · Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
+        stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
 
     def refresh():
         def work():
@@ -1035,17 +1082,32 @@ def run_gui():
         win.attributes("-topmost", True)
         win.resizable(False, False)
         tk.Label(win, text="Opacity", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, padx=14, pady=(14, 4), sticky="w")
-        val = tk.Label(win, bg=BG, fg=DIM, font=("Segoe UI", 9))
+        pct = tk.StringVar()
+        val = tk.Spinbox(win, from_=30, to=100, width=4, textvariable=pct, justify="right", bg="#33333d", fg=FG,
+                         insertbackground=FG, buttonbackground="#33333d", relief="flat", highlightthickness=0)
         val.grid(row=0, column=1, padx=14, pady=(14, 4), sticky="e")
 
         def on_scale(v):
-            pct = int(float(v))
-            val.config(text=f"{pct}%")
-            set_alpha(pct / 100)
+            n = int(float(v))
+            pct.set(str(n))
+            set_alpha(n / 100)
 
-        def on_release(_):
+        def on_release(_=None):
             ui_state["opacity"] = round(scale.get() / 100, 2)
             save_state(ui_state)
+
+        def on_entry(_=None):
+            try:
+                n = max(30, min(100, int(float(pct.get().strip().rstrip("%")))))
+            except ValueError:
+                n = scale.get()
+            scale.set(n)  # also applies the opacity through on_scale
+            pct.set(str(n))
+            on_release()
+
+        val.bind("<Return>", on_entry)
+        val.bind("<FocusOut>", on_entry)
+        val.config(command=on_entry)
 
         scale = tk.Scale(win, from_=30, to=100, orient="horizontal", showvalue=False, length=240, command=on_scale,
                          bg=BG, fg=FG, troughcolor="#33333d", highlightthickness=0, bd=0, sliderrelief="flat",
@@ -1112,6 +1174,8 @@ def run_gui():
     root.bind("<Button-1>", start)
     root.bind("<B1-Motion>", move)
     root.bind("<Button-3>", popup)
+    root.update_idletasks()
+    apply_layout()
     try:
         round_corners(root)
     except Exception:
