@@ -9,6 +9,7 @@ import json
 import os
 import sys
 import threading
+import urllib.error
 import urllib.request
 from datetime import datetime, timedelta, timezone
 
@@ -312,8 +313,10 @@ def save_pinned(pins):
         json.dump(pins, f, indent=2)
 
 
-def fetch_scoreboard(sport, league, date):
+def _get_scoreboard(sport, league, date, limit):
     url = SCOREBOARD.format(sport=sport, league=league, date=date)
+    if limit:
+        url += f"&limit={limit}"
     req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
     with urllib.request.urlopen(req, timeout=10) as r:
         data = json.load(r)
@@ -322,6 +325,33 @@ def fetch_scoreboard(sport, league, date):
     events = data.get("events", [])
     for e in events:
         e.setdefault("season", lg_season if lg_season.get("type") else data.get("season", {}))
+    return events
+
+
+def fetch_scoreboard(sport, league, date):
+    """Scoreboard events for a YYYYMMDD date or YYYYMMDD-YYYYMMDD range.
+
+    ESPN answers HTTP 400 to parameter combinations it dislikes, so fall back:
+    range + limit -> range alone -> one request per day.
+    """
+    try:
+        return _get_scoreboard(sport, league, date, 300)
+    except urllib.error.HTTPError as ex:
+        if ex.code != 400:
+            raise
+    try:
+        return _get_scoreboard(sport, league, date, None)
+    except urllib.error.HTTPError as ex:
+        if ex.code != 400 or "-" not in date:
+            raise
+    start, end = (datetime.strptime(d, "%Y%m%d") for d in date.split("-"))
+    events, seen = [], set()
+    for i in range((end - start).days + 1):
+        day = f"{start + timedelta(days=i):%Y%m%d}"
+        for e in _get_scoreboard(sport, league, day, None):
+            if e.get("id") not in seen:
+                seen.add(e.get("id"))
+                events.append(e)
     return events
 
 
