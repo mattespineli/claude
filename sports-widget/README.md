@@ -35,6 +35,10 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
 
+Click a game to expand it (win probability, recent plays, scoring, team stats from ESPN); click again to collapse.
+
+While any game is live the widget refreshes faster (default 15 seconds; change under Settings → While games are live).
+
 Right-click a game → **Open game on ESPN** opens its ESPN page.
 
 Right-click → **Update & Restart** runs `git pull` and relaunches the widget (needs Git on PATH; shows the error if the pull fails). **Restart** relaunches without pulling.

@@ -142,6 +142,65 @@ def event_url(event, sport, league):
     return f"https://www.espn.com/{league}/game/_/gameId/{gid}"
 
 
+SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={id}"
+
+
+def fetch_summary(sport, league, event_id):
+    url = SUMMARY.format(sport=sport, league=league, id=event_id)
+    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.load(r)
+
+
+def _play_label(p):
+    per = p.get("period") or {}
+    clock = (p.get("clock") or {}).get("displayValue", "")
+    prefix = per.get("displayValue") or (f'P{per["number"]}' if per.get("number") else "")
+    return " ".join(x for x in (prefix, clock) if x)
+
+
+def game_detail_data(data, max_plays=14, max_stats=14):
+    """Boil an ESPN summary response down to what the details window shows."""
+    comp = ((data.get("header") or {}).get("competitions") or [{}])[0]
+    cs = comp.get("competitors", [])
+    away = next((c for c in cs if c.get("homeAway") == "away"), cs[0] if cs else {})
+    home = next((c for c in cs if c.get("homeAway") == "home"), cs[1] if len(cs) > 1 else {})
+    name = lambda c: (c.get("team") or {}).get("displayName") or (c.get("team") or {}).get("abbreviation", "?")
+    status = (comp.get("status") or {}).get("type") or {}
+    abbr = lambda c: (c.get("team") or {}).get("abbreviation", "")
+    out = {"away": name(away), "home": name(home), "away_abbr": abbr(away), "home_abbr": abbr(home), "away_score": str(away.get("score", "")),
+           "home_score": str(home.get("score", "")), "status": status.get("detail") or status.get("shortDetail", ""),
+           "state": status.get("state", "pre")}
+    if away and home:
+        out["colors"] = matchup_colors([away, home])
+    wp = data.get("winprobability") or []
+    if wp and wp[-1].get("homeWinPercentage") is not None:
+        out["home_win"] = float(wp[-1]["homeWinPercentage"])
+    plays = data.get("plays") or []
+    if not plays:
+        drives = data.get("drives") or {}
+        for d in (drives.get("previous") or []) + ([drives["current"]] if drives.get("current") else []):
+            plays += d.get("plays") or []
+    lines = []
+    for p in plays[-max_plays:][::-1]:
+        text = p.get("text") or p.get("shortText")
+        if text:
+            lines.append((_play_label(p), text))
+    out["plays"] = lines
+    out["scoring"] = [((_play_label(p)), p.get("text") or p.get("shortText", "")) for p in (data.get("scoringPlays") or [])][-8:]
+    teams = (data.get("boxscore") or {}).get("teams") or []
+    if len(teams) == 2:
+        by_id = {str((t.get("team") or {}).get("id")): t for t in teams}
+        a = by_id.get(str((away.get("team") or {}).get("id")), teams[0])
+        h = by_id.get(str((home.get("team") or {}).get("id")), teams[1])
+        hv = {st.get("name"): st.get("displayValue") for st in h.get("statistics", [])}
+        out["stats"] = [(st.get("label") or st.get("name"), st.get("displayValue", ""), hv.get(st.get("name"), ""))
+                        for st in a.get("statistics", [])][:max_stats]
+    else:
+        out["stats"] = []
+    return out
+
+
 def situation_text(sport, comp):
     """Sport-specific live info: situation (down/possession, count/runners, power play) and team stats."""
     sit = comp.get("situation") or {}
@@ -405,7 +464,8 @@ def team_status(entry):
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
     return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
-            "url": event_url(event, entry["sport"], entry["league"])}
+            "url": event_url(event, entry["sport"], entry["league"]),
+            "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
 
 
 def fetch_all(entries):
@@ -477,6 +537,7 @@ def playoff_games(debug=False, days=7):
             extra = " · ".join(x for x in (note, series) if x)
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
+                   "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
                    "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
@@ -499,6 +560,7 @@ def playoff_games(debug=False, days=7):
 
 
 STATE = os.path.join(HERE, "state.json")
+LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
                    ("5 minutes", 300), ("10 minutes", 600), ("15 minutes", 900)]
 
@@ -543,6 +605,7 @@ def league_games():
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
+                        "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
                         "info": situation_text(sport, comp) if state == "in" else "",
                         "graphic": situation_graphic(sport, comp, league) if state == "in" else None})
     order = {"in": 0, "pre": 1, "post": 2}
@@ -637,6 +700,7 @@ def pinned_status(pin):
                 return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
+                        "game": {"sport": pin["sport"], "league": pin["league"], "id": str(pin["id"])},
                         "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else "",
                         "graphic": situation_graphic(pin["sport"], e["competitions"][0], pin["league"]) if s[0] == "in" else None}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
@@ -1070,6 +1134,69 @@ def run_gui():
             c.create_text(W, 6, text=g["def"], anchor="e", fill=DIM, font=("Segoe UI", 8, "bold"))
             c.pack(anchor="w", pady=(2, 0))
 
+    def gkey(g):
+        return f'{g["league"]}:{g["id"]}'
+
+    def draw_details(parent, bgc, d):
+        small = ("Segoe UI", 8)
+        if d is None:
+            tk.Label(parent, text="Loading details...", bg=bgc, fg=DIM, font=small, anchor="w").pack(fill="x", pady=(6, 0))
+            return
+        if "error" in d:
+            tk.Label(parent, text="Details unavailable", bg=bgc, fg=COLORS["err"], font=small, anchor="w").pack(fill="x", pady=(6, 0))
+            return
+        tk.Frame(parent, bg=DIM, height=1).pack(fill="x", pady=(6, 4))
+        if d.get("home_win") is not None:
+            hw = round(d["home_win"] * 100)
+            ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
+            draw_graphic(parent, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
+                                  "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb})
+        if d["scoring"]:
+            tk.Label(parent, text="Scoring", bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(4, 0))
+            for when, text in d["scoring"]:
+                tk.Label(parent, text=(f"{when} · " if when else "") + text, bg=bgc, fg=FG, font=small, anchor="w",
+                         justify="left", wraplength=280).pack(fill="x")
+        if d["plays"]:
+            tk.Label(parent, text="Recent plays", bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(4, 0))
+            for when, text in d["plays"][:8]:
+                tk.Label(parent, text=(f"{when} · " if when else "") + text, bg=bgc, fg=FG, font=small, anchor="w",
+                         justify="left", wraplength=280).pack(fill="x")
+        if d["stats"]:
+            tk.Label(parent, text="Team stats", bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(4, 0))
+            grid = tk.Frame(parent, bg=bgc)
+            grid.pack(fill="x")
+            grid.grid_columnconfigure(1, weight=1)
+            tk.Label(grid, text=d["away_abbr"], bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), width=8, anchor="e").grid(row=0, column=0)
+            tk.Label(grid, text=d["home_abbr"], bg=bgc, fg=DIM, font=("Segoe UI", 8, "bold"), width=8, anchor="w").grid(row=0, column=2)
+            for i, (label, a, h) in enumerate(d["stats"], start=1):
+                tk.Label(grid, text=a, bg=bgc, fg=FG, font=small, width=8, anchor="e").grid(row=i, column=0)
+                tk.Label(grid, text=label, bg=bgc, fg=DIM, font=small).grid(row=i, column=1)
+                tk.Label(grid, text=h, bg=bgc, fg=FG, font=small, width=8, anchor="w").grid(row=i, column=2)
+        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None):
+            tk.Label(parent, text="No extra details from ESPN for this game", bg=bgc, fg=DIM, font=small, anchor="w").pack(fill="x")
+
+    def fetch_details(g):
+        try:
+            session["details"][gkey(g)] = game_detail_data(fetch_summary(g["sport"], g["league"], g["id"]))
+        except Exception as ex:
+            session["details"][gkey(g)] = {"error": str(ex)[:60]}
+
+    def toggle_expand(g):
+        k = gkey(g)
+        if k in session["expanded"]:
+            session["expanded"].discard(k)
+            render(*last["args"])
+            return
+        session["expanded"].add(k)
+        session["games"][k] = g
+        session["details"].pop(k, None)
+        render(*last["args"])
+
+        def work():
+            fetch_details(g)
+            root.after(0, lambda: render(*last["args"]))
+        threading.Thread(target=work, daemon=True).start()
+
     def add_rows(rows):
         for r in rows:
             tint = r.get("tint")
@@ -1081,6 +1208,7 @@ def run_gui():
                 row = tk.Frame(body, bg=bgc)
                 row.pack(fill="x", pady=3)
             row._url = r.get("url")  # found by the right-click handler via the widget hierarchy
+            row._game = r.get("game")
             tk.Label(row, text=r["name"], bg=bgc, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
             if r["line"]:
                 tk.Label(row, text=r["line"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
@@ -1090,9 +1218,15 @@ def run_gui():
                 draw_graphic(row, r["graphic"])
             if r.get("info"):
                 tk.Label(row, text=r["info"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x")
+            g = r.get("game")
+            if g:
+                for ch in row.winfo_children():
+                    ch.configure(cursor="hand2")
+                if gkey(g) in session["expanded"]:
+                    draw_details(row, bgc, session["details"].get(gkey(g)))
 
     last = {}
-    session = {"live_prev": 0}  # in-session only: live games re-open themselves when they appear
+    session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}}  # in-session only
 
     def toggle(key, was_open, persist=True):
         if persist:
@@ -1121,6 +1255,10 @@ def run_gui():
 
     def render(results, pin_results, playoffs, leagues=()):
         last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
+        any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
+        if any_live != session.get("any_live"):
+            session["any_live"] = any_live
+            schedule()  # switch between normal and live cadence right away
         for w in body.winfo_children():
             w.destroy()
         live_view = ui_state.get("view", "full") == "live"
@@ -1169,6 +1307,9 @@ def run_gui():
             shown = {r["_key"] for r in res + pres if r.get("_key")}
             po = [r for r in po if r.get("_key") not in shown]  # already listed above
             lg = [r for r in lg if r.get("_key") not in shown]
+            for k in list(session["expanded"]):
+                if k in session["games"]:
+                    fetch_details(session["games"][k])
             root.after(0, lambda: render(res, pres, po, lg))
         threading.Thread(target=work, daemon=True).start()
 
@@ -1177,7 +1318,11 @@ def run_gui():
     def schedule():
         if timer["id"]:
             root.after_cancel(timer["id"])
-        timer["id"] = root.after(int(ui_state.get("refresh_seconds", default_refresh)) * 1000, tick)
+        secs = int(ui_state.get("refresh_seconds", default_refresh))
+        live_secs = int(ui_state.get("live_refresh_seconds", 15))
+        if session.get("any_live") and live_secs:
+            secs = min(secs, live_secs)  # poll faster while something is live
+        timer["id"] = root.after(secs * 1000, tick)
 
     def tick():
         refresh()
@@ -1293,7 +1438,18 @@ def run_gui():
 
         om = styled_option(win, choice, [l for l, _ in REFRESH_CHOICES], command=on_refresh, width=12)
         om.grid(row=2, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=3, column=1, padx=16, pady=(10, 16), sticky="e")
+        tk.Label(win, text="While games are live", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=3, column=0, padx=16, pady=(6, 4), sticky="w")
+        cur_live = int(ui_state.get("live_refresh_seconds", 15))
+        live_choice = tk.StringVar(value=next((l for l, v in LIVE_REFRESH_CHOICES if v == cur_live), f"{cur_live} seconds"))
+
+        def on_live_refresh(label):
+            ui_state["live_refresh_seconds"] = dict(LIVE_REFRESH_CHOICES)[label]
+            save_state(ui_state)
+            schedule()
+
+        styled_option(win, live_choice, [l for l, _ in LIVE_REFRESH_CHOICES], command=on_live_refresh, width=12).grid(
+            row=3, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=4, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
@@ -1315,9 +1471,24 @@ def run_gui():
     def start(e):
         if e.widget not in (grip, scroll):  # grip resizes, scrollbar scrolls
             drag["x"], drag["y"] = e.x_root - root.winfo_x(), e.y_root - root.winfo_y()
+            drag["moved"] = False
     def move(e):
-        if e.widget not in (grip, scroll) and drag:
+        if e.widget not in (grip, scroll) and "x" in drag:
+            drag["moved"] = True
             root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
+
+    def game_at(widget):
+        while widget is not None:
+            g = getattr(widget, "_game", None)
+            if g:
+                return g
+            widget = getattr(widget, "master", None)
+        return None
+
+    def on_release(e):
+        g = game_at(e.widget)
+        if g and not drag.get("moved"):
+            toggle_expand(g)
 
     menu = style_menu(tk.Menu(root, tearoff=0))
     menu.add_command(label="Track a game...", command=track_dialog)
@@ -1386,6 +1557,7 @@ def run_gui():
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
     root.bind("<Button-1>", start)
     root.bind("<B1-Motion>", move)
+    root.bind("<ButtonRelease-1>", on_release)
     root.bind("<Button-3>", popup)
     root.update_idletasks()
     apply_layout()
