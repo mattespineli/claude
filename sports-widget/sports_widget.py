@@ -821,15 +821,15 @@ def run_gui():
             c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "baseball":
-            c = tk.Canvas(parent, width=130, height=32, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=130, height=24, bg=BG, highlightthickness=0)
             def base(cx, cy, on):
                 r = 5
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill="#fbbf24" if on else BG,
                                  outline="#fbbf24" if on else DIM, width=2)
-            base(25, 7, g["bases"][1]); base(34, 16, g["bases"][0]); base(16, 16, g["bases"][2])
-            c.create_text(56, 7, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
+            base(20, 6, g["bases"][1]); base(25, 11, g["bases"][0]); base(15, 11, g["bases"][2])
+            c.create_text(40, 5, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
             for i in range(3):
-                c.create_oval(58 + i * 14, 15, 66 + i * 14, 23, fill="#f87171" if i < g["outs"] else BG,
+                c.create_oval(42 + i * 14, 11, 50 + i * 14, 19, fill="#f87171" if i < g["outs"] else BG,
                               outline="#f87171" if i < g["outs"] else DIM, width=1)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "football":
