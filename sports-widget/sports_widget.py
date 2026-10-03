@@ -774,38 +774,30 @@ def run_gui():
             c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "baseball":
-            c = tk.Canvas(parent, width=150, height=62, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=150, height=42, bg=BG, highlightthickness=0)
             def base(cx, cy, on):
-                r = 8
+                r = 7
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill="#fbbf24" if on else BG,
                                  outline="#fbbf24" if on else DIM, width=2)
-            c.create_polygon(40, 8, 72, 31, 40, 54, 8, 31, outline="#3b3b46", fill="", width=1)
-            base(72, 31, g["bases"][0]); base(40, 10, g["bases"][1]); base(8, 31, g["bases"][2])
-            c.create_polygon(40, 48, 45, 54, 40, 59, 35, 54, fill=FG, outline=FG)  # home plate
-            c.create_text(92, 14, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
+            base(40, 8, g["bases"][1]); base(54, 24, g["bases"][0]); base(26, 24, g["bases"][2])
+            c.create_text(84, 10, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
             for i in range(3):
-                c.create_oval(94 + i * 16, 28, 104 + i * 16, 38, fill="#f87171" if i < g["outs"] else BG,
+                c.create_oval(86 + i * 16, 22, 96 + i * 16, 32, fill="#f87171" if i < g["outs"] else BG,
                               outline="#f87171" if i < g["outs"] else DIM, width=1)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "football":
-            W, H, EZ, PX = 240, 46, 22, 1.96  # field spans x in [EZ, EZ + 100 * PX]
+            W, H = 240, 24
             c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
-            x0, x1 = EZ, EZ + 100 * PX
-            c.create_rectangle(0, 4, x0, H - 12, fill="#1f3f2b", outline="")
-            c.create_rectangle(x1, 4, W - 1, H - 12, fill="#1f3f2b", outline="")
-            c.create_rectangle(x0, 4, x1, H - 12, fill="#2d5a3d", outline="")
+            px = lambda yd: W * yd / 100
+            c.create_rectangle(0, 14, W, 20, fill="#33333d", outline="")
             if g["red"]:
-                c.create_rectangle(x0 + 80 * PX, 4, x1, H - 12, fill="#5a2d2d", outline="")
-            for yd in range(10, 100, 10):
-                c.create_line(x0 + yd * PX, 4, x0 + yd * PX, H - 12, fill="#4d7a5c")
-            c.create_text(x0 / 2, 4 + (H - 16) / 2, text=g["off"], fill=FG, font=("Segoe UI", 7, "bold"))
-            c.create_text((x1 + W) / 2, 4 + (H - 16) / 2, text=g["def"], fill=FG, font=("Segoe UI", 7, "bold"))
+                c.create_rectangle(px(80), 14, W, 20, fill="#7f3b3b", outline="")
             if g["first"] is not None:
-                fx = x0 + g["first"] * PX
-                c.create_line(fx, 4, fx, H - 12, fill="#fbbf24", width=2)
-            bx = x0 + g["x"] * PX
-            c.create_oval(bx - 6, 4 + (H - 16) / 2 - 4, bx + 6, 4 + (H - 16) / 2 + 4, fill="#a16207", outline=FG)
-            c.create_text(x0 + 50 * PX, H - 5, text=f"{g['off']} drives \u25b6", fill=DIM, font=("Segoe UI", 7))
+                c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
+            bx = px(g["x"])
+            c.create_oval(bx - 5, 12, bx + 5, 22, fill="#34d399", outline=FG)
+            c.create_text(0, 6, text=f"{g['off']} \u25b6", anchor="w", fill=FG, font=("Segoe UI", 8, "bold"))
+            c.create_text(W, 6, text=g["def"], anchor="e", fill=DIM, font=("Segoe UI", 8, "bold"))
             c.pack(anchor="w", pady=(2, 0))
 
     def add_rows(rows):
