@@ -214,6 +214,47 @@ def _minute(text):
     return int(m.group(1)) if m else None
 
 
+def _rgb(h):
+    h = h.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _valid_hex(c):
+    return bool(c) and bool(re.fullmatch(r"#?[0-9a-fA-F]{6}", str(c)))
+
+
+def _lum(h):
+    r, g, b = _rgb(h)
+    return (0.299 * r + 0.587 * g + 0.114 * b) / 255
+
+
+def _dist(a, b):
+    return sum(abs(x - y) for x, y in zip(_rgb(a), _rgb(b)))
+
+
+def _lighten(h, amt=0.45):
+    return "#%02x%02x%02x" % tuple(int(c + (255 - c) * amt) for c in _rgb(h))
+
+
+def team_colors(c, fallback):
+    """Pick a readable-on-dark color for a competitor: primary, else alternate, else lightened primary."""
+    t = c.get("team", {})
+    cands = [("#" + str(x).lstrip("#")) for x in (t.get("color"), t.get("alternateColor")) if _valid_hex(x)]
+    for h in cands:
+        if _lum(h) >= 0.2:
+            return h
+    return _lighten(cands[0]) if cands else fallback
+
+
+def matchup_colors(cs, defaults=("#60a5fa", "#f59e0b")):
+    """Colors for the two competitors, kept distinguishable from each other."""
+    a, b = team_colors(cs[0], defaults[0]), team_colors(cs[1], defaults[1])
+    if _dist(a, b) < 120:
+        alt = [("#" + str(x).lstrip("#")) for x in (cs[1].get("team", {}).get("alternateColor"),) if _valid_hex(x)]
+        b = next((h for h in alt if _dist(a, h) >= 120 and _lum(h) >= 0.2), defaults[1] if _dist(a, defaults[1]) >= 120 else defaults[0])
+    return a, b
+
+
 def _versus(label, comp, names):
     cs = comp.get("competitors", [])
     if len(cs) != 2:
@@ -222,7 +263,9 @@ def _versus(label, comp, names):
     if None in vals or sum(vals) <= 0:
         return None
     ab = [c.get("team", {}).get("abbreviation", "") for c in cs]
-    return {"kind": "versus", "label": label, "a_name": ab[0], "a": vals[0], "b_name": ab[1], "b": vals[1]}
+    ca, cb = matchup_colors(cs)
+    return {"kind": "versus", "label": label, "a_name": ab[0], "a": vals[0], "b_name": ab[1], "b": vals[1],
+            "a_color": ca, "b_color": cb}
 
 
 def situation_graphic(sport, comp, league=""):
@@ -256,11 +299,13 @@ def situation_graphic(sport, comp, league=""):
             cs = comp.get("competitors", [])
             home = next((str(c.get("id", c.get("team", {}).get("id", ""))) for c in cs if c.get("homeAway") == "home"), "")
             events = []
+            colors = dict(zip((str(c.get("id", c.get("team", {}).get("id", ""))) for c in cs), matchup_colors(cs))) if len(cs) == 2 else {}
             for d in comp.get("details", []) or []:
                 kind = "goal" if d.get("scoringPlay") else "red" if d.get("redCard") else "yellow" if d.get("yellowCard") else None
                 m = _minute((d.get("clock") or {}).get("displayValue"))
                 if kind and m is not None:
-                    events.append({"min": m, "kind": kind, "home": str((d.get("team") or {}).get("id", "")) == home})
+                    tid = str((d.get("team") or {}).get("id", ""))
+                    events.append({"min": m, "kind": kind, "home": tid == home, "color": colors.get(tid, "#ffffff")})
             out.append({"kind": "timeline", "minute": minute, "events": events})
         v = _versus("Possession", comp, ("possessionPct", "possession"))
         if v:
@@ -749,8 +794,8 @@ def run_gui():
             c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
             total = g["a"] + g["b"]
             split = W * g["a"] / total
-            c.create_rectangle(0, 16, split, 24, fill="#60a5fa", outline="")
-            c.create_rectangle(split, 16, W, 24, fill="#f59e0b", outline="")
+            c.create_rectangle(0, 16, split, 24, fill=g.get("a_color", "#60a5fa"), outline="")
+            c.create_rectangle(split, 16, W, 24, fill=g.get("b_color", "#f59e0b"), outline="")
             fmt = lambda v: f"{v:g}"
             c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=("Segoe UI", 8))
             c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=("Segoe UI", 8))
@@ -768,21 +813,21 @@ def run_gui():
             for ev in g["events"]:
                 x, y = px(ev["min"]), 9 if ev["home"] else 35
                 if ev["kind"] == "goal":
-                    c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=FG, outline="")
+                    c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=ev.get("color", FG), outline=FG)
                 else:
                     c.create_rectangle(x - 3, y - 4, x + 3, y + 4, fill="#fbbf24" if ev["kind"] == "yellow" else "#ef4444", outline="")
             c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "baseball":
-            c = tk.Canvas(parent, width=150, height=42, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=130, height=32, bg=BG, highlightthickness=0)
             def base(cx, cy, on):
-                r = 7
+                r = 5
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill="#fbbf24" if on else BG,
                                  outline="#fbbf24" if on else DIM, width=2)
-            base(40, 8, g["bases"][1]); base(54, 24, g["bases"][0]); base(26, 24, g["bases"][2])
-            c.create_text(84, 10, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
+            base(25, 7, g["bases"][1]); base(34, 16, g["bases"][0]); base(16, 16, g["bases"][2])
+            c.create_text(56, 7, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
             for i in range(3):
-                c.create_oval(86 + i * 16, 22, 96 + i * 16, 32, fill="#f87171" if i < g["outs"] else BG,
+                c.create_oval(58 + i * 14, 15, 66 + i * 14, 23, fill="#f87171" if i < g["outs"] else BG,
                               outline="#f87171" if i < g["outs"] else DIM, width=1)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "football":
@@ -1036,11 +1081,15 @@ def run_gui():
     root.mainloop()
 
 
+TEAM_COLORS = {"NJ": {"color": "ce1126", "alternateColor": "000000"}, "BOS": {"color": "000000", "alternateColor": "fdb71a"},
+               "ARS": {"color": "ef0107", "alternateColor": "ffffff"}, "CHE": {"color": "034694", "alternateColor": "ffffff"}}
+
+
 def demo_data():
     """Fake live games for every sport, built through the real graphic/text code paths."""
     st = lambda n, v: {"name": n, "displayValue": str(v)}
     team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
-                                              "team": {"id": i, "abbreviation": a}}
+                                              "team": {"id": i, "abbreviation": a, **TEAM_COLORS.get(a, {})}}
     def row(name, sport, league, line, detail, comp):
         return {"name": name, "state": "in", "line": line, "detail": detail,
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
