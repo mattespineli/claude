@@ -803,6 +803,7 @@ def run_gui():
     def apply_layout():
         mode = ui_state.get("view", "full")
         view_btn.config(text=dict(VIEWS).get(mode, "Full"))
+        hbar.pack_configure(pady=(8, 12) if mode == "title" else (8, 2))  # extra bottom space when only the title shows
         if mode == "title":
             stamp.pack_forget()
         elif not stamp.winfo_manager():
@@ -1169,6 +1170,32 @@ def run_gui():
         import subprocess
         subprocess.Popen([sys.executable, os.path.abspath(__file__)] + sys.argv[1:], cwd=HERE)
         root.destroy()
+    def update_and_restart():
+        """git pull (fast-forward only) in the widget's repo, then restart on success."""
+        import subprocess
+        from tkinter import messagebox
+        prev = stamp.cget("text")
+        stamp.config(text="Updating...")
+
+        def work():
+            try:
+                r = subprocess.run(["git", "pull", "--ff-only"], cwd=HERE, capture_output=True, text=True, timeout=60,
+                                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform == "win32" else 0)
+                ok, out = r.returncode == 0, (r.stdout + r.stderr).strip()
+            except Exception as ex:  # git missing, timeout, ...
+                ok, out = False, str(ex)
+            root.after(0, lambda: done(ok, out))
+
+        def done(ok, out):
+            if ok:
+                restart()
+            else:
+                stamp.config(text=prev)
+                messagebox.showerror("Update failed", out[-600:] or "git pull failed", parent=root)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    menu.add_command(label="Update & Restart", command=update_and_restart)
     menu.add_command(label="Restart", command=restart)
     menu.add_command(label="Quit", command=root.destroy)
     menu_pos = {}
