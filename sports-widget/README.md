@@ -24,6 +24,6 @@ Tracked games show at the top and persist in `pinned.json`. Right-click → **Un
 `python sports_widget.py --find "san diego state"` searches every college league and prints matches;
 add `--add` to append them to `teams.json`. Leagues where the school has no team are simply not listed.
 
-Playoffs section: live or same-day postseason games in NBA, NFL, MLB, WNBA and NHL appear automatically; hidden when none.
+Playoffs section: live and same-day postseason games in NBA, NFL, MLB, WNBA and NHL, plus the latest result per matchup from the last 7 days; hidden when none.
 
 Live games also show sport-specific info when ESPN provides it: down & distance, possession and red zone (football); count, outs and runners (baseball).

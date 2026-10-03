@@ -196,11 +196,11 @@ def is_postseason(e):
     return any(w in note for w in _POST_WORDS)
 
 
-def playoff_games(debug=False):
-    """Postseason games that are live or scheduled today in the major pro leagues."""
+def playoff_games(debug=False, days=7):
+    """Postseason games: live and today's, plus the latest result per matchup from the last `days` days."""
     today = datetime.now().astimezone().date()
-    rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
-    out = []
+    rng = f"{(today - timedelta(days=days)):%Y%m%d}-{today:%Y%m%d}"
+    best = {}  # matchup -> (priority, date, row); live > scheduled today > latest completed
     for name, sport, league in PLAYOFF_LEAGUES:
         try:
             events = fetch_scoreboard(sport, league, rng)
@@ -218,17 +218,32 @@ def playoff_games(debug=False):
                 continue
             state, matchup, detail = summ
             d = _parse_date(e.get("date"))
-            if state != "in" and not (d and d.astimezone().date() == today):
-                continue
+            local = d.astimezone() if d else None
+            if state == "in":
+                prio = 0
+            elif state == "pre":
+                if not (local and local.date() == today):
+                    continue
+                prio = 1
+            else:
+                prio = 2
+                if local:
+                    detail += f" · {local:%b} {local.day}"
             comp = e["competitions"][0]
             note = (comp.get("notes") or [{}])[0].get("headline", "")
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
-            out.append({"name": matchup, "state": state, "line": f"{name}" + (f" · {extra}" if extra else ""),
-                        "detail": detail, "_date": e.get("date", ""),
-                        "info": situation_text(sport, comp) if state == "in" else ""})
-    out.sort(key=lambda r: (r["state"] != "in", r["_date"]))
-    return out
+            row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+                   "detail": detail, "_date": e.get("date", ""),
+                   "info": situation_text(sport, comp) if state == "in" else ""}
+            key = (league, frozenset(str(c.get("team", {}).get("id", c.get("id", ""))) for c in comp.get("competitors", [])))
+            cur = best.get(key)
+            # lower priority number wins; within completed games the most recent wins
+            if cur is None or prio < cur[0] or (prio == cur[0] == 2 and row["_date"] > cur[1]):
+                best[key] = (prio, row["_date"], row)
+    rows = sorted((v for v in best.values()), key=lambda v: (v[0], v[1] if v[0] < 2 else ""))
+    done = sorted((v for v in rows if v[0] == 2), key=lambda v: v[1], reverse=True)
+    return [v[2] for v in rows if v[0] < 2] + [v[2] for v in done]
 
 
 def load_pinned():
