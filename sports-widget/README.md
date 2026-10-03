@@ -31,4 +31,4 @@ Live games also show sport-specific info when ESPN provides it: down & distance,
 `python sports_widget.py --debug-live` shows what ESPN sends for live games right now.
 Playoffs has a **Live** section (opens automatically whenever a game goes live), plus collapsible **Upcoming Today** and **Previous** sections, each grouped by league. Your choices are saved in `state.json`.
 
-Right-click → **Settings...** to adjust opacity (30-100%).
+Right-click → **Settings...** to adjust opacity (30-100%) and refresh cadence (15 seconds to 15 minutes). Live MLB games show a base diamond with outs; live NFL games show a field-position strip (ball, first-down line, red zone).

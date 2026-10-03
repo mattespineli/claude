@@ -7,6 +7,7 @@ Drag to move, right-click for menu (refresh / always-on-top / quit).
 """
 import json
 import os
+import re
 import sys
 import threading
 import urllib.error
@@ -163,6 +164,37 @@ def situation_text(sport, comp):
     return "\n".join(l for l in lines if l)
 
 
+def situation_graphic(sport, comp):
+    """Data for the live-game graphic: baseball diamond or football field position."""
+    sit = comp.get("situation") or {}
+    if sport == "baseball" and ("onFirst" in sit or "outs" in sit):
+        return {"kind": "baseball", "bases": [bool(sit.get(k)) for k in ("onFirst", "onSecond", "onThird")],
+                "outs": int(sit.get("outs") or 0)}
+    if sport == "football" and sit:
+        teams = {}
+        for c in comp.get("competitors", []):
+            t = c.get("team", {})
+            teams[str(c.get("id", t.get("id", "")))] = t.get("abbreviation", "")
+        poss = str(sit.get("possession", ""))
+        off = teams.get(poss, "")
+        defn = next((a for k, a in teams.items() if k != poss), "")
+        x = None  # yards from the offense's own goal line (0-100), driving toward 100
+        if sit.get("yardsToEndzone") is not None:
+            x = 100 - int(sit["yardsToEndzone"])
+        else:
+            m = re.match(r"\s*([A-Za-z.]+)\s+(\d+)", str(sit.get("possessionText") or sit.get("downDistanceText") or ""))
+            if m:
+                n = int(m.group(2))
+                x = n if off and m.group(1).upper() == off.upper() else 100 - n
+        if x is None or not off:
+            return None
+        dist = sit.get("distance")
+        first = min(100, x + int(dist)) if dist not in (None, "") else None
+        return {"kind": "football", "x": max(0, min(100, x)), "first": first, "off": off, "def": defn,
+                "red": bool(sit.get("isRedZone")) or x >= 80}
+    return None
+
+
 def live_info(entry, event):
     """Fetch the scoreboard entry for a live game (schedule data lacks situation)."""
     today = datetime.now().astimezone().date()
@@ -170,10 +202,11 @@ def live_info(entry, event):
     try:
         for e in fetch_scoreboard(entry["sport"], entry["league"], rng):
             if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
-                return situation_text(entry["sport"], e["competitions"][0])
+                comp = e["competitions"][0]
+                return situation_text(entry["sport"], comp), situation_graphic(entry["sport"], comp)
     except Exception:
         pass
-    return ""
+    return "", None
 
 
 def pick_event(events, days=7):
@@ -209,8 +242,8 @@ def team_status(entry):
     if not s:
         return None
     state, line, detail = s
-    info = live_info(entry, event) if state == "in" else ""
-    return {"name": name, "state": state, "line": line, "detail": detail, "info": info}
+    info, graphic = live_info(entry, event) if state == "in" else ("", None)
+    return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic}
 
 
 def fetch_all(entries):
@@ -283,7 +316,8 @@ def playoff_games(debug=False, days=7):
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
-                   "info": situation_text(sport, comp) if state == "in" else ""}
+                   "info": situation_text(sport, comp) if state == "in" else "",
+                   "graphic": situation_graphic(sport, comp) if state == "in" else None}
             teams = frozenset((league, str(c.get("team", {}).get("id", c.get("id", "")))) for c in comp.get("competitors", []))
             row["_teams"] = teams
             key = (league, teams)
@@ -302,6 +336,8 @@ def playoff_games(debug=False, days=7):
 
 
 STATE = os.path.join(HERE, "state.json")
+REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
+                   ("5 minutes", 300), ("10 minutes", 600), ("15 minutes", 900)]
 
 
 def load_state():
@@ -405,7 +441,8 @@ def pinned_status(pin):
             s = summarize_game(e)
             if s:
                 return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
-                        "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else ""}
+                        "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else "",
+                        "graphic": situation_graphic(pin["sport"], e["competitions"][0]) if s[0] == "in" else None}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
 
 
@@ -493,7 +530,7 @@ def run_gui():
 
     cfg = load_config()
     entries = cfg["teams"]
-    interval = int(cfg.get("refresh_seconds", 60)) * 1000
+    default_refresh = int(cfg.get("refresh_seconds", 60))
 
     BG, FG, DIM = "#1e1e24", "#f2f2f2", "#9aa0a6"
     COLORS = {"in": "#34d399", "pre": DIM, "post": FG, "none": DIM, "err": "#f87171"}
@@ -614,6 +651,42 @@ def run_gui():
     def section(title):
         tk.Label(body, text=title, bg=BG, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
 
+    def draw_graphic(parent, g):
+        if g["kind"] == "baseball":
+            c = tk.Canvas(parent, width=150, height=62, bg=BG, highlightthickness=0)
+            def base(cx, cy, on):
+                r = 8
+                c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill="#fbbf24" if on else BG,
+                                 outline="#fbbf24" if on else DIM, width=2)
+            c.create_polygon(40, 8, 72, 31, 40, 54, 8, 31, outline="#3b3b46", fill="", width=1)
+            base(72, 31, g["bases"][0]); base(40, 10, g["bases"][1]); base(8, 31, g["bases"][2])
+            c.create_polygon(40, 48, 45, 54, 40, 59, 35, 54, fill=FG, outline=FG)  # home plate
+            c.create_text(92, 14, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
+            for i in range(3):
+                c.create_oval(94 + i * 16, 28, 104 + i * 16, 38, fill="#f87171" if i < g["outs"] else BG,
+                              outline="#f87171" if i < g["outs"] else DIM, width=1)
+            c.pack(anchor="w", pady=(2, 0))
+        elif g["kind"] == "football":
+            W, H, EZ, PX = 240, 46, 22, 1.96  # field spans x in [EZ, EZ + 100 * PX]
+            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            x0, x1 = EZ, EZ + 100 * PX
+            c.create_rectangle(0, 4, x0, H - 12, fill="#1f3f2b", outline="")
+            c.create_rectangle(x1, 4, W - 1, H - 12, fill="#1f3f2b", outline="")
+            c.create_rectangle(x0, 4, x1, H - 12, fill="#2d5a3d", outline="")
+            if g["red"]:
+                c.create_rectangle(x0 + 80 * PX, 4, x1, H - 12, fill="#5a2d2d", outline="")
+            for yd in range(10, 100, 10):
+                c.create_line(x0 + yd * PX, 4, x0 + yd * PX, H - 12, fill="#4d7a5c")
+            c.create_text(x0 / 2, 4 + (H - 16) / 2, text=g["off"], fill=FG, font=("Segoe UI", 7, "bold"))
+            c.create_text((x1 + W) / 2, 4 + (H - 16) / 2, text=g["def"], fill=FG, font=("Segoe UI", 7, "bold"))
+            if g["first"] is not None:
+                fx = x0 + g["first"] * PX
+                c.create_line(fx, 4, fx, H - 12, fill="#fbbf24", width=2)
+            bx = x0 + g["x"] * PX
+            c.create_oval(bx - 6, 4 + (H - 16) / 2 - 4, bx + 6, 4 + (H - 16) / 2 + 4, fill="#a16207", outline=FG)
+            c.create_text(x0 + 50 * PX, H - 5, text=f"{g['off']} drives \u25b6", fill=DIM, font=("Segoe UI", 7))
+            c.pack(anchor="w", pady=(2, 0))
+
     def add_rows(rows):
         for r in rows:
             row = tk.Frame(body, bg=BG)
@@ -623,8 +696,10 @@ def run_gui():
                 tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
             tk.Label(row, text=r["detail"], bg=BG, fg=COLORS.get(r["state"], FG),
                      font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
+            if r.get("graphic"):
+                draw_graphic(row, r["graphic"])
             if r.get("info"):
-                tk.Label(row, text=r["info"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
+                tk.Label(row, text=r["info"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x")
 
     last = {}
     session = {"live_prev": 0}  # in-session only: live games re-open themselves when they appear
@@ -692,9 +767,16 @@ def run_gui():
             root.after(0, lambda: render(res, pres, po))
         threading.Thread(target=work, daemon=True).start()
 
+    timer = {"id": None}
+
+    def schedule():
+        if timer["id"]:
+            root.after_cancel(timer["id"])
+        timer["id"] = root.after(int(ui_state.get("refresh_seconds", default_refresh)) * 1000, tick)
+
     def tick():
         refresh()
-        root.after(interval, tick)
+        schedule()
 
     def track_dialog():
         win = tk.Toplevel(root)
@@ -774,8 +856,22 @@ def run_gui():
         scale.set(int(ui_state.get("opacity", 0.95) * 100))
         scale.grid(row=1, column=0, columnspan=2, padx=14, pady=(0, 8))
         scale.bind("<ButtonRelease-1>", on_release)
+        tk.Label(win, text="Refresh every", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, padx=14, pady=(6, 4), sticky="w")
+        cur = int(ui_state.get("refresh_seconds", default_refresh))
+        choice = tk.StringVar(value=next((l for l, v in REFRESH_CHOICES if v == cur), f"{cur} seconds"))
+
+        def on_refresh(label):
+            ui_state["refresh_seconds"] = dict(REFRESH_CHOICES)[label]
+            save_state(ui_state)
+            schedule()  # restart the countdown with the new cadence
+
+        om = tk.OptionMenu(win, choice, *[l for l, _ in REFRESH_CHOICES], command=on_refresh)
+        om.config(bg="#33333d", fg=FG, activebackground="#44444f", activeforeground=FG, relief="flat",
+                  highlightthickness=0, width=12)
+        om["menu"].config(bg="#33333d", fg=FG)
+        om.grid(row=2, column=1, padx=14, pady=(6, 4), sticky="e")
         tk.Button(win, text="Close", command=win.destroy, bg="#33333d", fg=FG, relief="flat",
-                  activebackground="#44444f", activeforeground=FG).grid(row=2, column=1, padx=14, pady=(0, 14), sticky="e")
+                  activebackground="#44444f", activeforeground=FG).grid(row=3, column=1, padx=14, pady=(8, 14), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
