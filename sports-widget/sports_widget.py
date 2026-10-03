@@ -834,10 +834,10 @@ def run_gui():
                 hl = g.get("color", "#fbbf24")
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else BG,
                                  outline=hl if on else DIM, width=2)
-            base(21, 6, g["bases"][1]); base(27, 12, g["bases"][0]); base(15, 12, g["bases"][2])
-            c.create_text(44, 5, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
+            base(21, 6, g["bases"][1]); base(28, 13, g["bases"][0]); base(14, 13, g["bases"][2])
+            c.create_text(48, 5, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
             for i in range(3):
-                c.create_oval(46 + i * 14, 12, 54 + i * 14, 20, fill="#f87171" if i < g["outs"] else BG,
+                c.create_oval(50 + i * 14, 13, 58 + i * 14, 21, fill="#f87171" if i < g["outs"] else BG,
                               outline="#f87171" if i < g["outs"] else DIM, width=1)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "football":
