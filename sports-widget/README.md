@@ -19,3 +19,7 @@ Auto-start: put a shortcut to `run.bat` in `shell:startup`.
 ## Track a game on demand
 Right-click → **Track a game...**, pick a league and date (YYYYMMDD, defaults to today), select one or more games, click *Track selected*.
 Tracked games show at the top and persist in `pinned.json`. Right-click → **Untrack a game...** to remove.
+
+## Find a team's ESPN id
+`python sports_widget.py --find "san diego state"` searches every college league and prints matches;
+add `--add` to append them to `teams.json`. Leagues where the school has no team are simply not listed.

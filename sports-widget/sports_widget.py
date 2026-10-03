@@ -201,6 +201,55 @@ def fetch_pinned(pins):
     return out
 
 
+TEAMS_API = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams?limit=1000"
+SPORT_NAMES = {"college-football": "Football", "mens-college-basketball": "Men's Basketball",
+               "womens-college-basketball": "Women's Basketball", "college-baseball": "Baseball",
+               "college-softball": "Softball", "womens-college-volleyball": "Volleyball",
+               "mens-college-volleyball": "Men's Volleyball", "mens-college-soccer": "Men's Soccer",
+               "womens-college-soccer": "Women's Soccer", "mens-college-lacrosse": "Men's Lacrosse",
+               "womens-college-lacrosse": "Women's Lacrosse", "mens-college-hockey": "Men's Hockey",
+               "womens-college-hockey": "Women's Hockey", "womens-college-field-hockey": "Field Hockey"}
+COLLEGE = [("football", "college-football"), ("basketball", "mens-college-basketball"),
+           ("basketball", "womens-college-basketball"), ("baseball", "college-baseball"),
+           ("baseball", "college-softball"), ("volleyball", "womens-college-volleyball"),
+           ("volleyball", "mens-college-volleyball"), ("soccer", "mens-college-soccer"),
+           ("soccer", "womens-college-soccer"), ("lacrosse", "mens-college-lacrosse"),
+           ("lacrosse", "womens-college-lacrosse"), ("hockey", "mens-college-hockey"),
+           ("hockey", "womens-college-hockey"), ("field-hockey", "womens-college-field-hockey")]
+
+
+def find_teams(query, leagues=COLLEGE):
+    """Search each league's team list for `query`; return teams.json-style entries."""
+    q = query.lower()
+    found = []
+    for sport, league in leagues:
+        try:
+            req = urllib.request.Request(TEAMS_API.format(sport=sport, league=league),
+                                         headers={"User-Agent": "sports-widget/1.0"})
+            with urllib.request.urlopen(req, timeout=15) as r:
+                data = json.load(r)
+            teams = [t["team"] for lg in data["sports"][0]["leagues"] for t in lg["teams"]]
+        except Exception as ex:
+            print(f"  {sport}/{league}: skipped ({str(ex)[:40]})")
+            continue
+        for t in teams:
+            if q in t.get("displayName", "").lower() or q == t.get("abbreviation", "").lower():
+                kind = SPORT_NAMES.get(league, league)
+                found.append({"sport": sport, "league": league, "team": str(t["id"]),
+                              "label": f'{t.get("shortDisplayName") or t.get("abbreviation")} {kind}'})
+    return found
+
+
+def add_found(entries):
+    cfg = load_config()
+    have = {(t["league"], t["team"]) for t in cfg["teams"]}
+    new = [e for e in entries if (e["league"], e["team"]) not in have]
+    cfg["teams"].extend(new)
+    with open(CONFIG, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, indent=2)
+    return new
+
+
 def run_gui():
     import tkinter as tk
 
@@ -351,7 +400,18 @@ def run_gui():
 
 
 if __name__ == "__main__":
-    if "--print" in sys.argv:  # headless check: print statuses to console
+    if "--find" in sys.argv:  # --find "san diego state" [--add]
+        name = sys.argv[sys.argv.index("--find") + 1]
+        hits = find_teams(name)
+        for h in hits:
+            print(json.dumps(h))
+        if "--add" in sys.argv:
+            print(f"Added {len(add_found(hits))} new team(s) to teams.json")
+        elif hits:
+            print("Re-run with --add to add these to teams.json")
+        else:
+            print("No matches")
+    elif "--print" in sys.argv:  # headless check: print statuses to console
         for r in fetch_pinned(load_pinned()) + fetch_all(load_config()["teams"]):
             print(f'{r["name"]:<28} {r["line"]:<10} {r["detail"]}')
     else:
