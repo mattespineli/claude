@@ -252,6 +252,24 @@ def team_colors(c, fallback):
     return _lighten(cands[0]) if cands else fallback
 
 
+def tint_color(team):
+    """Primary team color (alternate if the primary is nearly black), or None."""
+    cands = [("#" + str(x).lstrip("#")) for x in (team.get("color"), team.get("alternateColor")) if _valid_hex(x)]
+    for h in cands:
+        if _lum(h) >= 0.08:
+            return h
+    return None
+
+
+def blend(base, top, amt):
+    return "#%02x%02x%02x" % tuple(int(b + (t - b) * amt) for b, t in zip(_rgb(base), _rgb(top)))
+
+
+def home_tint(comp):
+    home = next((c for c in comp.get("competitors", []) if c.get("homeAway") == "home"), None)
+    return tint_color(home.get("team", {})) if home else None
+
+
 def matchup_colors(cs, defaults=("#60a5fa", "#f59e0b")):
     """Colors for the two competitors, kept distinguishable from each other."""
     a, b = team_colors(cs[0], defaults[0]), team_colors(cs[1], defaults[1])
@@ -371,7 +389,7 @@ def team_status(entry):
     state, line, detail = s
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
     return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
-            "_key": (entry["league"], str(event.get("id")))}
+            "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team)}
 
 
 def fetch_all(entries):
@@ -442,7 +460,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
-                   "_key": (league, str(e.get("id"))),
+                   "_key": (league, str(e.get("id"))), "tint": home_tint(comp),
                    "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
@@ -570,7 +588,7 @@ def pinned_status(pin):
             s = summarize_game(e)
             if s:
                 return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
-                        "_key": (pin["league"], str(pin["id"])),
+                        "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else "",
                         "graphic": situation_graphic(pin["sport"], e["competitions"][0], pin["league"]) if s[0] == "in" else None}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
@@ -786,9 +804,10 @@ def run_gui():
             for item in g:
                 draw_graphic(parent, item)
             return
+        bg = parent.cget("bg")
         if g["kind"] == "periods":
             W, H = 240, 24
-            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
             n, gap = len(g["fills"]), 3
             seg = (W - gap * (n - 1)) / n
             for i, f in enumerate(g["fills"]):
@@ -800,7 +819,7 @@ def run_gui():
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "versus":
             W, H = 240, 30
-            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
             total = g["a"] + g["b"]
             split = W * g["a"] / total
             c.create_rectangle(0, 16, split, 24, fill=g.get("a_color", "#60a5fa"), outline="")
@@ -814,7 +833,7 @@ def run_gui():
             W, H = 240, 44
             span = 90 if g["minute"] <= 90 else 120
             px = lambda m: 6 + (W - 12) * min(m, span) / span
-            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
             c.create_line(6, 22, W - 6, 22, fill="#33333d", width=4, capstyle="round")
             c.create_line(6, 22, px(g["minute"]), 22, fill="#34d399", width=4, capstyle="round")
             for m in (45, 90):
@@ -828,11 +847,11 @@ def run_gui():
             c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "baseball":
-            c = tk.Canvas(parent, width=130, height=44, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=130, height=44, bg=bg, highlightthickness=0)
             def base(cx, cy, on):
                 r = 5
                 hl = g.get("color", "#fbbf24")
-                c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else BG,
+                c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else bg,
                                  outline=hl if on else DIM, width=2)
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
             # count: balls (0-3), strikes (0-2), outs (0-3)
@@ -843,12 +862,12 @@ def run_gui():
                 c.create_text(52, y, text=label, anchor="w", fill=DIM, font=("Segoe UI", 8, "bold"))
                 for i in range(total):
                     on = i < n
-                    c.create_oval(66 + i * 12, y - 4, 74 + i * 12, y + 4, fill=color if on else BG,
+                    c.create_oval(66 + i * 12, y - 4, 74 + i * 12, y + 4, fill=color if on else bg,
                                   outline=color if on else DIM, width=1)
             c.pack(anchor="w", pady=(2, 0))
         elif g["kind"] == "football":
             W, H = 240, 24
-            c = tk.Canvas(parent, width=W, height=H, bg=BG, highlightthickness=0)
+            c = tk.Canvas(parent, width=W, height=H, bg=bg, highlightthickness=0)
             px = lambda yd: W * yd / 100
             c.create_rectangle(0, 14, W, 20, fill="#33333d", outline="")
             if g["red"]:
@@ -863,17 +882,19 @@ def run_gui():
 
     def add_rows(rows):
         for r in rows:
-            row = tk.Frame(body, bg=BG)
+            tint = r.get("tint")
+            bgc = blend(BG, tint, 0.22) if tint else BG
+            row = tk.Frame(body, bg=bgc, **({"padx": 8, "pady": 4} if tint else {}))
             row.pack(fill="x", pady=3)
-            tk.Label(row, text=r["name"], bg=BG, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
+            tk.Label(row, text=r["name"], bg=bgc, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
             if r["line"]:
-                tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
-            tk.Label(row, text=r["detail"], bg=BG, fg=COLORS.get(r["state"], FG),
+                tk.Label(row, text=r["line"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
+            tk.Label(row, text=r["detail"], bg=bgc, fg=COLORS.get(r["state"], FG),
                      font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
             if r.get("graphic"):
                 draw_graphic(row, r["graphic"])
             if r.get("info"):
-                tk.Label(row, text=r["info"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x")
+                tk.Label(row, text=r["info"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w", justify="left").pack(fill="x")
 
     last = {}
     session = {"live_prev": 0}  # in-session only: live games re-open themselves when they appear
@@ -1110,8 +1131,8 @@ def demo_data():
     st = lambda n, v: {"name": n, "displayValue": str(v)}
     team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
                                               "team": {"id": i, "abbreviation": a, **TEAM_COLORS.get(a, {})}}
-    def row(name, sport, league, line, detail, comp):
-        return {"name": name, "state": "in", "line": line, "detail": detail,
+    def row(name, sport, league, line, detail, comp, tint=None):
+        return {"name": name, "state": "in", "line": line, "detail": detail, "tint": tint,
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
            "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
@@ -1131,11 +1152,11 @@ def demo_data():
                        {"redCard": True, "clock": {"displayValue": "62'"}, "team": {"id": "2"}}],
            "competitors": [team("1", "home", "ARS", 1, [st("possessionPct", 61), st("totalShots", 12)]),
                            team("2", "away", "CHE", 1, [st("possessionPct", 39), st("totalShots", 6)])]}
-    return [row("San Francisco 49ers", "football", "nfl", "@ Dallas Cowboys", "21-17  Q3 5:12", nfl),
-            row("San Francisco Giants", "baseball", "mlb", "@ Los Angeles Dodgers", "3-2  Top 7th", mlb),
-            row("Golden State Warriors", "basketball", "nba", "@ Boston Celtics", "78-74  Q3 5:12", nba),
-            row("New Jersey Devils", "hockey", "nhl", "@ Boston Bruins", "2-1  P2 6:47", nhl),
-            row("Arsenal", "soccer", "eng.1", "vs Chelsea", "1-1  67'", soc)]
+    return [row("San Francisco 49ers", "football", "nfl", "@ Dallas Cowboys", "21-17  Q3 5:12", nfl, tint="#aa0000"),
+            row("San Francisco Giants", "baseball", "mlb", "@ Los Angeles Dodgers", "3-2  Top 7th", mlb, tint="#fd5a1e"),
+            row("Golden State Warriors", "basketball", "nba", "@ Boston Celtics", "78-74  Q3 5:12", nba, tint="#1d428a"),
+            row("New Jersey Devils", "hockey", "nhl", "@ Boston Bruins", "2-1  P2 6:47", nhl, tint="#ce1126"),
+            row("Arsenal", "soccer", "eng.1", "vs Chelsea", "1-1  67'", soc, tint="#ef0107")]
 
 
 if __name__ == "__main__":
