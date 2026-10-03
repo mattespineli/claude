@@ -791,6 +791,42 @@ def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4):
     return rows
 
 
+def aa_refresh_pixels(size, fg, bg, ring=2.0, margin=7.0, ss=4):
+    """Anti-aliased circular-arrow (refresh) icon as rows of hex colors."""
+    import math
+    c = size / 2
+    R = c - margin
+    f, b = _rgb(fg), _rgb(bg)
+    rad = math.radians
+    base_a, tip_a, start_a = rad(-70), rad(-30), rad(-15)
+    pt = lambda a, r: (c + r * math.cos(a), c + r * math.sin(a))
+    A, B, C = pt(base_a, R - 4.5), pt(base_a, R + 4.5), pt(tip_a, R)
+
+    def in_tri(x, y):
+        d1 = (x - B[0]) * (A[1] - B[1]) - (A[0] - B[0]) * (y - B[1])
+        d2 = (x - C[0]) * (B[1] - C[1]) - (B[0] - C[0]) * (y - C[1])
+        d3 = (x - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (y - A[1])
+        return not ((d1 < 0 or d2 < 0 or d3 < 0) and (d1 > 0 or d2 > 0 or d3 > 0))
+
+    rows = []
+    for py in range(size):
+        row = []
+        for px in range(size):
+            hit = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
+                    dx, dy = x - c, y - c
+                    d = math.hypot(dx, dy)
+                    ang = math.atan2(dy, dx)
+                    on_ring = R - ring / 2 <= d <= R + ring / 2 and not (base_a <= ang <= start_a)
+                    hit += on_ring or in_tri(x, y)
+            a = hit / (ss * ss)
+            row.append("#%02x%02x%02x" % tuple(round(bc + (fc - bc) * a) for fc, bc in zip(f, b)))
+        rows.append(row)
+    return rows
+
+
 def rr_points(x1, y1, x2, y2, r):
     """Polygon points for a rounded rectangle (draw with smooth=True)."""
     return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
@@ -859,6 +895,68 @@ def run_gui():
             dwm_round(win)
         except Exception:
             pass
+
+    menu_state = {"top": None}
+
+    def close_menu(_=None):
+        top = menu_state["top"]
+        menu_state["top"] = None
+        if top is not None:
+            try:
+                top.destroy()
+            except tk.TclError:
+                pass
+
+    def popup_menu(x, y, items):
+        """Dark, rounded context menu. items: (label, command[, checked]) tuples, or None for a separator."""
+        close_menu()
+        top = tk.Toplevel(root)
+        top.overrideredirect(True)
+        top.attributes("-topmost", True)
+        top.configure(bg="#3a3a46")  # 1px border colour
+        inner = tk.Frame(top, bg=PANEL, padx=5, pady=5)
+        inner.pack(padx=1, pady=1)
+        has_check = any(len(i) > 2 for i in items if i)
+        for item in items:
+            if item is None:
+                tk.Frame(inner, bg="#3a3a46", height=1).pack(fill="x", padx=6, pady=4)
+                continue
+            label, command = item[0], item[1]
+            row = tk.Frame(inner, bg=PANEL, cursor="hand2")
+            row.pack(fill="x")
+            parts = []
+            if has_check:
+                parts.append(tk.Label(row, text="\u2713" if len(item) > 2 and item[2] else "", bg=PANEL, fg=FG, font=UI_FONT,
+                                      width=2, anchor="e", pady=5, cursor="hand2"))
+            parts.append(tk.Label(row, text=label, bg=PANEL, fg=FG, font=UI_FONT, anchor="w", padx=6, pady=5, cursor="hand2"))
+            for i, w_ in enumerate(parts):
+                w_.pack(side="left", fill="x", expand=(i == len(parts) - 1))
+            parts_all = [row] + parts
+
+            def hover(on, ws=parts_all):
+                for w_ in ws:
+                    w_.config(bg=HOVER if on else PANEL)
+            for w_ in parts_all:
+                w_.bind("<Enter>", lambda e, h=hover: h(True))
+                w_.bind("<Leave>", lambda e, h=hover: h(False))
+                w_.bind("<ButtonRelease-1>", lambda e, c=command: (close_menu(), root.after(10, c)))
+        top.update_idletasks()
+        w, h = top.winfo_reqwidth(), top.winfo_reqheight()
+        x = max(0, min(x, top.winfo_screenwidth() - w - 4))
+        y = max(0, min(y, top.winfo_screenheight() - h - 4))
+        top.geometry(f"+{x}+{y}")
+        menu_state["top"] = top
+        try:
+            if not dwm_round(top):
+                import ctypes
+                hwnd = ctypes.windll.user32.GetParent(top.winfo_id()) or top.winfo_id()
+                rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 12, 12)
+                ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+        except Exception:
+            pass  # cosmetic only (non-Windows)
+        top.bind("<Escape>", close_menu)
+        top.bind("<FocusOut>", lambda e: root.after(80, lambda: menu_state["top"] is top and close_menu()))
+        top.focus_force()
 
     def styled_message(title, text, parent=None):
         win = tk.Toplevel(parent or root)
@@ -936,6 +1034,11 @@ def run_gui():
     view_btn = tk.Canvas(hbar, width=34, height=34, bg=BG, highlightthickness=0, cursor="hand2")
     view_btn.pack(side="right", padx=(8, 0))
 
+    refresh_btn = tk.Canvas(hbar, width=34, height=34, bg=BG, highlightthickness=0, cursor="hand2")
+    refresh_btn.pack(side="right", padx=(8, 0))
+    refresh_img = tk.PhotoImage(width=34, height=34)
+    refresh_img.put(" ".join("{" + " ".join(row) + "}" for row in aa_refresh_pixels(34, FG, BG)))
+    refresh_btn.create_image(17, 17, image=refresh_img)
     view_imgs = {}
 
     def draw_view_icon(mode):
@@ -1070,6 +1173,7 @@ def run_gui():
         if last:
             render(*last["args"])
     view_btn.bind("<ButtonRelease-1>", cycle_view)
+    refresh_btn.bind("<ButtonRelease-1>", lambda e: tick())  # refresh now (and restart the countdown)
     grip.bind("<Button-1>", grip_start)
     grip.bind("<B1-Motion>", grip_move)
     grip.bind("<Double-Button-1>", grip_reset)
@@ -1208,31 +1312,101 @@ def run_gui():
         except Exception as ex:
             session["details"][gkey(g)] = {"error": str(ex)[:60]}
 
+    last = {}
+    # in-session only: expanded games, cached details, animation bookkeeping
+    session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "wraps": {}, "heights": {},
+               "anim_in": set(), "pending": [], "sig": None}
+
+    # ---- smooth expand / collapse -------------------------------------------------
+    def animate(wrap, inner, key, start, target, done=None, collapse=False):
+        steps = 12
+
+        def step(i=1):
+            try:
+                t = i / steps
+                e = t * t * (3 - 2 * t)  # smoothstep
+                wrap.configure(height=max(int(start + (target - start) * e), 1))
+                if i < steps:
+                    root.after(14, lambda: step(i + 1))
+                    return
+                if not collapse:
+                    wrap.pack_propagate(True)
+                    inner.place_forget()
+                    inner.pack(fill="x")
+                    session["heights"][key] = target
+            except tk.TclError:
+                return  # widgets were replaced by a re-render mid-animation
+            if done:
+                done()
+        step()
+
+    def reveal(parent, key, bg):
+        """Frame to build collapsible content into; grows downward if `key` was just opened."""
+        wrap = tk.Frame(parent, bg=bg)
+        wrap.pack(fill="x")
+        inner = tk.Frame(wrap, bg=bg)
+        session["wraps"][key] = (wrap, inner)
+        if key in session["anim_in"]:
+            session["anim_in"].discard(key)
+            start = session["heights"].get(key, 0)
+            wrap.pack_propagate(False)
+            wrap.configure(height=max(start, 1))
+            inner.place(x=0, y=0, relwidth=1)
+            session["pending"].append((wrap, inner, key, start))
+        else:
+            inner.pack(fill="x")
+        return inner
+
+    def collapse_then(key, action):
+        """Shrink the open content for `key` upward, then run `action` (state change + re-render)."""
+        try:
+            wrap, inner = session["wraps"][key]
+            h = inner.winfo_height()
+            if h <= 1:
+                raise KeyError
+            wrap.pack_propagate(False)
+            wrap.configure(height=h)
+            inner.pack_forget()
+            inner.place(x=0, y=0, relwidth=1)
+            animate(wrap, inner, key, h, 0, done=action, collapse=True)
+        except (KeyError, tk.TclError):
+            action()
+
     def toggle_expand(g):
         k = gkey(g)
+        wk = "game:" + k
         if k in session["expanded"]:
-            session["expanded"].discard(k)
-            render(*last["args"])
+            def close():
+                session["expanded"].discard(k)
+                render(*last["args"])
+            collapse_then(wk, close)
             return
         session["expanded"].add(k)
         session["games"][k] = g
         session["details"].pop(k, None)
+        session["heights"].pop(wk, None)
+        session["anim_in"].add(wk)
         render(*last["args"])
 
         def work():
             fetch_details(g)
-            root.after(0, lambda: render(*last["args"]))
+
+            def arrived():
+                session["anim_in"].add(wk)  # grow from the "Loading" height to the full details
+                render(*last["args"])
+            root.after(0, arrived)
         threading.Thread(target=work, daemon=True).start()
 
-    def add_rows(rows):
+    def add_rows(rows, parent=None):
+        parent = parent or body
         for r in rows:
             tint = r.get("tint")
             bgc = blend(BG, tint, 0.22) if tint else BG
             if tint:
-                card, row = rounded_card(body, bgc)
+                card, row = rounded_card(parent, bgc)
                 card.pack(fill="x", pady=3)
             else:
-                row = tk.Frame(body, bg=bgc)
+                row = tk.Frame(parent, bg=bgc)
                 row.pack(fill="x", pady=3)
             row._url = r.get("url")  # found by the right-click handler via the widget hierarchy
             row._game = r.get("game")
@@ -1250,44 +1424,61 @@ def run_gui():
                 for ch in row.winfo_children():
                     ch.configure(cursor="hand2")
                 if gkey(g) in session["expanded"]:
-                    draw_details(row, bgc, session["details"].get(gkey(g)))
-
-    last = {}
-    session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}}  # in-session only
+                    draw_details(reveal(row, "game:" + gkey(g), bgc), bgc, session["details"].get(gkey(g)))
 
     def toggle(key, was_open, persist=True):
-        if persist:
-            ui_state[key] = not was_open
-            save_state(ui_state)
+        def apply():
+            if persist:
+                ui_state[key] = not was_open
+                save_state(ui_state)
+            else:
+                session[key] = not was_open
+            render(*last["args"])
+        if was_open:
+            collapse_then(key, apply)
         else:
-            session[key] = not was_open
-        render(*last["args"])
+            session["anim_in"].add(key)
+            apply()
 
-    def header_label(text, key, is_open, color, indent=0, persist=True):
-        hdr = tk.Label(body, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
+    def header_label(text, key, is_open, color, indent=0, persist=True, parent=None):
+        hdr = tk.Label(parent or body, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
                        font=("Segoe UI", 9, "bold"), anchor="w", cursor="hand2")
         hdr.pack(fill="x", pady=(4, 0), padx=(indent, 0))
         hdr.bind("<ButtonRelease-1>", lambda e: toggle(key, is_open, persist))
 
-    def league_groups(rows, prefix, default_open=False, indent=14):
+    def league_groups(rows, prefix, default_open=False, indent=14, parent=None):
+        parent = parent or body
         for league in dict.fromkeys(r["league"] for r in rows):
             games = [r for r in rows if r["league"] == league]
             live_n = sum(r["state"] == "in" for r in games)
             key = f"{prefix}:{league}"
             is_open = ui_state.get(key, default_open or live_n > 0 if prefix == "leagues" else default_open)
             header_label(f"{league} · {len(games)}" + (f" · {live_n} live" if live_n and prefix == "leagues" else ""),
-                         key, is_open, COLORS["in"] if live_n and prefix == "leagues" else FG, indent=indent)
+                         key, is_open, COLORS["in"] if live_n and prefix == "leagues" else FG, indent=indent, parent=parent)
             if is_open:
-                add_rows([dict(r, line=r.get("extra", r.get("line", ""))) for r in games])
+                add_rows([dict(r, line=r.get("extra", r.get("line", ""))) for r in games], parent=reveal(parent, key, BG))
 
     def render(results, pin_results, playoffs, leagues=()):
+        nonlocal body
         last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
+        stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
         any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
         if any_live != session.get("any_live"):
             session["any_live"] = any_live
             schedule()  # switch between normal and live cadence right away
-        for w in body.winfo_children():
-            w.destroy()
+        # Nothing changed since the last draw: leave the window alone (no flicker).
+        sig = json.dumps([last["args"], ui_state, sorted(session["expanded"]),
+                          {k: session["details"].get(k) for k in session["expanded"]}, session.get("live"),
+                          sorted(session["anim_in"])], default=str, sort_keys=True)
+        if sig == session["sig"]:
+            return
+        session["sig"] = sig
+
+        # Build the new content off-screen, then swap it in so the window never shows a blank frame.
+        old = body
+        body = tk.Frame(canvas, bg=BG)
+        session["wraps"] = {}
+        session["pending"] = []
         live_view = ui_state.get("view", "full") == "live"
         if live_view:
             results = [r for r in results if r["state"] == "in"]
@@ -1319,14 +1510,25 @@ def run_gui():
                 is_open = session.get("live", True)
                 header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False)
                 if is_open:
-                    add_rows(live)
+                    add_rows(live, parent=reveal(body, "live", BG))
             for title, rows, key in (("Upcoming Today", upcoming, "upcoming"), ("Previous", previous, "previous")):
                 if rows:
                     is_open = ui_state.get(key, False)
                     header_label(f"{title} · {len(rows)}", key, is_open, FG)
                     if is_open:
-                        league_groups(rows, key)
-        stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
+                        inner = reveal(body, key, BG)
+                        league_groups(rows, key, parent=inner)
+        canvas.itemconfigure(body_id, window=body)
+        body.bind("<Configure>", fit)
+        old.destroy()
+        root.update_idletasks()
+        for wrap, inner, key, start in session["pending"]:
+            try:
+                animate(wrap, inner, key, start, inner.winfo_reqheight())
+            except tk.TclError:
+                pass
+        session["pending"] = []
+        fit()
 
     def refresh():
         def work():
@@ -1481,12 +1683,8 @@ def run_gui():
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
     def untrack_menu(event):
-        m = style_menu(tk.Menu(root, tearoff=0))
-        for p in list(pins):
-            m.add_command(label=f"Untrack {p['label']} ({p['date']})", command=lambda p=p: untrack(p))
-        if not pins:
-            m.add_command(label="No tracked games", state="disabled")
-        m.tk_popup(event.x_root, event.y_root)
+        items = [(f"Untrack {p['label']} ({p['date']})", lambda p=p: untrack(p)) for p in list(pins)]
+        popup_menu(event.x_root, event.y_root, items or [("No tracked games", lambda: None)])
 
     def untrack(p):
         pins.remove(p)
@@ -1496,6 +1694,7 @@ def run_gui():
     # drag to move
     drag = {}
     def start(e):
+        close_menu()
         if e.widget not in (grip, scroll):  # grip resizes, scrollbar scrolls
             drag["x"], drag["y"] = e.x_root - root.winfo_x(), e.y_root - root.winfo_y()
             drag["moved"] = False
@@ -1517,14 +1716,6 @@ def run_gui():
         if g and not drag.get("moved"):
             toggle_expand(g)
 
-    menu = style_menu(tk.Menu(root, tearoff=0))
-    menu.add_command(label="Track a game...", command=track_dialog)
-    menu.add_command(label="Untrack a game...", command=lambda: untrack_menu(menu_pos["e"]))
-    menu.add_command(label="Refresh", command=refresh)
-    menu.add_command(label="Settings...", command=settings_dialog)
-    menu.add_checkbutton(label="Always on top", variable=topmost,
-                         command=lambda: root.attributes("-topmost", topmost.get()))
-    menu.add_separator()
     def restart():
         """Start a fresh copy of this script (picks up code changes from git pull), then close this one."""
         import subprocess
@@ -1554,11 +1745,6 @@ def run_gui():
 
         threading.Thread(target=work, daemon=True).start()
 
-    menu.add_command(label="Update & Restart", command=update_and_restart)
-    menu.add_command(label="Restart", command=restart)
-    menu.add_command(label="Quit", command=root.destroy)
-    menu_pos = {}
-    dyn = {"n": 0}
 
     def game_url_at(widget):
         while widget is not None:
@@ -1569,17 +1755,20 @@ def run_gui():
         return None
 
     def popup(e):
-        menu_pos["e"] = e
-        if dyn["n"]:
-            menu.delete(0, dyn["n"] - 1)
-            dyn["n"] = 0
         url = game_url_at(e.widget)
+        items = []
         if url:
             import webbrowser
-            menu.insert_command(0, label="Open game on ESPN", command=lambda: webbrowser.open(url))
-            menu.insert_separator(1)
-            dyn["n"] = 2
-        menu.tk_popup(e.x_root, e.y_root)
+            items += [("Open game on ESPN", lambda: webbrowser.open(url)), None]
+
+        def toggle_top():
+            topmost.set(not topmost.get())
+            root.attributes("-topmost", topmost.get())
+        items += [("Track a game...", track_dialog), ("Untrack a game...", lambda: untrack_menu(e)),
+                  ("Refresh", refresh), ("Settings...", settings_dialog),
+                  ("Always on top", toggle_top, topmost.get()), None,
+                  ("Update & Restart", update_and_restart), ("Restart", restart), ("Quit", root.destroy)]
+        popup_menu(e.x_root, e.y_root, items)
 
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
     root.bind("<Button-1>", start)
