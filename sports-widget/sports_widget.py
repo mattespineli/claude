@@ -244,12 +244,12 @@ def playoff_games(debug=False, days=7):
             if cur is None or prio < cur[0] or (prio == cur[0] == 2 and row["_date"] > cur[1]):
                 best[key] = (prio, row["_date"], row)
     rows = sorted((v for v in best.values()), key=lambda v: (v[0], v[1] if v[0] < 2 else ""))
-    # Completed games: only each team's most recent one (newest first).
+    # Completed games: hide a game if either team has a more recent completed game (newest first).
     seen, done = set(), []
     for v in sorted((v for v in rows if v[0] == 2), key=lambda v: v[1], reverse=True):
-        if v[2]["_teams"] - seen:
+        if not (v[2]["_teams"] & seen):
             done.append(v[2])
-            seen |= v[2]["_teams"]
+        seen |= v[2]["_teams"]
     return [v[2] for v in rows if v[0] < 2] + done
 
 
