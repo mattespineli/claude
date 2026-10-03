@@ -503,6 +503,36 @@ def save_state(state):
         pass
 
 
+LEAGUE_SECTION = [("MLB", "baseball", "mlb"), ("NFL", "football", "nfl"), ("NBA", "basketball", "nba"),
+                  ("WNBA", "basketball", "wnba")]
+
+
+def league_games():
+    """Today's regular games in MLB/NFL/NBA/WNBA (postseason games are shown under Playoffs)."""
+    today = datetime.now().astimezone().date()
+    out = []
+    for name, sport, league in LEAGUE_SECTION:
+        try:
+            events = fetch_scoreboard(sport, league, f"{today:%Y%m%d}")
+        except Exception:
+            continue
+        for e in events:
+            if not e.get("competitions") or is_postseason(e):
+                continue
+            summ = summarize_game(e)
+            if not summ:
+                continue
+            state, matchup, detail = summ
+            comp = e["competitions"][0]
+            out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
+                        "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
+                        "info": situation_text(sport, comp) if state == "in" else "",
+                        "graphic": situation_graphic(sport, comp, league) if state == "in" else None})
+    order = {"in": 0, "pre": 1, "post": 2}
+    out.sort(key=lambda r: (order.get(r["state"], 3), r["_date"]))
+    return out
+
+
 def load_pinned():
     try:
         with open(PINNED, encoding="utf-8") as f:
@@ -722,6 +752,19 @@ def run_gui():
         except Exception:
             pass
 
+    def styled_message(title, text, parent=None):
+        win = tk.Toplevel(parent or root)
+        win.title(title)
+        win.configure(bg=BG)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        dark_titlebar(win)
+        tk.Label(win, text=title, bg=BG, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x", padx=16, pady=(16, 4))
+        tk.Label(win, text=text, bg=BG, fg=DIM, font=UI_FONT, justify="left", anchor="w", wraplength=340).pack(fill="x", padx=16)
+        styled_button(win, "OK", win.destroy).pack(anchor="e", padx=16, pady=(12, 16))
+        win.update_idletasks()
+        win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
+
     def styled_button(parent, text, command):
         import tkinter.font as tkfont
         w = tkfont.Font(font=UI_FONT).measure(text) + 28
@@ -782,13 +825,13 @@ def run_gui():
     header.pack(fill="x")
     stamp = tk.Label(titles, text="", bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w")
     stamp.pack(fill="x")
-    view_btn = tk.Canvas(hbar, width=22, height=22, bg=BG, highlightthickness=0, cursor="hand2")
+    view_btn = tk.Canvas(hbar, width=34, height=34, bg=BG, highlightthickness=0, cursor="hand2")
     view_btn.pack(side="right", padx=(8, 0))
 
     def draw_view_icon(mode):
         """Full = filled circle, Live = half-filled, Title = empty."""
         view_btn.delete("all")
-        box = (4, 4, 18, 18)
+        box = (5, 5, 29, 29)
         if mode == "full":
             view_btn.create_oval(*box, fill=FG, outline=FG, width=2)
         elif mode == "live":
@@ -1040,8 +1083,25 @@ def run_gui():
             session[key] = not was_open
         render(*last["args"])
 
-    def render(results, pin_results, playoffs):
-        last["args"] = (results, pin_results, playoffs)  # unfiltered, so view changes can re-render
+    def header_label(text, key, is_open, color, indent=0, persist=True):
+        hdr = tk.Label(body, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
+                       font=("Segoe UI", 9, "bold"), anchor="w", cursor="hand2")
+        hdr.pack(fill="x", pady=(4, 0), padx=(indent, 0))
+        hdr.bind("<ButtonRelease-1>", lambda e: toggle(key, is_open, persist))
+
+    def league_groups(rows, prefix, default_open=False, indent=14):
+        for league in dict.fromkeys(r["league"] for r in rows):
+            games = [r for r in rows if r["league"] == league]
+            live_n = sum(r["state"] == "in" for r in games)
+            key = f"{prefix}:{league}"
+            is_open = ui_state.get(key, default_open or live_n > 0 if prefix == "leagues" else default_open)
+            header_label(f"{league} · {len(games)}" + (f" · {live_n} live" if live_n and prefix == "leagues" else ""),
+                         key, is_open, COLORS["in"] if live_n and prefix == "leagues" else FG, indent=indent)
+            if is_open:
+                add_rows([dict(r, line=r.get("extra", r.get("line", ""))) for r in games])
+
+    def render(results, pin_results, playoffs, leagues=()):
+        last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
         for w in body.winfo_children():
             w.destroy()
         live_view = ui_state.get("view", "full") == "live"
@@ -1049,7 +1109,8 @@ def run_gui():
             results = [r for r in results if r["state"] == "in"]
             pin_results = [r for r in pin_results if r["state"] == "in"]
             playoffs = [r for r in playoffs if r["state"] == "in"]
-            if not (results or pin_results or playoffs):
+            leagues = [r for r in leagues if r["state"] == "in"]
+            if not (results or pin_results or playoffs or leagues):
                 tk.Label(body, text="No live games", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", pady=4)
         if pin_results:
             section("Tracked Games")
@@ -1057,8 +1118,11 @@ def run_gui():
         if results:
             section("My Teams")
             add_rows(results)
-        elif not (pin_results or playoffs or live_view):
+        elif not (pin_results or playoffs or leagues or live_view):
             tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
+        if leagues:
+            section("Leagues")
+            league_groups(leagues, "leagues", indent=0)
         if playoffs:
             section("Playoffs")
             live = [r for r in playoffs if r["state"] == "in"]
@@ -1067,22 +1131,6 @@ def run_gui():
             if live and not session["live_prev"]:
                 session["live"] = True  # newly live games open automatically
             session["live_prev"] = len(live)
-
-            def header_label(text, key, is_open, color, indent=0, persist=True):
-                hdr = tk.Label(body, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
-                               font=("Segoe UI", 9, "bold"), anchor="w", cursor="hand2")
-                hdr.pack(fill="x", pady=(4, 0), padx=(indent, 0))
-                hdr.bind("<ButtonRelease-1>", lambda e: toggle(key, is_open, persist))
-
-            def league_groups(rows, prefix):
-                for league in dict.fromkeys(r["league"] for r in rows):
-                    games = [r for r in rows if r["league"] == league]
-                    key = f"{prefix}:{league}"
-                    is_open = ui_state.get(key, False)
-                    header_label(f"{league} · {len(games)}", key, is_open, FG, indent=14)
-                    if is_open:
-                        add_rows([dict(r, line=r.get("extra", "")) for r in games])
-
             if live:
                 is_open = session.get("live", True)
                 header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False)
@@ -1098,10 +1146,11 @@ def run_gui():
 
     def refresh():
         def work():
-            res, pres, po = fetch_all(entries), fetch_pinned(list(pins)), playoff_games()
+            res, pres, po, lg = fetch_all(entries), fetch_pinned(list(pins)), playoff_games(), league_games()
             shown = {r["_key"] for r in res + pres if r.get("_key")}
             po = [r for r in po if r.get("_key") not in shown]  # already listed above
-            root.after(0, lambda: render(res, pres, po))
+            lg = [r for r in lg if r.get("_key") not in shown]
+            root.after(0, lambda: render(res, pres, po, lg))
         threading.Thread(target=work, daemon=True).start()
 
     timer = {"id": None}
@@ -1267,7 +1316,6 @@ def run_gui():
     def update_and_restart():
         """git pull (fast-forward only) in the widget's repo, then restart on success."""
         import subprocess
-        from tkinter import messagebox
         prev = stamp.cget("text")
         stamp.config(text="Updating...")
 
@@ -1285,7 +1333,7 @@ def run_gui():
                 restart()
             else:
                 stamp.config(text=prev)
-                messagebox.showerror("Update failed", out[-600:] or "git pull failed", parent=root)
+                styled_message("Update failed", out[-600:] or "git pull failed")
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1350,11 +1398,22 @@ def demo_data():
             row("Arsenal", "soccer", "eng.1", "vs Chelsea", "1-1  67'", soc, tint="#ef0107")]
 
 
+def demo_leagues():
+    g = lambda lg, name, state, detail, tint: {"name": name, "state": state, "line": "", "league": lg, "detail": detail,
+                                               "tint": tint, "info": "", "graphic": None, "_key": (lg, name)}
+    return [g("MLB", "Boston Red Sox @ Toronto Blue Jays", "in", "2-1  Bot 4th", "#134a8e"),
+            g("MLB", "Seattle Mariners @ Houston Astros", "pre", "Sat Oct 3 8:10 PM", "#eb6e1f"),
+            g("MLB", "Chicago Cubs @ Milwaukee Brewers", "post", "4-2  Final", "#ffc52f"),
+            g("NFL", "Green Bay Packers @ Chicago Bears", "pre", "Sun Oct 4 1:00 PM", "#0b162a"),
+            g("NBA", "Miami Heat @ New York Knicks", "pre", "Sun Oct 4 7:00 PM", "#f58426")]
+
+
 if __name__ == "__main__":
     if "--demo" in sys.argv:  # preview the live-game graphics with fake data (no network)
         fetch_all = lambda entries: demo_data()
         fetch_pinned = lambda pins: []
         playoff_games = lambda: []
+        league_games = demo_leagues
         STATE = os.path.join(HERE, "demo_state.json")
         run_gui()
         sys.exit()
@@ -1389,7 +1448,7 @@ if __name__ == "__main__":
         else:
             print("No matches")
     elif "--print" in sys.argv:  # headless check: print statuses to console
-        for r in fetch_pinned(load_pinned()) + fetch_all(load_config()["teams"]) + playoff_games():
+        for r in fetch_pinned(load_pinned()) + fetch_all(load_config()["teams"]) + league_games() + playoff_games():
             print(f'{r["name"]:<28} {r["line"]:<10} {r["detail"]} {r.get("info", "")}')
     else:
         run_gui()

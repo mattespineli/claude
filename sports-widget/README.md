@@ -29,6 +29,8 @@ Playoffs section: live and same-day postseason games in NBA, NFL, MLB, WNBA and 
 
 Live games also show sport-specific info when ESPN provides it: down & distance, possession, red zone (football); count, outs, runners, batter/pitcher (baseball); power play and shots (hockey); fouls, rebounds, turnovers (basketball); possession, shots, corners, fouls, cards (soccer).
 `python sports_widget.py --debug-live` shows what ESPN sends for live games right now.
+**Leagues** lists today's regular MLB, NFL, NBA and WNBA games, grouped by league (leagues with a live game start open).
+
 Playoffs has a **Live** section (opens automatically whenever a game goes live), plus collapsible **Upcoming Today** and **Previous** sections, each grouped by league. Your choices are saved in `state.json`.
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
