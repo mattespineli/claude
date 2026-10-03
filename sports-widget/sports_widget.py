@@ -641,15 +641,15 @@ def run_gui():
         for w in body.winfo_children():
             w.destroy()
         if pin_results:
-            section("TRACKED GAMES")
+            section("Tracked Games")
             add_rows(pin_results)
         if results:
-            section("MY TEAMS")
+            section("My Teams")
             add_rows(results)
         elif not (pin_results or playoffs):
             tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
         if playoffs:
-            section("PLAYOFFS")
+            section("Playoffs")
             live = [r for r in playoffs if r["state"] == "in"]
             upcoming = [r for r in playoffs if r["state"] == "pre"]
             previous = [r for r in playoffs if r["state"] == "post"]
@@ -677,7 +677,7 @@ def run_gui():
                 header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False)
                 if is_open:
                     add_rows(live)
-            for title, rows, key in (("Upcoming today", upcoming, "upcoming"), ("Previous", previous, "previous")):
+            for title, rows, key in (("Upcoming Today", upcoming, "upcoming"), ("Previous", previous, "previous")):
                 if rows:
                     is_open = ui_state.get(key, False)
                     header_label(f"{title} · {len(rows)}", key, is_open, FG)
