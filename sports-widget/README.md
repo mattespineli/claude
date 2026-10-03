@@ -6,6 +6,8 @@ Data: ESPN public API. Requires Python 3.8+ (tkinter is included in the python.o
 ## Run
 Double-click `run.bat`, or `python sports_widget.py`. `python sports_widget.py --print` prints to the console.
 
+Only teams with a live game or a game in the next 7 days are shown.
+
 ## Choose teams
 Edit `teams.json`. Each entry: `sport`, `league`, and ESPN `team` abbreviation or numeric id (SDSU is `21` in every college league), e.g.
 `basketball/nba/lal`, `football/nfl/dal`, `baseball/mlb/nyy`, `hockey/nhl/bos`, `soccer/eng.1/arsenal`.

@@ -10,7 +10,7 @@ import os
 import sys
 import threading
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 API = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team}/schedule"
 SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard?dates={date}"
@@ -90,24 +90,21 @@ def summarize_event(event, team_abbr):
     return state, f"{sep} {opp_name}", f"{result}{ms}-{os_}  {detail}"
 
 
-def pick_event(events):
-    """Live game > next upcoming > most recent finished."""
+def pick_event(events, days=7):
+    """Live game, else the next game within `days`; None if neither."""
     def state_of(e):
-        c = e["competitions"][0]
-        return c.get("status", {}).get("type", {}).get("state", "pre")
+        return e["competitions"][0].get("status", {}).get("type", {}).get("state", "pre")
 
-    events = [e for e in events if e.get("competitions")]
-    events.sort(key=lambda e: e.get("date", ""))
+    events = sorted((e for e in events if e.get("competitions")), key=lambda e: e.get("date", ""))
     live = [e for e in events if state_of(e) == "in"]
     if live:
         return live[0]
-    now = datetime.now(timezone.utc).isoformat()
-    upcoming = [e for e in events if state_of(e) == "pre"]
-    done = [e for e in events if state_of(e) == "post"]
-    # Show a game that just finished (today) in preference to one days away.
-    if done and (not upcoming or _same_day(done[-1], now)):
-        return done[-1]
-    return upcoming[0] if upcoming else (done[-1] if done else None)
+    now = datetime.now(timezone.utc)
+    for e in events:
+        d = _parse_date(e.get("date"))
+        if state_of(e) == "pre" and d and now <= d <= now + timedelta(days=days):
+            return e
+    return None
 
 
 def _same_day(event, now_iso):
@@ -121,10 +118,10 @@ def team_status(entry):
     name = team.get("displayName") or entry["team"].upper()
     event = pick_event(data.get("events", []))
     if not event:
-        return {"name": name, "state": "none", "line": "No games", "detail": ""}
+        return None
     s = summarize_event(event, entry["team"])
     if not s:
-        return {"name": name, "state": "none", "line": "No games", "detail": ""}
+        return None
     state, line, detail = s
     return {"name": name, "state": state, "line": line, "detail": detail}
 
@@ -133,7 +130,9 @@ def fetch_all(entries):
     out = []
     for e in entries:
         try:
-            out.append(team_status(e))
+            r = team_status(e)
+            if r:
+                out.append(r)
         except Exception as ex:  # network / schema errors shouldn't kill the widget
             out.append({"name": e["team"].upper(), "state": "err", "line": "Unavailable", "detail": str(ex)[:40]})
     return out
@@ -235,6 +234,8 @@ def run_gui():
             w.destroy()
         if pin_results:
             tk.Label(body, text="TRACKED GAMES", bg=BG, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(0, 2))
+        if not (pin_results or results):
+            tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
         for r in pin_results + results:
             row = tk.Frame(body, bg=BG)
             row.pack(fill="x", pady=3)
