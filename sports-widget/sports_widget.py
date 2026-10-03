@@ -366,7 +366,8 @@ def team_status(entry):
         return None
     state, line, detail = s
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
-    return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic}
+    return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
+            "_key": (entry["league"], str(event.get("id")))}
 
 
 def fetch_all(entries):
@@ -437,6 +438,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+                   "_key": (league, str(e.get("id"))),
                    "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
@@ -564,6 +566,7 @@ def pinned_status(pin):
             s = summarize_game(e)
             if s:
                 return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
+                        "_key": (pin["league"], str(pin["id"])),
                         "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else "",
                         "graphic": situation_graphic(pin["sport"], e["competitions"][0], pin["league"]) if s[0] == "in" else None}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
@@ -924,6 +927,8 @@ def run_gui():
     def refresh():
         def work():
             res, pres, po = fetch_all(entries), fetch_pinned(list(pins)), playoff_games()
+            shown = {r["_key"] for r in res + pres if r.get("_key")}
+            po = [r for r in po if r.get("_key") not in shown]  # already listed above
             root.after(0, lambda: render(res, pres, po))
         threading.Thread(target=work, daemon=True).start()
 
