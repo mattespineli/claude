@@ -653,6 +653,22 @@ def add_found(entries):
     return new
 
 
+def rr_points(x1, y1, x2, y2, r):
+    """Polygon points for a rounded rectangle (draw with smooth=True)."""
+    return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
+            x1 + r, y2, x1, y2, x1, y2 - r, x1, y1 + r, x1, y1]
+
+
+def dwm_round(win):
+    """Windows 11: ask DWM for rounded corners on a window. Returns True if accepted."""
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+    pref = ctypes.c_int(2)  # DWMWCP_ROUND
+    return ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)) == 0
+
+
 def round_corners(root):
     """Windows 11: DWM rounded corners. Windows 10: clip window to a rounded region."""
     if sys.platform != "win32":
@@ -682,6 +698,66 @@ def run_gui():
 
     BG, FG, DIM = "#1e1e24", "#f2f2f2", "#9aa0a6"
     COLORS = {"in": "#34d399", "pre": DIM, "post": FG, "none": DIM, "err": "#f87171"}
+    PANEL, HOVER = "#2a2a33", "#3a3a46"
+    UI_FONT = ("Segoe UI", 9)
+
+    def style_menu(m):
+        m.config(bg=PANEL, fg=FG, activebackground=HOVER, activeforeground=FG, disabledforeground=DIM,
+                 selectcolor=FG, bd=0, relief="flat", activeborderwidth=0, font=UI_FONT)
+        return m
+
+    def dark_titlebar(win):
+        """Windows 10/11: use the dark title bar so dialogs match the widget."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            win.update_idletasks()
+            hwnd = ctypes.windll.user32.GetParent(win.winfo_id()) or win.winfo_id()
+            one = ctypes.c_int(1)
+            for attr in (20, 19):  # DWMWA_USE_IMMERSIVE_DARK_MODE (20; 19 on early Win10 builds)
+                if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(one), ctypes.sizeof(one)) == 0:
+                    break
+            dwm_round(win)
+        except Exception:
+            pass
+
+    def styled_button(parent, text, command):
+        import tkinter.font as tkfont
+        w = tkfont.Font(font=UI_FONT).measure(text) + 28
+        c = tk.Canvas(parent, width=w, height=28, bg=parent.cget("bg"), highlightthickness=0, cursor="hand2")
+        shape = c.create_polygon(rr_points(1, 1, w - 1, 27, 8), smooth=True, fill=PANEL, outline=PANEL)
+        c.create_text(w / 2, 14, text=text, fill=FG, font=UI_FONT)
+        c.bind("<Enter>", lambda e: c.itemconfigure(shape, fill=HOVER, outline=HOVER))
+        c.bind("<Leave>", lambda e: c.itemconfigure(shape, fill=PANEL, outline=PANEL))
+        c.bind("<ButtonRelease-1>", lambda e: command() if 0 <= e.x <= w and 0 <= e.y <= 28 else None)
+        return c
+
+    def rounded_card(parent, color, radius=10, inset=4):
+        """Frame on a rounded-rectangle background; pack children into the returned frame."""
+        cv = tk.Canvas(parent, bg=parent.cget("bg"), highlightthickness=0)
+        inner = tk.Frame(cv, bg=color, padx=6, pady=3)
+        win_id = cv.create_window(inset, inset, window=inner, anchor="nw")
+
+        def redraw(_=None):
+            w = cv.winfo_width()
+            h = inner.winfo_reqheight() + 2 * inset
+            cv.configure(height=h, width=inner.winfo_reqwidth() + 2 * inset)  # natural width drives window width
+            cv.delete("bg")
+            cv.create_polygon(rr_points(0, 0, w - 1, h - 1, radius), smooth=True, fill=color, outline=color, tags="bg")
+            cv.tag_lower("bg")
+            cv.itemconfigure(win_id, width=max(w - 2 * inset, 1))
+
+        cv.bind("<Configure>", redraw)
+        inner.bind("<Configure>", redraw)
+        return cv, inner
+
+    def styled_option(parent, var, values, command=None, width=None):
+        om = tk.OptionMenu(parent, var, *values, **({"command": command} if command else {}))
+        om.config(bg=PANEL, fg=FG, activebackground=HOVER, activeforeground=FG, relief="flat", bd=0,
+                  highlightthickness=0, font=UI_FONT, indicatoron=True, **({"width": width} if width else {}))
+        style_menu(om["menu"])
+        return om
 
     root = tk.Tk()
     root.title("Sports")
@@ -706,8 +782,20 @@ def run_gui():
     header.pack(fill="x")
     stamp = tk.Label(titles, text="", bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w")
     stamp.pack(fill="x")
-    view_btn = tk.Label(hbar, bg="#33333d", fg=FG, font=("Segoe UI", 8, "bold"), padx=7, pady=1, cursor="hand2")
+    view_btn = tk.Canvas(hbar, width=22, height=22, bg=BG, highlightthickness=0, cursor="hand2")
     view_btn.pack(side="right", padx=(8, 0))
+
+    def draw_view_icon(mode):
+        """Full = filled circle, Live = half-filled, Title = empty."""
+        view_btn.delete("all")
+        box = (4, 4, 18, 18)
+        if mode == "full":
+            view_btn.create_oval(*box, fill=FG, outline=FG, width=2)
+        elif mode == "live":
+            view_btn.create_oval(*box, outline=FG, width=2)
+            view_btn.create_arc(*box, start=90, extent=180, fill=FG, outline=FG, width=2)
+        else:
+            view_btn.create_oval(*box, outline=FG, width=2)
     # Resize grip (bottom-right) packed first so it stays visible; content scrolls above it.
     grip = tk.Label(root, text="\u25e2", bg=BG, fg=DIM, cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner", font=("Segoe UI", 9))
     grip.pack(side="bottom", anchor="se", padx=2)
@@ -802,7 +890,7 @@ def run_gui():
 
     def apply_layout():
         mode = ui_state.get("view", "full")
-        view_btn.config(text=dict(VIEWS).get(mode, "Full"))
+        draw_view_icon(mode)
         hbar.pack_configure(pady=(8, 12) if mode == "title" else (8, 2))  # extra bottom space when only the title shows
         if mode == "title":
             stamp.pack_forget()
@@ -925,8 +1013,12 @@ def run_gui():
         for r in rows:
             tint = r.get("tint")
             bgc = blend(BG, tint, 0.22) if tint else BG
-            row = tk.Frame(body, bg=bgc, **({"padx": 8, "pady": 4} if tint else {}))
-            row.pack(fill="x", pady=3)
+            if tint:
+                card, row = rounded_card(body, bgc)
+                card.pack(fill="x", pady=3)
+            else:
+                row = tk.Frame(body, bg=bgc)
+                row.pack(fill="x", pady=3)
             tk.Label(row, text=r["name"], bg=bgc, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
             if r["line"]:
                 tk.Label(row, text=r["line"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
@@ -1028,16 +1120,20 @@ def run_gui():
         win.title("Track a game")
         win.configure(bg=BG)
         win.attributes("-topmost", True)
+        dark_titlebar(win)
         league = tk.StringVar(value=LEAGUES[0][0])
         date = tk.StringVar(value=datetime.now().strftime("%Y%m%d"))
         games = []
         top = tk.Frame(win, bg=BG)
         top.pack(padx=10, pady=8)
-        tk.OptionMenu(top, league, *[l[0] for l in LEAGUES]).grid(row=0, column=0)
-        tk.Entry(top, textvariable=date, width=10).grid(row=0, column=1, padx=6)
-        lb = tk.Listbox(win, width=44, height=12)
+        styled_option(top, league, [l[0] for l in LEAGUES], width=16).grid(row=0, column=0)
+        tk.Entry(top, textvariable=date, width=10, bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
+                 highlightthickness=1, highlightbackground=PANEL, highlightcolor=DIM, font=UI_FONT).grid(row=0, column=1, padx=6, ipady=3)
+        lb = tk.Listbox(win, width=64, height=12, selectmode="extended", bg=PANEL, fg=FG, selectbackground="#34d399",
+                        selectforeground="#10201a", relief="flat", bd=0, highlightthickness=0, activestyle="none",
+                        font=("Consolas", 9) if sys.platform == "win32" else ("DejaVu Sans Mono", 9))
         lb.pack(padx=10)
-        status = tk.Label(win, text="Date is YYYYMMDD", bg=BG, fg=DIM)
+        status = tk.Label(win, text="Date is YYYYMMDD", bg=BG, fg=DIM, font=("Segoe UI", 8))
         status.pack(pady=4)
 
         def load():
@@ -1072,8 +1168,8 @@ def run_gui():
             win.destroy()
             refresh()
 
-        tk.Button(top, text="Load", command=load).grid(row=0, column=2)
-        tk.Button(win, text="Track selected", command=add).pack(pady=(0, 10))
+        styled_button(top, "Load", load).grid(row=0, column=2)
+        styled_button(win, "Track selected", add).pack(pady=(0, 12))
         load()
 
     def settings_dialog():
@@ -1082,11 +1178,13 @@ def run_gui():
         win.configure(bg=BG)
         win.attributes("-topmost", True)
         win.resizable(False, False)
-        tk.Label(win, text="Opacity", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, padx=14, pady=(14, 4), sticky="w")
+        dark_titlebar(win)
+        tk.Label(win, text="Opacity", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, padx=16, pady=(16, 4), sticky="w")
         pct = tk.StringVar()
-        val = tk.Spinbox(win, from_=30, to=100, width=4, textvariable=pct, justify="right", bg="#33333d", fg=FG,
-                         insertbackground=FG, buttonbackground="#33333d", relief="flat", highlightthickness=0)
-        val.grid(row=0, column=1, padx=14, pady=(14, 4), sticky="e")
+        val = tk.Spinbox(win, from_=30, to=100, width=4, textvariable=pct, justify="right", bg=PANEL, fg=FG,
+                         insertbackground=FG, buttonbackground=PANEL, relief="flat", highlightthickness=1,
+                         highlightbackground=PANEL, highlightcolor=DIM, font=UI_FONT)
+        val.grid(row=0, column=1, padx=16, pady=(16, 4), sticky="e", ipady=2)
 
         def on_scale(v):
             n = int(float(v))
@@ -1111,12 +1209,12 @@ def run_gui():
         val.config(command=on_entry)
 
         scale = tk.Scale(win, from_=30, to=100, orient="horizontal", showvalue=False, length=240, command=on_scale,
-                         bg=BG, fg=FG, troughcolor="#33333d", highlightthickness=0, bd=0, sliderrelief="flat",
+                         bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0, sliderrelief="flat",
                          activebackground="#8a8f98")
         scale.set(int(ui_state.get("opacity", 0.95) * 100))
-        scale.grid(row=1, column=0, columnspan=2, padx=14, pady=(0, 8))
+        scale.grid(row=1, column=0, columnspan=2, padx=16, pady=(0, 10))
         scale.bind("<ButtonRelease-1>", on_release)
-        tk.Label(win, text="Refresh every", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, padx=14, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Refresh every", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, padx=16, pady=(6, 4), sticky="w")
         cur = int(ui_state.get("refresh_seconds", default_refresh))
         choice = tk.StringVar(value=next((l for l, v in REFRESH_CHOICES if v == cur), f"{cur} seconds"))
 
@@ -1125,18 +1223,14 @@ def run_gui():
             save_state(ui_state)
             schedule()  # restart the countdown with the new cadence
 
-        om = tk.OptionMenu(win, choice, *[l for l, _ in REFRESH_CHOICES], command=on_refresh)
-        om.config(bg="#33333d", fg=FG, activebackground="#44444f", activeforeground=FG, relief="flat",
-                  highlightthickness=0, width=12)
-        om["menu"].config(bg="#33333d", fg=FG)
-        om.grid(row=2, column=1, padx=14, pady=(6, 4), sticky="e")
-        tk.Button(win, text="Close", command=win.destroy, bg="#33333d", fg=FG, relief="flat",
-                  activebackground="#44444f", activeforeground=FG).grid(row=3, column=1, padx=14, pady=(8, 14), sticky="e")
+        om = styled_option(win, choice, [l for l, _ in REFRESH_CHOICES], command=on_refresh, width=12)
+        om.grid(row=2, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=3, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
     def untrack_menu(event):
-        m = tk.Menu(root, tearoff=0)
+        m = style_menu(tk.Menu(root, tearoff=0))
         for p in list(pins):
             m.add_command(label=f"Untrack {p['label']} ({p['date']})", command=lambda p=p: untrack(p))
         if not pins:
@@ -1157,7 +1251,7 @@ def run_gui():
         if e.widget not in (grip, scroll) and drag:
             root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
 
-    menu = tk.Menu(root, tearoff=0)
+    menu = style_menu(tk.Menu(root, tearoff=0))
     menu.add_command(label="Track a game...", command=track_dialog)
     menu.add_command(label="Untrack a game...", command=lambda: untrack_menu(menu_pos["e"]))
     menu.add_command(label="Refresh", command=refresh)
