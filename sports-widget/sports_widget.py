@@ -91,6 +91,44 @@ def summarize_event(event, team_abbr):
     return state, f"{sep} {opp_name}", f"{result}{ms}-{os_}  {detail}"
 
 
+def situation_text(sport, comp):
+    """Sport-specific live info (football down/possession, baseball count/runners)."""
+    sit = comp.get("situation") or {}
+    if not sit:
+        return ""
+    if sport == "football":
+        parts = [sit.get("shortDownDistanceText") or sit.get("downDistanceText")]
+        poss = str(sit.get("possession", ""))
+        for c in comp.get("competitors", []):
+            if poss and str(c.get("id", c.get("team", {}).get("id", ""))) == poss:
+                parts.append(f'{c.get("team", {}).get("abbreviation", "")} ball')
+        if sit.get("possessionText"):
+            parts.append(sit["possessionText"])
+        if sit.get("isRedZone"):
+            parts.append("Red zone")
+        return " · ".join(p for p in parts if p)
+    if sport == "baseball":
+        if "balls" not in sit and "outs" not in sit:
+            return ""
+        bases = [n for n, k in (("1st", "onFirst"), ("2nd", "onSecond"), ("3rd", "onThird")) if sit.get(k)]
+        return " · ".join([f'{sit.get("balls", 0)}-{sit.get("strikes", 0)}, {sit.get("outs", 0)} out',
+                           "Runners: " + ", ".join(bases) if bases else "Bases empty"])
+    return ""
+
+
+def live_info(entry, event):
+    """Fetch the scoreboard entry for a live game (schedule data lacks situation)."""
+    today = datetime.now().astimezone().date()
+    rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
+    try:
+        for e in fetch_scoreboard(entry["sport"], entry["league"], rng):
+            if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
+                return situation_text(entry["sport"], e["competitions"][0])
+    except Exception:
+        pass
+    return ""
+
+
 def pick_event(events, days=7):
     """Live game, else the next game within `days`; None if neither."""
     def state_of(e):
@@ -124,7 +162,8 @@ def team_status(entry):
     if not s:
         return None
     state, line, detail = s
-    return {"name": name, "state": state, "line": line, "detail": detail}
+    info = live_info(entry, event) if state == "in" else ""
+    return {"name": name, "state": state, "line": line, "detail": detail, "info": info}
 
 
 def fetch_all(entries):
@@ -186,7 +225,8 @@ def playoff_games(debug=False):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             out.append({"name": matchup, "state": state, "line": f"{name}" + (f" · {extra}" if extra else ""),
-                        "detail": detail, "_date": e.get("date", "")})
+                        "detail": detail, "_date": e.get("date", ""),
+                        "info": situation_text(sport, comp) if state == "in" else ""})
     out.sort(key=lambda r: (r["state"] != "in", r["_date"]))
     return out
 
@@ -246,7 +286,8 @@ def pinned_status(pin):
         if str(e.get("id")) == str(pin["id"]):
             s = summarize_game(e)
             if s:
-                return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2]}
+                return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
+                        "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else ""}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
 
 
@@ -369,6 +410,8 @@ def run_gui():
             tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
             tk.Label(row, text=r["detail"], bg=BG, fg=COLORS.get(r["state"], FG),
                      font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
+            if r.get("info"):
+                tk.Label(row, text=r["info"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
 
     def render(results, pin_results, playoffs):
         for w in body.winfo_children():
@@ -511,6 +554,6 @@ if __name__ == "__main__":
             print("No matches")
     elif "--print" in sys.argv:  # headless check: print statuses to console
         for r in fetch_pinned(load_pinned()) + fetch_all(load_config()["teams"]) + playoff_games():
-            print(f'{r["name"]:<28} {r["line"]:<10} {r["detail"]}')
+            print(f'{r["name"]:<28} {r["line"]:<10} {r["detail"]} {r.get("info", "")}')
     else:
         run_gui()
