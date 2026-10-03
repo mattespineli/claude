@@ -168,8 +168,12 @@ def _situation_graphic(sport, comp):
     """Data for the live-game graphic: baseball diamond or football field position."""
     sit = comp.get("situation") or {}
     if sport == "baseball" and ("onFirst" in sit or "outs" in sit):
+        stype = comp.get("status", {}).get("type", {})
+        half = str(stype.get("shortDetail") or stype.get("detail") or "").strip().lower()
+        side = "away" if half.startswith("top") else "home" if half.startswith("bot") else ""
+        batting = next((c for c in comp.get("competitors", []) if c.get("homeAway") == side), {})
         return {"kind": "baseball", "bases": [bool(sit.get(k)) for k in ("onFirst", "onSecond", "onThird")],
-                "outs": int(sit.get("outs") or 0)}
+                "outs": int(sit.get("outs") or 0), "color": team_colors(batting, "#fbbf24") if batting else "#fbbf24"}
     if sport == "football" and sit:
         teams = {}
         for c in comp.get("competitors", []):
@@ -827,8 +831,9 @@ def run_gui():
             c = tk.Canvas(parent, width=130, height=24, bg=BG, highlightthickness=0)
             def base(cx, cy, on):
                 r = 5
-                c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill="#fbbf24" if on else BG,
-                                 outline="#fbbf24" if on else DIM, width=2)
+                hl = g.get("color", "#fbbf24")
+                c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else BG,
+                                 outline=hl if on else DIM, width=2)
             base(21, 6, g["bases"][1]); base(27, 12, g["bases"][0]); base(15, 12, g["bases"][2])
             c.create_text(44, 5, text="Outs", anchor="w", fill=DIM, font=("Segoe UI", 8))
             for i in range(3):
@@ -1090,6 +1095,7 @@ def run_gui():
 
 TEAM_COLORS = {"SF": {"color": "aa0000", "alternateColor": "b3995d"}, "DAL": {"color": "041e42", "alternateColor": "869397"},
                "NJ": {"color": "ce1126", "alternateColor": "000000"}, "BOS": {"color": "000000", "alternateColor": "fdb71a"},
+               "SFG": {"color": "fd5a1e", "alternateColor": "27251f"}, "LAD": {"color": "005a9c", "alternateColor": "ffffff"},
                "ARS": {"color": "ef0107", "alternateColor": "ffffff"}, "CHE": {"color": "034694", "alternateColor": "ffffff"}}
 
 
@@ -1103,7 +1109,8 @@ def demo_data():
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
            "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
-    mlb = {"competitors": [team("1", "away", "SF", 3), team("2", "home", "LAD", 2)],
+    mlb = {"status": {"type": {"shortDetail": "Top 7th"}},
+           "competitors": [team("1", "away", "SFG", 3), team("2", "home", "LAD", 2)],
            "situation": {"balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
                          "batter": {"athlete": {"shortName": "M. Chapman"}}, "pitcher": {"athlete": {"shortName": "T. Glasnow"}}}}
     nba = {"status": {"period": 3, "clock": 312.0, "displayClock": "5:12"},
@@ -1119,7 +1126,7 @@ def demo_data():
            "competitors": [team("1", "home", "ARS", 1, [st("possessionPct", 61), st("totalShots", 12)]),
                            team("2", "away", "CHE", 1, [st("possessionPct", 39), st("totalShots", 6)])]}
     return [row("San Francisco 49ers", "football", "nfl", "@ Dallas Cowboys", "21-17  Q3 5:12", nfl),
-            row("San Francisco Giants", "baseball", "mlb", "@ Los Angeles Dodgers", "3-2  Bot 7th", mlb),
+            row("San Francisco Giants", "baseball", "mlb", "@ Los Angeles Dodgers", "3-2  Top 7th", mlb),
             row("Golden State Warriors", "basketball", "nba", "@ Boston Celtics", "78-74  Q3 5:12", nba),
             row("New Jersey Devils", "hockey", "nhl", "@ Boston Bruins", "2-1  P2 6:47", nhl),
             row("Arsenal", "soccer", "eng.1", "vs Chelsea", "1-1  67'", soc)]
