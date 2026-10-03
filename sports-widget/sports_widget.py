@@ -252,6 +252,26 @@ def add_found(entries):
     return new
 
 
+def round_corners(root):
+    """Windows 11: DWM rounded corners. Windows 10: clip window to a rounded region."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    root.update_idletasks()
+    hwnd = ctypes.windll.user32.GetParent(root.winfo_id()) or root.winfo_id()
+    pref = ctypes.c_int(2)  # DWMWCP_ROUND
+    ok = ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, 33, ctypes.byref(pref), ctypes.sizeof(pref)) == 0
+    if ok:
+        return
+
+    def clip(_=None):
+        w, h = root.winfo_width(), root.winfo_height()
+        rgn = ctypes.windll.gdi32.CreateRoundRectRgn(0, 0, w + 1, h + 1, 16, 16)
+        ctypes.windll.user32.SetWindowRgn(hwnd, rgn, True)
+    clip()
+    root.bind("<Configure>", clip)
+
+
 def run_gui():
     import tkinter as tk
 
@@ -397,6 +417,10 @@ def run_gui():
     for w in (header, body):
         w.bind("<Button-3>", popup)
 
+    try:
+        round_corners(root)
+    except Exception:
+        pass  # cosmetic only
     tick()
     root.mainloop()
 
