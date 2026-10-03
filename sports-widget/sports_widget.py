@@ -74,7 +74,8 @@ def summarize_event(event, team_abbr):
             return None
         me, opp = cs
     sep = "vs" if me.get("homeAway") == "home" else "@"
-    opp_name = opp.get("team", {}).get("abbreviation") or opp.get("team", {}).get("shortDisplayName", "?")
+    ot = opp.get("team", {})
+    opp_name = ot.get("displayName") or ot.get("abbreviation", "?")
     when = _parse_date(event.get("date"))
     if state == "pre":
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
@@ -173,7 +174,8 @@ def summarize_game(event):
         return None
     def ab(c):
         a = c.get("athlete", {})
-        return c.get("team", {}).get("abbreviation") or a.get("shortName") or a.get("displayName", "?")
+        t = c.get("team", {})
+        return t.get("displayName") or t.get("abbreviation") or a.get("displayName") or a.get("shortName", "?")
     if state == "pre":
         when = _parse_date(event.get("date"))
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
@@ -236,7 +238,7 @@ def find_teams(query, leagues=COLLEGE):
             if q in t.get("displayName", "").lower() or q == t.get("abbreviation", "").lower():
                 kind = SPORT_NAMES.get(league, league)
                 found.append({"sport": sport, "league": league, "team": str(t["id"]),
-                              "label": f'{t.get("shortDisplayName") or t.get("abbreviation")} {kind}'})
+                              "label": f'{t.get("displayName") or t.get("abbreviation")} {kind}'})
     return found
 
 
@@ -339,7 +341,7 @@ def run_gui():
                         s = summarize_game(e)
                         if s:
                             games.append({"sport": sport, "league": lg, "date": d, "id": str(e["id"]),
-                                          "label": e.get("shortName") or s[1]})
+                                          "label": s[1]})
                             lb.insert("end", f"{s[1]:<14} {s[2]}")
                     status.config(text=err or (f"{len(games)} games" if games else "No games"))
                 root.after(0, done)

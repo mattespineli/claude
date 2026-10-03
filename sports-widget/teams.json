@@ -5,61 +5,61 @@
       "sport": "baseball",
       "league": "mlb",
       "team": "sf",
-      "label": "SF Giants"
+      "label": "San Francisco Giants"
     },
     {
       "sport": "football",
       "league": "nfl",
       "team": "sf",
-      "label": "SF 49ers"
+      "label": "San Francisco 49ers"
     },
     {
       "sport": "basketball",
       "league": "nba",
       "team": "gs",
-      "label": "Warriors"
+      "label": "Golden State Warriors"
     },
     {
       "sport": "basketball",
       "league": "wnba",
       "team": "gs",
-      "label": "Valkyries"
+      "label": "Golden State Valkyries"
     },
     {
       "sport": "baseball",
       "league": "mlb",
       "team": "nyy",
-      "label": "Yankees"
+      "label": "New York Yankees"
     },
     {
       "sport": "hockey",
       "league": "nhl",
       "team": "nj",
-      "label": "Devils"
+      "label": "New Jersey Devils"
     },
     {
       "sport": "football",
       "league": "college-football",
       "team": "21",
-      "label": "SDSU Football"
+      "label": "San Diego State Aztecs Football"
     },
     {
       "sport": "basketball",
       "league": "mens-college-basketball",
       "team": "21",
-      "label": "SDSU Men's Basketball"
+      "label": "San Diego State Aztecs Men's Basketball"
     },
     {
       "sport": "basketball",
       "league": "womens-college-basketball",
       "team": "21",
-      "label": "SDSU Women's Basketball"
+      "label": "San Diego State Aztecs Women's Basketball"
     },
     {
       "sport": "volleyball",
       "league": "womens-college-volleyball",
       "team": "21",
-      "label": "SDSU Volleyball"
+      "label": "San Diego State Aztecs Volleyball"
     }
   ]
 }
