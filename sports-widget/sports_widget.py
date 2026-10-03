@@ -1006,12 +1006,17 @@ def run_gui():
         inner = tk.Frame(cv, bg=color, padx=6, pady=3)
         win_id = cv.create_window(inset, inset, window=inner, anchor="nw")
 
+        shape = {"id": None}
+
         def draw(w):
             h = inner.winfo_reqheight() + 2 * inset
             cv.configure(height=h, width=inner.winfo_reqwidth() + 2 * inset)  # natural width drives window width
-            cv.delete("bg")
-            cv.create_polygon(rr_points(0, 0, w - 1, h - 1, radius), smooth=True, fill=color, outline=color, tags="bg")
-            cv.tag_lower("bg")
+            pts = rr_points(0, 0, w - 1, h - 1, radius)
+            if shape["id"] is None:
+                shape["id"] = cv.create_polygon(pts, smooth=True, fill=color, outline=color)
+                cv.tag_lower(shape["id"])
+            else:
+                cv.coords(shape["id"], *pts)  # cheaper than recreating the polygon every animation frame
             cv.itemconfigure(win_id, width=max(w - 2 * inset, 1))
 
         def redraw(_=None):
@@ -1166,18 +1171,23 @@ def run_gui():
     MIN_W, MIN_H = 240, 120
     MIN_BODY_W = 300  # wide enough for an expanded game, so expanding never changes the window width
 
-    def tween(h0, h1, setter, done=None, steps=14):
-        def step(i=1):
-            t = i / steps
-            setter(h0 + (h1 - h0) * t * t * (3 - 2 * t))
-            if i < steps:
-                root.after(14, lambda: step(i + 1))
+    def tween(h0, h1, setter, done=None, duration=0.24):
+        import time
+        t0 = time.perf_counter()
+
+        def step():
+            p = min((time.perf_counter() - t0) / duration, 1.0)
+            setter(h0 + (h1 - h0) * p * p * (3 - 2 * p))
+            if p < 1.0:
+                root.after(6, step)
             elif done:
                 done()
         step()
 
     def fit(_=None):
         """Keep scroll region in sync; auto-size to content until the user resizes."""
+        if session.get("anim_n"):
+            return  # an expand/collapse is animating; animate() calls fit() once it ends
         canvas.configure(scrollregion=canvas.bbox("all"))
         target = canvas.winfo_height()
         if not user_sized["on"]:
@@ -1428,15 +1438,39 @@ def run_gui():
 
     # ---- smooth expand / collapse -------------------------------------------------
     def animate(wrap, inner, key, start, target, done=None, collapse=False):
-        steps = 12
+        """Ease `wrap` from `start` to `target` px. Time-based (no slow-down when frames are dropped).
 
-        def step(i=1):
+        The window is pre-sized for the end state and fit() is paused while animating, so each frame only
+        moves the content instead of also resizing the whole window.
+        """
+        import time
+        duration = 0.22
+        session["anim_n"] = session.get("anim_n", 0) + 1
+        if not collapse and not user_sized["on"]:
+            want = body.winfo_reqheight() + (target - start)
+            canvas.configure(height=max(canvas.winfo_height(), min(want, int(root.winfo_screenheight() * 0.7))))
+
+        def finish():
+            session["anim_n"] = max(session.get("anim_n", 1) - 1, 0)
+            if session["anim_n"] == 0:
+                try:
+                    fit()
+                except tk.TclError:
+                    pass
+        t0 = time.perf_counter()
+        token = object()
+        session.setdefault("anims", {})[key] = token  # a newer animation for this key cancels this one
+
+        def step():
+            if session["anims"].get(key) is not token:
+                finish()
+                return
             try:
-                t = i / steps
-                e = t * t * (3 - 2 * t)  # smoothstep
+                p = min((time.perf_counter() - t0) / duration, 1.0)
+                e = p * p * (3 - 2 * p)  # smoothstep
                 wrap.configure(height=max(int(start + (target - start) * e), 1))
-                if i < steps:
-                    root.after(14, lambda: step(i + 1))
+                if p < 1.0:
+                    root.after(6, step)
                     return
                 if not collapse:
                     wrap.pack_propagate(True)
@@ -1444,9 +1478,11 @@ def run_gui():
                     inner.pack(fill="x")
                     session["heights"][key] = target
             except tk.TclError:
+                finish()
                 return  # widgets were replaced by a re-render mid-animation
             if done:
                 done()
+            finish()
         step()
 
     def reveal(parent, key, bg, after=None):
@@ -1508,7 +1544,7 @@ def run_gui():
         """Replace the content of an open section without redrawing the panel, animating the height change."""
         try:
             wrap, inner = session["wraps"][key]
-            start = inner.winfo_height()
+            start = wrap.winfo_height()  # visible height (an earlier animation may still be running)
             wrap.pack_propagate(False)
             wrap.configure(height=max(start, 1))
             inner.pack_forget()
