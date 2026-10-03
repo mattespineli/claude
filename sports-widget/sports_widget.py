@@ -1424,7 +1424,7 @@ def run_gui():
     last = {}
     # in-session only: expanded games, cached details, animation bookkeeping
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "wraps": {}, "heights": {},
-               "anim_in": set(), "pending": [], "sig": None}
+               "anim_in": set(), "pending": [], "sig": None, "groups": {}, "rows": {}}
 
     # ---- smooth expand / collapse -------------------------------------------------
     def animate(wrap, inner, key, start, target, done=None, collapse=False):
@@ -1449,10 +1449,10 @@ def run_gui():
                 done()
         step()
 
-    def reveal(parent, key, bg):
+    def reveal(parent, key, bg, after=None):
         """Frame to build collapsible content into; grows downward if `key` was just opened."""
         wrap = tk.Frame(parent, bg=bg)
-        wrap.pack(fill="x")
+        wrap.pack(fill="x", **({"after": after} if after is not None else {}))
         inner = tk.Frame(wrap, bg=bg)
         session["wraps"][key] = (wrap, inner)
         if key in session["anim_in"]:
@@ -1481,28 +1481,76 @@ def run_gui():
         except (KeyError, tk.TclError):
             action()
 
+    def run_pending():
+        """Start the grow animations queued by reveal()."""
+        root.update_idletasks()
+        for wrap, inner, key, start in session["pending"]:
+            try:
+                animate(wrap, inner, key, start, inner.winfo_reqheight())
+            except tk.TclError:
+                pass
+        session["pending"] = []
+
+    def drop_wrap(key):
+        wrap_inner = session["wraps"].pop(key, None)
+        if wrap_inner:
+            try:
+                wrap_inner[0].destroy()
+            except tk.TclError:
+                pass
+
+    def compute_sig():
+        return json.dumps([last["args"], ui_state, sorted(session["expanded"]),
+                           {k: session["details"].get(k) for k in session["expanded"]}, session.get("live")],
+                          default=str, sort_keys=True)
+
+    def rebuild_in_place(key, build):
+        """Replace the content of an open section without redrawing the panel, animating the height change."""
+        try:
+            wrap, inner = session["wraps"][key]
+            start = inner.winfo_height()
+            wrap.pack_propagate(False)
+            wrap.configure(height=max(start, 1))
+            inner.pack_forget()
+            for ch in inner.winfo_children():
+                ch.destroy()
+            inner.place(x=0, y=0, relwidth=1)
+            build(inner)
+            root.update_idletasks()
+            animate(wrap, inner, key, start, inner.winfo_reqheight())
+        except (KeyError, tk.TclError):
+            pass
+
     def toggle_expand(g):
         k = gkey(g)
         wk = "game:" + k
+        rec = session["rows"].get(k)
         if k in session["expanded"]:
-            def close():
-                session["expanded"].discard(k)
-                render(*last["args"])
-            collapse_then(wk, close)
+            session["expanded"].discard(k)
+            session["sig"] = compute_sig()
+            collapse_then(wk, lambda: drop_wrap(wk))
             return
         session["expanded"].add(k)
         session["games"][k] = g
         session["details"].pop(k, None)
         session["heights"].pop(wk, None)
+        session["sig"] = compute_sig()
+        if rec is None:
+            render(*last["args"])
+            return
+        row, bgc = rec
         session["anim_in"].add(wk)
-        render(*last["args"])
+        draw_details(reveal(row, wk, bgc), bgc, None)
+        run_pending()
 
         def work():
             fetch_details(g)
 
             def arrived():
-                session["anim_in"].add(wk)  # grow from the "Loading" height to the full details
-                render(*last["args"])
+                if k not in session["expanded"]:
+                    return
+                session["sig"] = compute_sig()
+                rebuild_in_place(wk, lambda inner: draw_details(inner, bgc, session["details"].get(k)))
             root.after(0, arrived)
         threading.Thread(target=work, daemon=True).start()
 
@@ -1520,6 +1568,8 @@ def run_gui():
                 row.pack(fill="x", pady=3)
             row._url = r.get("url")  # found by the right-click handler via the widget hierarchy
             row._game = r.get("game")
+            if r.get("game"):
+                session["rows"][gkey(r["game"])] = (row, bgc)
             tk.Label(row, text=r["name"], bg=bgc, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
             if r["line"]:
                 tk.Label(row, text=r["line"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
@@ -1538,25 +1588,37 @@ def run_gui():
             if card is not None:
                 card._sync()
 
-    def toggle(key, was_open, persist=True):
-        def apply():
-            if persist:
-                ui_state[key] = not was_open
-                save_state(ui_state)
-            else:
-                session[key] = not was_open
-            render(*last["args"])
-        if was_open:
-            collapse_then(key, apply)
+    def toggle(key):
+        g = session["groups"].get(key)
+        if g is None:
+            return
+        new_open = not g["open"]
+        if g["persist"]:
+            ui_state[key] = new_open
+            save_state(ui_state)
         else:
+            session[key] = new_open
+        g["open"] = new_open
+        try:
+            g["hdr"].config(text=("\u25be " if new_open else "\u25b8 ") + g["text"])
+        except tk.TclError:
+            return
+        session["sig"] = compute_sig()
+        if new_open:
             session["anim_in"].add(key)
-            apply()
+            g["build"](reveal(g["parent"], key, BG, after=g["hdr"]))
+            run_pending()
+        else:
+            collapse_then(key, lambda: drop_wrap(key))
 
-    def header_label(text, key, is_open, color, indent=0, persist=True, parent=None):
-        hdr = tk.Label(parent or body, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
+    def header_label(text, key, is_open, color, indent=0, persist=True, parent=None, build=None):
+        parent = parent or body
+        hdr = tk.Label(parent, text=("\u25be " if is_open else "\u25b8 ") + text, bg=BG, fg=color,
                        font=("Segoe UI", 9, "bold"), anchor="w", cursor="hand2")
         hdr.pack(fill="x", pady=(4, 0), padx=(indent, 0))
-        hdr.bind("<ButtonRelease-1>", lambda e: toggle(key, is_open, persist))
+        session["groups"][key] = {"hdr": hdr, "text": text, "persist": persist, "parent": parent,
+                                  "build": build, "open": is_open}
+        hdr.bind("<ButtonRelease-1>", lambda e: toggle(key))
 
     def league_groups(rows, prefix, default_open=False, indent=14, parent=None):
         parent = parent or body
@@ -1565,10 +1627,12 @@ def run_gui():
             live_n = sum(r["state"] == "in" for r in games)
             key = f"{prefix}:{league}"
             is_open = ui_state.get(key, default_open or live_n > 0 if prefix == "leagues" else default_open)
+            rows_ = [dict(r, line=r.get("extra", r.get("line", ""))) for r in games]
             header_label(f"{league} · {len(games)}" + (f" · {live_n} live" if live_n and prefix == "leagues" else ""),
-                         key, is_open, COLORS["in"] if live_n and prefix == "leagues" else FG, indent=indent, parent=parent)
+                         key, is_open, COLORS["in"] if live_n and prefix == "leagues" else FG, indent=indent, parent=parent,
+                         build=lambda inner, rows_=rows_: add_rows(rows_, parent=inner))
             if is_open:
-                add_rows([dict(r, line=r.get("extra", r.get("line", ""))) for r in games], parent=reveal(parent, key, BG))
+                add_rows(rows_, parent=reveal(parent, key, BG))
 
     def render(results, pin_results, playoffs, leagues=()):
         nonlocal body
@@ -1579,9 +1643,7 @@ def run_gui():
             session["any_live"] = any_live
             schedule()  # switch between normal and live cadence right away
         # Nothing changed since the last draw: leave the window alone (no flicker).
-        sig = json.dumps([last["args"], ui_state, sorted(session["expanded"]),
-                          {k: session["details"].get(k) for k in session["expanded"]}, session.get("live"),
-                          sorted(session["anim_in"])], default=str, sort_keys=True)
+        sig = compute_sig()
         if sig == session["sig"]:
             return
         session["sig"] = sig
@@ -1590,6 +1652,8 @@ def run_gui():
         old = body
         body = tk.Frame(canvas, bg=BG)
         session["wraps"] = {}
+        session["groups"] = {}
+        session["rows"] = {}
         session["pending"] = []
         live_view = ui_state.get("view", "full") == "live"
         if live_view:
@@ -1620,13 +1684,15 @@ def run_gui():
             session["live_prev"] = len(live)
             if live:
                 is_open = session.get("live", True)
-                header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False)
+                header_label(f"Live · {len(live)}", "live", is_open, COLORS["in"], persist=False,
+                             build=lambda inner, live=live: add_rows(live, parent=inner))
                 if is_open:
                     add_rows(live, parent=reveal(body, "live", BG))
             for title, rows, key in (("Upcoming Today", upcoming, "upcoming"), ("Previous", previous, "previous")):
                 if rows:
                     is_open = ui_state.get(key, False)
-                    header_label(f"{title} · {len(rows)}", key, is_open, FG)
+                    header_label(f"{title} · {len(rows)}", key, is_open, FG,
+                                 build=lambda inner, rows=rows, key=key: league_groups(rows, key, parent=inner))
                     if is_open:
                         inner = reveal(body, key, BG)
                         league_groups(rows, key, parent=inner)
