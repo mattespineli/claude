@@ -140,6 +140,40 @@ def fetch_all(entries):
     return out
 
 
+PLAYOFF_LEAGUES = [("NBA", "basketball", "nba"), ("NFL", "football", "nfl"), ("MLB", "baseball", "mlb"),
+                   ("WNBA", "basketball", "wnba"), ("NHL", "hockey", "nhl")]
+
+
+def playoff_games():
+    """Postseason games that are live or scheduled today in the major pro leagues."""
+    today = datetime.now().astimezone().date()
+    rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
+    out = []
+    for name, sport, league in PLAYOFF_LEAGUES:
+        try:
+            events = fetch_scoreboard(sport, league, rng)
+        except Exception:
+            continue
+        for e in events:
+            if e.get("season", {}).get("type") != 3 or not e.get("competitions"):
+                continue
+            summ = summarize_game(e)
+            if not summ:
+                continue
+            state, matchup, detail = summ
+            d = _parse_date(e.get("date"))
+            if state != "in" and not (d and d.astimezone().date() == today):
+                continue
+            comp = e["competitions"][0]
+            note = (comp.get("notes") or [{}])[0].get("headline", "")
+            series = comp.get("series", {}).get("summary", "")
+            extra = " · ".join(x for x in (note, series) if x)
+            out.append({"name": matchup, "state": state, "line": f"{name}" + (f" · {extra}" if extra else ""),
+                        "detail": detail, "_date": e.get("date", "")})
+    out.sort(key=lambda r: (r["state"] != "in", r["_date"]))
+    return out
+
+
 def load_pinned():
     try:
         with open(PINNED, encoding="utf-8") as f:
@@ -301,26 +335,38 @@ def run_gui():
     topmost = tk.BooleanVar(value=True)
     pins = load_pinned()
 
-    def render(results, pin_results):
-        for w in body.winfo_children():
-            w.destroy()
-        if pin_results:
-            tk.Label(body, text="TRACKED GAMES", bg=BG, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(0, 2))
-        if not (pin_results or results):
-            tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
-        for r in pin_results + results:
+    def section(title):
+        tk.Label(body, text=title, bg=BG, fg=DIM, font=("Segoe UI", 8, "bold"), anchor="w").pack(fill="x", pady=(6, 2))
+
+    def add_rows(rows):
+        for r in rows:
             row = tk.Frame(body, bg=BG)
             row.pack(fill="x", pady=3)
             tk.Label(row, text=r["name"], bg=BG, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
             tk.Label(row, text=r["line"], bg=BG, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
             tk.Label(row, text=r["detail"], bg=BG, fg=COLORS.get(r["state"], FG),
                      font=("Segoe UI", 9, "bold" if r["state"] == "in" else "normal"), anchor="w").pack(fill="x")
+
+    def render(results, pin_results, playoffs):
+        for w in body.winfo_children():
+            w.destroy()
+        if pin_results:
+            section("TRACKED GAMES")
+            add_rows(pin_results)
+        if results:
+            section("MY TEAMS")
+            add_rows(results)
+        elif not (pin_results or playoffs):
+            tk.Label(body, text="No games in the next 7 days", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w")
+        if playoffs:
+            section("PLAYOFFS")
+            add_rows(playoffs)
         header.config(text="Sports Tracker · " + datetime.now().strftime("%I:%M %p").lstrip("0"))
 
     def refresh():
         def work():
-            res, pres = fetch_all(entries), fetch_pinned(list(pins))
-            root.after(0, lambda: render(res, pres))
+            res, pres, po = fetch_all(entries), fetch_pinned(list(pins)), playoff_games()
+            root.after(0, lambda: render(res, pres, po))
         threading.Thread(target=work, daemon=True).start()
 
     def tick():
@@ -438,7 +484,7 @@ if __name__ == "__main__":
         else:
             print("No matches")
     elif "--print" in sys.argv:  # headless check: print statuses to console
-        for r in fetch_pinned(load_pinned()) + fetch_all(load_config()["teams"]):
+        for r in fetch_pinned(load_pinned()) + fetch_all(load_config()["teams"]) + playoff_games():
             print(f'{r["name"]:<28} {r["line"]:<10} {r["detail"]}')
     else:
         run_gui()
