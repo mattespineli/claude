@@ -91,12 +91,45 @@ def summarize_event(event, team_abbr):
     return state, f"{sep} {opp_name}", f"{result}{ms}-{os_}  {detail}"
 
 
+# Per-sport team stats to show on live games: (label, candidate ESPN stat names).
+STAT_SPECS = {
+    "basketball": [("Fouls", ("fouls", "personalFouls", "teamFouls", "totalFouls")),
+                   ("Reb", ("rebounds", "totalRebounds")), ("TO", ("turnovers", "totalTurnovers"))],
+    "hockey": [("SOG", ("shotsOnGoal", "shotsTotal", "shots")), ("Hits", ("hits",)),
+               ("PIM", ("penaltyMinutes", "penaltyMins"))],
+    "soccer": [("Poss", ("possessionPct", "possession")), ("Shots", ("totalShots", "shots")),
+               ("On target", ("shotsOnTarget",)), ("Corners", ("wonCorners", "corners")),
+               ("Fouls", ("foulsCommitted", "fouls")), ("Yellow", ("yellowCards",)), ("Red", ("redCards",))],
+    "football": [("Yards", ("totalYards",)), ("TO", ("turnovers",))],
+}
+
+
+def _stat(c, names):
+    for st in c.get("statistics", []) or []:
+        if st.get("name") in names or st.get("abbreviation") in names:
+            return st.get("displayValue", st.get("value"))
+    return None
+
+
+def _stat_lines(sport, comp):
+    cs = comp.get("competitors", [])
+    if len(cs) != 2:
+        return []
+    abbr = lambda c: c.get("team", {}).get("abbreviation", "")
+    lines = []
+    for label, names in STAT_SPECS.get(sport, []):
+        vals = [_stat(c, names) for c in cs]
+        if all(v is None for v in vals):
+            continue
+        lines.append(f"{label}: " + " · ".join(f"{abbr(c)} {v}" for c, v in zip(cs, vals) if v is not None))
+    return lines
+
+
 def situation_text(sport, comp):
-    """Sport-specific live info (football down/possession, baseball count/runners)."""
+    """Sport-specific live info: situation (down/possession, count/runners, power play) and team stats."""
     sit = comp.get("situation") or {}
-    if not sit:
-        return ""
-    if sport == "football":
+    lines = []
+    if sport == "football" and sit:
         parts = [sit.get("shortDownDistanceText") or sit.get("downDistanceText")]
         poss = str(sit.get("possession", ""))
         for c in comp.get("competitors", []):
@@ -106,14 +139,27 @@ def situation_text(sport, comp):
             parts.append(sit["possessionText"])
         if sit.get("isRedZone"):
             parts.append("Red zone")
-        return " · ".join(p for p in parts if p)
-    if sport == "baseball":
-        if "balls" not in sit and "outs" not in sit:
-            return ""
+        lines.append(" · ".join(p for p in parts if p))
+    elif sport == "baseball" and ("balls" in sit or "outs" in sit):
         bases = [n for n, k in (("1st", "onFirst"), ("2nd", "onSecond"), ("3rd", "onThird")) if sit.get(k)]
-        return " · ".join([f'{sit.get("balls", 0)}-{sit.get("strikes", 0)}, {sit.get("outs", 0)} out',
-                           "Runners: " + ", ".join(bases) if bases else "Bases empty"])
-    return ""
+        lines.append(" · ".join([f'{sit.get("balls", 0)}-{sit.get("strikes", 0)}, {sit.get("outs", 0)} out',
+                                 "Runners: " + ", ".join(bases) if bases else "Bases empty"]))
+        who = []
+        for label, k in (("AB", "batter"), ("P", "pitcher")):
+            a = (sit.get(k) or {}).get("athlete", sit.get(k) or {})
+            if a.get("shortName") or a.get("displayName"):
+                who.append(f'{label}: {a.get("shortName") or a.get("displayName")}')
+        if who:
+            lines.append(" · ".join(who))
+    elif sport == "hockey":
+        pp = sit.get("powerPlay") or sit.get("isPowerPlay")
+        if pp:
+            team = sit.get("powerPlayTeam") or (pp if isinstance(pp, str) else "")
+            lines.append("Power play" + (f" ({team})" if team else ""))
+        if sit.get("emptyNet"):
+            lines.append("Empty net")
+    lines += _stat_lines(sport, comp)
+    return "\n".join(l for l in lines if l)
 
 
 def live_info(entry, event):
@@ -560,7 +606,23 @@ def run_gui():
 
 
 if __name__ == "__main__":
-    if "--debug-playoffs" in sys.argv:
+    if "--debug-live" in sys.argv:  # show what ESPN sends for live games, to tune extra info
+        seen = {(t["sport"], t["league"]) for t in load_config()["teams"]} | {(sp, lg) for _, sp, lg in PLAYOFF_LEAGUES}
+        today = datetime.now().astimezone().date()
+        for sp, lg in sorted(seen):
+            try:
+                evs = fetch_scoreboard(sp, lg, f"{today:%Y%m%d}")
+            except Exception as ex:
+                print(f"{sp}/{lg}: error {ex}")
+                continue
+            for e in evs:
+                comp = e["competitions"][0]
+                if comp.get("status", {}).get("type", {}).get("state") != "in":
+                    continue
+                stats = sorted({st.get("name") for c in comp.get("competitors", []) for st in c.get("statistics", []) or []})
+                print(f"{sp}/{lg} {e.get('shortName')}: situation keys={sorted((comp.get('situation') or {}).keys())} stats={stats}")
+                print("  ->", situation_text(sp, comp).replace("\n", " | ") or "(nothing)")
+    elif "--debug-playoffs" in sys.argv:
         for r in playoff_games(debug=True):
             print(f'  {r["name"]} | {r["line"]} | {r["detail"]}')
     elif "--find" in sys.argv:  # --find "san diego state" [--add]

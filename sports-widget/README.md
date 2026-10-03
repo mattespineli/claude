@@ -26,4 +26,5 @@ add `--add` to append them to `teams.json`. Leagues where the school has no team
 
 Playoffs section: live and same-day postseason games in NBA, NFL, MLB, WNBA and NHL, plus the latest result per matchup from the last 7 days; hidden when none.
 
-Live games also show sport-specific info when ESPN provides it: down & distance, possession and red zone (football); count, outs and runners (baseball).
+Live games also show sport-specific info when ESPN provides it: down & distance, possession, red zone (football); count, outs, runners, batter/pitcher (baseball); power play and shots (hockey); fouls, rebounds, turnovers (basketball); possession, shots, corners, fouls, cards (soccer).
+`python sports_widget.py --debug-live` shows what ESPN sends for live games right now.
