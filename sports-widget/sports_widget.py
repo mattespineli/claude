@@ -765,6 +765,32 @@ def add_found(entries):
     return new
 
 
+def aa_circle_pixels(size, mode, fg, bg, ring=2.0, margin=5.0, ss=4):
+    """Anti-aliased circle icon as rows of hex colors (supersampled; no Pillow needed).
+
+    mode: "full" (filled), "live" (ring + left half filled), anything else (ring only).
+    """
+    c = size / 2
+    R = c - margin
+    f, b = _rgb(fg), _rgb(bg)
+    rows = []
+    for py in range(size):
+        row = []
+        for px in range(size):
+            hit = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x = px + (sx + 0.5) / ss - c
+                    y = py + (sy + 0.5) / ss - c
+                    d = (x * x + y * y) ** 0.5
+                    on = (R - ring <= d <= R) or (d <= R and (mode == "full" or (mode == "live" and x < 0)))
+                    hit += on
+            a = hit / (ss * ss)
+            row.append("#%02x%02x%02x" % tuple(round(bc + (fc - bc) * a) for fc, bc in zip(f, b)))
+        rows.append(row)
+    return rows
+
+
 def rr_points(x1, y1, x2, y2, r):
     """Polygon points for a rounded rectangle (draw with smooth=True)."""
     return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
@@ -910,17 +936,17 @@ def run_gui():
     view_btn = tk.Canvas(hbar, width=34, height=34, bg=BG, highlightthickness=0, cursor="hand2")
     view_btn.pack(side="right", padx=(8, 0))
 
+    view_imgs = {}
+
     def draw_view_icon(mode):
-        """Full = filled circle, Live = half-filled, Title = empty."""
+        """Full = filled circle, Live = half-filled, Title = empty (anti-aliased bitmap)."""
+        if mode not in view_imgs:
+            img = tk.PhotoImage(width=34, height=34)
+            img.put(" ".join("{" + " ".join(row) + "}" for row in aa_circle_pixels(34, mode, FG, BG)))
+            view_imgs[mode] = img
         view_btn.delete("all")
-        box = (5, 5, 29, 29)
-        if mode == "full":
-            view_btn.create_oval(*box, fill=FG, outline=FG, width=2)
-        elif mode == "live":
-            view_btn.create_oval(*box, outline=FG, width=2)
-            view_btn.create_arc(*box, start=90, extent=180, fill=FG, outline=FG, width=2)
-        else:
-            view_btn.create_oval(*box, outline=FG, width=2)
+        view_btn.create_image(17, 17, image=view_imgs[mode])
+
     # Resize grip (bottom-right) packed first so it stays visible; content scrolls above it.
     grip = tk.Label(root, text="\u25e2", bg=BG, fg=DIM, cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner", font=("Segoe UI", 9))
     grip.pack(side="bottom", anchor="se", padx=2)
