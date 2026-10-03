@@ -491,8 +491,63 @@ def run_gui():
 
     header = tk.Label(root, text="Sports Tracker", bg=BG, fg=DIM, font=("Segoe UI", 9, "bold"), anchor="w")
     header.pack(fill="x", padx=12, pady=(8, 2))
-    body = tk.Frame(root, bg=BG)
-    body.pack(fill="both", padx=12, pady=(0, 10))
+    # Resize grip (bottom-right) packed first so it stays visible; content scrolls above it.
+    grip = tk.Label(root, text="\u25e2", bg=BG, fg=DIM, cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner", font=("Segoe UI", 9))
+    grip.pack(side="bottom", anchor="se", padx=2)
+    container = tk.Frame(root, bg=BG)
+    container.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 0))
+    container.grid_rowconfigure(0, weight=1)
+    container.grid_columnconfigure(0, weight=1)
+    canvas = tk.Canvas(container, bg=BG, highlightthickness=0, width=260, height=100)
+    scroll = tk.Scrollbar(container, orient="vertical", command=canvas.yview)
+    canvas.configure(yscrollcommand=scroll.set)
+    canvas.grid(row=0, column=0, sticky="nsew")
+    body = tk.Frame(canvas, bg=BG)
+    body_id = canvas.create_window((0, 0), window=body, anchor="nw")
+    user_sized = {"on": False}
+    MIN_W, MIN_H = 240, 120
+
+    def fit(_=None):
+        """Keep scroll region in sync; auto-size to content until the user resizes."""
+        canvas.configure(scrollregion=canvas.bbox("all"))
+        if not user_sized["on"]:
+            max_h = int(root.winfo_screenheight() * 0.7)
+            canvas.configure(width=max(body.winfo_reqwidth(), 200), height=min(body.winfo_reqheight(), max_h))
+        need = body.winfo_reqheight() > canvas.winfo_height()
+        if need and not scroll.winfo_ismapped():
+            scroll.grid(row=0, column=1, sticky="ns")
+        elif not need and scroll.winfo_ismapped():
+            scroll.grid_remove()
+            canvas.yview_moveto(0)
+
+    def on_canvas(e):
+        canvas.itemconfigure(body_id, width=e.width)
+        fit()
+
+    body.bind("<Configure>", fit)
+    canvas.bind("<Configure>", on_canvas)
+
+    def wheel(e):
+        if scroll.winfo_ismapped():
+            canvas.yview_scroll(-1 if e.delta > 0 else 1, "units")
+    root.bind_all("<MouseWheel>", wheel)
+
+    rs = {}
+    def grip_start(e):
+        rs.update(x=e.x_root, y=e.y_root, w=root.winfo_width(), h=root.winfo_height())
+    def grip_move(e):
+        user_sized["on"] = True
+        w = max(MIN_W, rs["w"] + e.x_root - rs["x"])
+        h = max(MIN_H, rs["h"] + e.y_root - rs["y"])
+        root.geometry(f"{w}x{h}+{root.winfo_x()}+{root.winfo_y()}")
+    def grip_reset(_):
+        user_sized["on"] = False
+        root.geometry("")
+        root.geometry(f"+{root.winfo_x()}+{root.winfo_y()}")
+        fit()
+    grip.bind("<Button-1>", grip_start)
+    grip.bind("<B1-Motion>", grip_move)
+    grip.bind("<Double-Button-1>", grip_reset)
 
     topmost = tk.BooleanVar(value=True)
     pins = load_pinned()
@@ -525,7 +580,7 @@ def run_gui():
         if playoffs:
             section("PLAYOFFS")
             add_rows(playoffs)
-        header.config(text="Sports Tracker · " + datetime.now().strftime("%I:%M %p").lstrip("0"))
+        header.config(text="Sports Tracker · Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
 
     def refresh():
         def work():
@@ -605,11 +660,12 @@ def run_gui():
 
     # drag to move
     drag = {}
-    def start(e): drag["x"], drag["y"] = e.x_root - root.winfo_x(), e.y_root - root.winfo_y()
-    def move(e): root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
-    for w in (root, header, body):
-        w.bind("<Button-1>", start)
-        w.bind("<B1-Motion>", move)
+    def start(e):
+        if e.widget not in (grip, scroll):  # grip resizes, scrollbar scrolls
+            drag["x"], drag["y"] = e.x_root - root.winfo_x(), e.y_root - root.winfo_y()
+    def move(e):
+        if e.widget not in (grip, scroll) and drag:
+            root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
 
     menu = tk.Menu(root, tearoff=0)
     menu.add_command(label="Track a game...", command=track_dialog)
@@ -623,10 +679,11 @@ def run_gui():
     def popup(e):
         menu_pos["e"] = e
         menu.tk_popup(e.x_root, e.y_root)
-    root.bind("<Button-3>", popup)
-    for w in (header, body):
-        w.bind("<Button-3>", popup)
 
+    # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
+    root.bind("<Button-1>", start)
+    root.bind("<B1-Motion>", move)
+    root.bind("<Button-3>", popup)
     try:
         round_corners(root)
     except Exception:
