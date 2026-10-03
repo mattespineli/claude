@@ -127,6 +127,21 @@ def _stat_lines(sport, comp):
     return lines
 
 
+def event_url(event, sport, league):
+    """ESPN game page for an event: the link ESPN supplies, else a constructed URL."""
+    for want in ("summary", "event", "desktop"):
+        for l in event.get("links", []) or []:
+            href = str(l.get("href", ""))
+            if want in (l.get("rel") or []) and href.startswith("https://"):
+                return href
+    gid = event.get("id")
+    if not gid:
+        return None
+    if sport == "soccer":
+        return f"https://www.espn.com/soccer/match/_/gameId/{gid}"
+    return f"https://www.espn.com/{league}/game/_/gameId/{gid}"
+
+
 def situation_text(sport, comp):
     """Sport-specific live info: situation (down/possession, count/runners, power play) and team stats."""
     sit = comp.get("situation") or {}
@@ -389,7 +404,8 @@ def team_status(entry):
     state, line, detail = s
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
     return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
-            "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team)}
+            "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
+            "url": event_url(event, entry["sport"], entry["league"])}
 
 
 def fetch_all(entries):
@@ -460,7 +476,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
-                   "_key": (league, str(e.get("id"))), "tint": home_tint(comp),
+                   "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "league": name, "extra": extra,
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
@@ -526,6 +542,7 @@ def league_games():
             comp = e["competitions"][0]
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
+                        "url": event_url(e, sport, league),
                         "info": situation_text(sport, comp) if state == "in" else "",
                         "graphic": situation_graphic(sport, comp, league) if state == "in" else None})
     order = {"in": 0, "pre": 1, "post": 2}
@@ -619,6 +636,7 @@ def pinned_status(pin):
             if s:
                 return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
+                        "url": event_url(e, pin["sport"], pin["league"]),
                         "info": situation_text(pin["sport"], e["competitions"][0]) if s[0] == "in" else "",
                         "graphic": situation_graphic(pin["sport"], e["competitions"][0], pin["league"]) if s[0] == "in" else None}
     return {"name": pin["label"], "state": "none", "line": "Game not found", "detail": ""}
@@ -1062,6 +1080,7 @@ def run_gui():
             else:
                 row = tk.Frame(body, bg=bgc)
                 row.pack(fill="x", pady=3)
+            row._url = r.get("url")  # found by the right-click handler via the widget hierarchy
             tk.Label(row, text=r["name"], bg=bgc, fg=FG, font=("Segoe UI", 10, "bold"), anchor="w").pack(fill="x")
             if r["line"]:
                 tk.Label(row, text=r["line"], bg=bgc, fg=DIM, font=("Segoe UI", 9), anchor="w").pack(fill="x")
@@ -1341,8 +1360,27 @@ def run_gui():
     menu.add_command(label="Restart", command=restart)
     menu.add_command(label="Quit", command=root.destroy)
     menu_pos = {}
+    dyn = {"n": 0}
+
+    def game_url_at(widget):
+        while widget is not None:
+            url = getattr(widget, "_url", None)
+            if url:
+                return url
+            widget = getattr(widget, "master", None)
+        return None
+
     def popup(e):
         menu_pos["e"] = e
+        if dyn["n"]:
+            menu.delete(0, dyn["n"] - 1)
+            dyn["n"] = 0
+        url = game_url_at(e.widget)
+        if url:
+            import webbrowser
+            menu.insert_command(0, label="Open game on ESPN", command=lambda: webbrowser.open(url))
+            menu.insert_separator(1)
+            dyn["n"] = 2
         menu.tk_popup(e.x_root, e.y_root)
 
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
@@ -1371,7 +1409,7 @@ def demo_data():
     team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
                                               "team": {"id": i, "abbreviation": a, **TEAM_COLORS.get(a, {})}}
     def row(name, sport, league, line, detail, comp, tint=None):
-        return {"name": name, "state": "in", "line": line, "detail": detail, "tint": tint,
+        return {"name": name, "state": "in", "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/",
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
            "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
@@ -1400,7 +1438,8 @@ def demo_data():
 
 def demo_leagues():
     g = lambda lg, name, state, detail, tint: {"name": name, "state": state, "line": "", "league": lg, "detail": detail,
-                                               "tint": tint, "info": "", "graphic": None, "_key": (lg, name)}
+                                               "tint": tint, "info": "", "graphic": None, "_key": (lg, name),
+                                               "url": "https://www.espn.com/"}
     return [g("MLB", "Boston Red Sox @ Toronto Blue Jays", "in", "2-1  Bot 4th", "#134a8e"),
             g("MLB", "Seattle Mariners @ Houston Astros", "pre", "Sat Oct 3 8:10 PM", "#eb6e1f"),
             g("MLB", "Chicago Cubs @ Milwaukee Brewers", "post", "4-2  Final", "#ffc52f"),
