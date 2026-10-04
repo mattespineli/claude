@@ -3455,7 +3455,7 @@ def run_gui():
     def logo_img(url, size):
         """The logo as a Tk image, its antialiased edges already blended into the card's colour (Tk may draw
         partial transparency as all-or-nothing, which leaves edges jagged)."""
-        bg = session.get("card_bg") or BG
+        bg = "#%02x%02x%02x" % tuple(min(255, (c_ + 2) // 4 * 4) for c_ in _rgb(session.get("card_bg") or BG))  # in steps of 4: near colours share an image
         key, dl = (url, size, bg), (url, size)
         if dl in logo_failed:
             return None
@@ -3495,6 +3495,13 @@ def run_gui():
                     root.after(0, logos_ready)  # the last outstanding logo arrived
             threading.Thread(target=work, daemon=True).start()
         return None
+
+    def prune_imgs(cache, cap):
+        """Drop cached Tk images no widget shows any more, once the cache has grown past `cap` (one in use must stay alive)."""
+        if len(cache) > cap:
+            for k_, img_ in list(cache.items()):
+                if img_ is not None and not root.tk.getboolean(root.tk.call("image", "inuse", img_.name)):
+                    del cache[k_]
 
     pill_imgs = {}
     pill_of = {}  # canvas image id -> (w, h, colour) of the pills drawn, so a fading card can re-tint them
@@ -3595,12 +3602,24 @@ def run_gui():
         roll_frame()
         return x
 
+    def px_per_pt():
+        if "px_per_pt" not in session:
+            session["px_per_pt"] = root.winfo_fpixels("1p")
+        return session["px_per_pt"]
+
+    px_fonts = {}
+
+    def px_font(family, px):
+        """The bold font tuple for a size in pixels (made once per size)."""
+        f_ = px_fonts.get((family, px))
+        if f_ is None:
+            f_ = px_fonts[(family, px)] = (family, -px, "bold")
+        return f_
+
     def roll_frame():
         """Place every rolling digit for the current time: the old digit rolls up and away, the next rolls in."""
         now = _time.perf_counter()
-        if "px_per_pt" not in session:
-            session["px_per_pt"] = root.winfo_fpixels("1p")
-        px0 = FONTS["score"][1] * session["px_per_pt"]
+        px0 = FONTS["score"][1] * px_per_pt()
         for c in session["roll_cells"]:
             p = min((now - c["roll"]["t0"]) / c["roll"]["dur"], 1.0)
             v = ease_io(p) * (len(c["seq"]) - 1)  # ease in and out: spins up, then settles onto the new digit
@@ -3614,8 +3633,11 @@ def run_gui():
                     continue
                 d = abs(off)
                 canvas.coords(item, ax, ay + off * travel * c["dir"])  # up when counting up, down when counting down
-                canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
-                                     font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
+                px_ = max(6, round(px0 * (1 - 0.35 * d)))
+                if c.setdefault("px", {}).get(item) != px_:  # a new font only when the size changes
+                    c["px"][item] = px_
+                    canvas.itemconfigure(item, font=px_font(FONTS["score"][0], px_))
+                canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d))
 
     TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "TWO-POINTER": 2, "SLAM DUNK!": 2, "SAFETY": 2,
                    "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TOUCHDOWN!": 6, "BLOCKED FG TOUCHDOWN!": 6}
@@ -3738,7 +3760,10 @@ def run_gui():
         t = (now - cyc["t0"]) - slot * STAT_SECS
         slot += cyc["base"]
         page = cyc["pages"][slot % n]
-        a = min(ease(t / STAT_IN), ease((STAT_SECS - t) / STAT_OUT))
+        a = round(min(ease(t / STAT_IN), ease((STAT_SECS - t) / STAT_OUT)), 2)
+        if cyc.get("applied") == (a, slot % n):
+            return  # mid-page: nothing has changed since the last tick
+        cyc["applied"] = (a, slot % n)
         c_ = cyc["canvas"]
         for k_, (li, mi, ri) in enumerate(cyc["rows"]):
             if k_ < len(page):
@@ -3752,10 +3777,12 @@ def run_gui():
             c_.itemconfigure(li, fill=blend(cyc["bgc"], FG, a))
             c_.itemconfigure(mi, fill=blend(cyc["bgc"], DIM, a))
             c_.itemconfigure(ri, fill=blend(cyc["bgc"], FG, a))
+        off_ = blend(cyc["bgc"], DIM, 0.45)
         for k_, d_ in enumerate(cyc.get("dots", ())):
-            off_ = blend(cyc["bgc"], DIM, 0.45)
             c_.itemconfigure(d_, fill=blend(off_, FG, a) if k_ == slot % n else off_)  # the lit dot fades with the stats
         cyc["shown"] = slot % n
+
+    stat_on = {"on": False}
 
     def stat_tick():
         for cyc in list(stat_cycles):
@@ -3763,7 +3790,9 @@ def run_gui():
                 stat_apply(cyc)
             except tk.TclError:
                 stat_cycles.remove(cyc)  # its canvas was redrawn
-        root.after(40 if stat_cycles else 400, stat_tick)
+        stat_on["on"] = bool(stat_cycles)
+        if stat_cycles:  # idle with nothing cycling: the next card that needs it starts it again
+            root.after(40, stat_tick)
 
     def clock_tick():
         """Run the game clocks on live cards once a second between refreshes."""
@@ -3905,6 +3934,9 @@ def run_gui():
                 if len(pages) > 1 and not (ce and ce.get("banner")):
                     stat_cycles.append(cyc)
                     stat_apply(cyc)
+                    if not stat_on["on"]:
+                        stat_on["on"] = True
+                        root.after(40, stat_tick)
         lines = info.split("\n") if info else []
         if at_half and inning_break:
             lines = []  # between innings the diamond, count and batter give way to the stats
@@ -4480,7 +4512,9 @@ def run_gui():
     def start_pulse():
         if not session["pulse_on"]:
             session["pulse_on"] = True
-            root.after(FRAME_MS, run_in, session.get("view"), pulse_tick)
+            root.after(PULSE_MS, run_in, session.get("view"), pulse_tick)
+
+    PULSE_MS = 33  # a slow breath: 30 frames a second is plenty
 
     def pulse_tick():
         """Breathe the outline of the clutch border / red-zone glow items (no redraw: only their colors change)."""
@@ -4488,13 +4522,20 @@ def run_gui():
         if not items:
             session["pulse_on"] = False
             return
-        k = 0.5 + 0.5 * math.sin(_time.perf_counter() * 4)
+        k = round((0.5 + 0.5 * math.sin(_time.perf_counter() * 4)) * 32) / 32  # 32 levels: most frames change nothing
+        shown = session.setdefault("pulse_shown", {})  # item -> the outline it has now
+        if len(shown) > 4 * len(items) + 64:
+            shown.clear()  # forget items from earlier redraws
         for i, col, bgc in list(items):
+            c_ = blend(bgc, col, 0.3 + 0.65 * k)
+            if shown.get(i) == c_:
+                continue
+            shown[i] = c_
             try:
-                canvas.itemconfigure(i, outline=blend(bgc, col, 0.3 + 0.65 * k))
+                canvas.itemconfigure(i, outline=c_)
             except tk.TclError:
                 pass
-        root.after(FRAME_MS, run_in, session.get("view"), pulse_tick)
+        root.after(PULSE_MS, run_in, session.get("view"), pulse_tick)
 
     def clutch_of(r):
         """A close game in its closing minutes (or extra innings): the card gets a pulsing border."""
@@ -4843,27 +4884,35 @@ def run_gui():
             if t >= ce["secs"]:
                 continue
             bgc = lay["bgc"]
+            fk = flash_k(ce, t) if lay["flash"] else None
             if lay["flash"]:  # text fades toward the card as it is right now, flash included, so hidden text stays hidden
-                bgc = blend(lay["flash"][2], flash_color(ce), flash_k(ce, t))
+                bgc = blend(lay["flash"][2], flash_color(ce), round(fk * 16) / 16)  # in 1/16 steps, so pills reuse their images
             a = banner_alpha(ce, t)
+            ia = info_alpha(ce, t)
+            seen = lay.setdefault("seen", {})  # what each part was last recoloured for: unchanged parts are left alone
             try:
-                for i_, col in lay["banner"]:
-                    canvas.itemconfigure(i_, fill=blend(bgc, col, a))
+                if seen.get("banner") != (a, bgc):
+                    seen["banner"] = (a, bgc)
+                    for i_, col in lay["banner"]:
+                        canvas.itemconfigure(i_, fill=blend(bgc, col, a))
                 if lay.get("shake"):  # the headline trembles as it lands, then settles
                     hi_, bx_, by_, fs_, ww_ = lay["shake"]
                     k_ = a * ease(1 - max(0.0, t - INFO_OUT) / 1.6)  # 1 as it lands, easing down to 0 as it settles
                     canvas.coords(hi_, bx_ + 3.0 * k_ * math.sin(t * 75), by_ + 3.0 * k_ * math.cos(t * 91))
-                    px_ = round(fs_ * root.winfo_fpixels("1p") * (1 + 0.3 * k_))  # in pixels, so the size changes in one-pixel steps
-                    canvas.itemconfigure(hi_, font=("Segoe UI", -px_, "bold"))  # it swells, then shrinks back
-                ia = info_alpha(ce, t)
-                for i_, opt, base in lay["fade"]:
-                    if opt == "pill":
-                        canvas.itemconfigure(i_, image=pill_faded(base, bgc, ia))
-                    else:
-                        canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
-                if lay["flash"]:
+                    px_ = round(fs_ * px_per_pt() * (1 + 0.3 * k_))  # in pixels, so the size changes in one-pixel steps
+                    if seen.get("shake") != px_:
+                        seen["shake"] = px_
+                        canvas.itemconfigure(hi_, font=px_font("Segoe UI", px_))  # it swells, then shrinks back
+                if seen.get("fade") != (ia, bgc):
+                    seen["fade"] = (ia, bgc)
+                    for i_, opt, base in lay["fade"]:
+                        if opt == "pill":
+                            canvas.itemconfigure(i_, image=pill_faded(base, bgc, ia))
+                        else:
+                            canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
+                if lay["flash"] and seen.get("flash") != fk:
+                    seen["flash"] = fk
                     bgid, hit, base = lay["flash"]
-                    fk = flash_k(ce, t)
                     tc = flash_color(ce)
                     col = blend(base, tc, fk)
                     for i_ in (bgid, hit):
@@ -5178,7 +5227,7 @@ def run_gui():
 
     grad_of = {}  # (canvas, card background id) -> the gradient's cap and strips, which follow the background when it is resized
 
-    def make_gradient(bgid, x0, y, x1, gc, fcol=None, fk=0.0, n=24, tags=()):
+    def make_gradient(bgid, x0, y, x1, gc, fcol=None, fk=0.0, n=12, tags=()):
         """Fill a card's rounded background with a horizontal gradient: the background polygon is the left colour, a second
         rounded cap makes the right end, and vertical strips between them (inset by the corner radius) blend across."""
         tint_ = (lambda c_: blend(c_, fcol, fk)) if fcol else (lambda c_: c_)
@@ -5480,7 +5529,7 @@ def run_gui():
         return max(0.0, 1 - t / MOVE_FADE) if t < MOVE_FADE else min(1.0, (t - MOVE_FADE) / MOVE_FADE)
 
     def move_tick():
-        now, busy = _time.perf_counter(), False
+        now, busy, placed = _time.perf_counter(), False, False
         for k, m in list(session["mfade"].items()):
             t = now - m["t0"]
             if t >= 2 * MOVE_FADE:
@@ -5489,6 +5538,7 @@ def run_gui():
             busy = True
             if t >= MOVE_FADE and not m.get("done"):  # faded out: now it takes its place in the new section
                 m["done"] = True
+                placed = True
                 session["moved"].add(k)
                 for grp in (last.get("args") or ()):
                     for r in grp:
@@ -5496,8 +5546,10 @@ def run_gui():
                             r["linger"] = False
         if not session["anims"]:
             draw_all()
-            session["sig"] = compute_sig()
-            fit()
+            if not busy:  # the cards have settled: the signature only needs taking once
+                session["sig"] = compute_sig()
+            if placed or not busy:  # the layout changes only as a card takes its new place
+                fit()
         if busy:
             root.after(max(FRAME_MS, 40), run_in, session.get("view"), move_tick)
 
@@ -5524,6 +5576,13 @@ def run_gui():
                 if r["linger"] and k not in session["move_sched"]:
                     session["move_sched"].add(k)
                     root.after(int((LINGER_SECS - (now - t0)) * 1000) + 50, run_in, None, begin_move, k)
+        shown_ = {card_key(r) for grp in groups for r in grp}  # forget cards no longer in the feed
+        games_ = {gkey(r["game"]) for grp in groups for r in grp if r.get("game")}
+        for store_ in (session["state_prev"], session["ended_at"]):
+            for k in [k for k in store_ if k not in shown_]:
+                del store_[k]
+        for k in [k for k in session["stats"] if k.split("|")[0] not in games_]:
+            del session["stats"][k]
 
     def group_node(key, text, color, indent, persist, default, children):
         store = ui_state if persist else session
@@ -5679,11 +5738,12 @@ def run_gui():
         total = int(y + 4)
         canvas.configure(scrollregion=(0, 0, cw, total))
         session["total"] = total
+        prune_imgs(pill_imgs, 400)  # after drawing, so the images just drawn stay cached
+        prune_imgs(logo_imgs, 200)
         ctx = session["actx"]
         if ctx:  # tag everything drawn after the animated block so a frame can move it with one call
             ids = canvas.find_all()
-            for i in ids[ids.index(ctx["cover"]) + 1:]:
-                canvas.addtag_withtag("abelow", i)
+            canvas.tk.eval(f"foreach j {{{' '.join(map(str, ids[ids.index(ctx['cover']) + 1:]))}}} {{{canvas._w} addtag abelow withtag $j}}")
             ctx["cw"] = cw
             apply_frame()
         height_setup(cw, total)
@@ -5762,8 +5822,13 @@ def run_gui():
         else:
             session["h_on"] = False
 
+    def sig_args(args):
+        """The rows without their clocks' fetch times, which change on every refresh even when nothing else does."""
+        return [[dict(r, clock={k: v for k, v in r["clock"].items() if k != "at"}) if isinstance(r.get("clock"), dict) else r
+                 for r in grp] for grp in args] if args else args
+
     def compute_sig():
-        return json.dumps([last.get("args"), ui_state, sorted(session["expanded"]),
+        return json.dumps([sig_args(last.get("args")), ui_state, sorted(session["expanded"]),
                            {k: session["details"].get(k) for k in session["expanded"]}, session.get("live"),
                            [session["standings"], session["college"]] if ui_state.get("tab", "games") == "standings" else None],
                           default=str, sort_keys=True)
@@ -5931,6 +5996,7 @@ def run_gui():
         loading["on"] = False
         update_linger((results, pin_results, playoffs, leagues))
         detect_scores((results, pin_results, playoffs, leagues))
+        prev_args = last.get("args")
         last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
         stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
         any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
@@ -5943,6 +6009,12 @@ def run_gui():
         session["live_prev"] = live_now
         sig = compute_sig()
         if sig == session["sig"]:
+            if prev_args:  # nothing changed but the clocks' fetch times: the drawn clocks (the old rows' dicts) run on from this fetch
+                for og, ng in zip(prev_args, last["args"]):
+                    for o_, n_ in zip(og, ng):
+                        if isinstance(o_.get("clock"), dict) and isinstance(n_.get("clock"), dict):
+                            o_["clock"]["at"] = n_["clock"]["at"]
+                            n_["clock"] = o_["clock"]
             return  # nothing changed
         session["sig"] = sig
         draw_all()
@@ -6445,10 +6517,14 @@ def run_gui():
         def load_team_colors():
             """The primary and alternate colours of every team you follow, read from ESPN (cached) off the UI thread."""
             found = []
-            for e_ in entries:
+
+            def team_of(e_):
                 try:
-                    t_ = fetch_schedule(e_).get("team", {})
+                    return cached(("sched", API.format(**e_)), 300, lambda: fetch_schedule(e_)).get("team", {})
                 except Exception:
+                    return None
+            for e_, t_ in zip(entries, pmap(team_of, entries)):  # fetched side by side
+                if t_ is None:
                     continue
                 for c_ in (t_.get("color"), t_.get("alternateColor")):
                     h_ = "#" + str(c_).lstrip("#").lower() if c_ else None
@@ -6808,7 +6884,6 @@ def run_gui():
         load_open_college()
     spin()
     clock_tick()
-    stat_tick()
     try:
         round_corners(root)
     except Exception:
