@@ -6347,6 +6347,17 @@ if __name__ == "__main__":
                 print(f"{sp}/{lg} {e.get('shortName')}: situation keys={sorted((comp.get('situation') or {}).keys())} stats={stats}")
                 print("  ->", situation_text(sp, comp).replace("\n", " | ") or "(nothing)")
                 sit_ = comp.get("situation") or {}
+                def find_(o, path=""):  # every key anywhere in the game whose name mentions a challenge, review or ABS
+                    if isinstance(o, dict):
+                        for k_, v_ in o.items():
+                            if any(w in k_.lower() for w in ("challenge", "review", "abs")):
+                                yield f"{path}/{k_}", v_
+                            yield from find_(v_, f"{path}/{k_}")
+                    elif isinstance(o, list):
+                        for n_, v_ in enumerate(o[:40]):
+                            yield from find_(v_, f"{path}[{n_}]")
+                for path_, v_ in find_(comp):
+                    print("  challenge-like field:", path_, "=", str(v_)[:120])
                 counts_ = {k: v for k, v in sit_.items() if "imeout" in k or "hallenge" in k}
                 if counts_:
                     print("  timeouts/challenges:", counts_, "| teams:", [(c.get("homeAway"), c.get("team", {}).get("abbreviation")) for c in comp.get("competitors", [])])
