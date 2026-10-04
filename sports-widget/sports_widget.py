@@ -77,7 +77,69 @@ def _record(c):
 
 
 STANDINGS = "https://site.api.espn.com/apis/v2/sports/{sport}/{league}/standings"
+STANDINGS_LEAGUES = [("NFL", "football", "nfl"), ("NBA", "basketball", "nba"), ("NHL", "hockey", "nhl"),
+                     ("MLB", "baseball", "mlb"), ("WNBA", "basketball", "wnba")]
 _seed_cache = {}
+_standings_raw = {}
+
+
+def standings_json(sport, league, max_age=600):
+    """ESPN's standings response for a league, cached for `max_age` seconds. Raises on network errors."""
+    key = (sport, league)
+    now = datetime.now().timestamp()
+    hit = _standings_raw.get(key)
+    if hit and now - hit[0] < max_age:
+        return hit[1]
+    req = urllib.request.Request(STANDINGS.format(sport=sport, league=league), headers={"User-Agent": "sports-widget/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.load(r)
+    _standings_raw[key] = (now, data)
+    return data
+
+
+def parse_standings(data):
+    """Flatten ESPN's nested standings into [{"name": group, "rows": [{id, abbr, name, short, stats}]}]."""
+    groups = []
+
+    def walk(node):
+        if not isinstance(node, dict):
+            return
+        entries = (node.get("standings") or {}).get("entries")
+        if entries:
+            rows = []
+            for e in entries:
+                t = e.get("team") or {}
+                stats = {}
+                for st in e.get("stats") or []:
+                    v = st.get("displayValue", st.get("value"))
+                    if v is not None:
+                        stats[st.get("name")] = str(v)
+                rows.append({"id": str(t.get("id", "")), "abbr": t.get("abbreviation", ""),
+                             "name": t.get("displayName") or t.get("name", "?"),
+                             "short": t.get("shortDisplayName") or t.get("displayName", "?"), "stats": stats})
+            groups.append({"name": node.get("name") or node.get("abbreviation") or "", "rows": rows})
+        for ch in node.get("children") or []:
+            walk(ch)
+    walk(data)
+    return groups
+
+
+def standing_cells(league, stats):
+    """(record, [column values]) for a standings row, plus the column headers for the league."""
+    g = stats.get
+    rec = g("overall") if re.fullmatch(r"\d+-\d+(-\d+)?", g("overall", "") or "") else None
+    if league == "NHL":
+        rec = rec or f'{g("wins", "0")}-{g("losses", "0")}-{g("otLosses", "0")}'
+        return rec, [g("points", "-"), g("gamesPlayed", "-")]
+    if league == "NFL":
+        t = g("ties", "0")
+        rec = rec or f'{g("wins", "0")}-{g("losses", "0")}' + (f"-{t}" if t not in ("0", "0.0", "") else "")
+        return rec, [g("winPercent", "-")]
+    rec = rec or f'{g("wins", "0")}-{g("losses", "0")}'
+    return rec, [g("winPercent", "-"), g("gamesBehind", "-")]
+
+
+STANDINGS_HEADERS = {"NHL": ["PTS", "GP"], "NFL": ["PCT"]}
 
 
 def seed_map(sport, league):
@@ -89,9 +151,7 @@ def seed_map(sport, league):
         return hit[1]
     seeds, ttl = {}, 3600
     try:
-        req = urllib.request.Request(STANDINGS.format(sport=sport, league=league), headers={"User-Agent": "sports-widget/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            data = json.load(r)
+        data = standings_json(sport, league)
 
         def walk(node):
             if isinstance(node, dict):
@@ -227,6 +287,37 @@ def event_url(event, sport, league):
 
 
 SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={id}"
+
+
+_sum_cache = {}
+
+
+def fetch_summary_cached(sport, league, event_id, max_age=20):
+    key = (sport, league, str(event_id))
+    now = datetime.now().timestamp()
+    hit = _sum_cache.get(key)
+    if hit and now - hit[0] < max_age:
+        return hit[1]
+    data = fetch_summary(sport, league, event_id)
+    _sum_cache[key] = (now, data)
+    if len(_sum_cache) > 60:  # keep the cache small
+        for k in sorted(_sum_cache, key=lambda k: _sum_cache[k][0])[:20]:
+            _sum_cache.pop(k, None)
+    return data
+
+
+def win_bar(game):
+    """Win-probability data for a live game's card ({a, b, names, colors}) or None."""
+    try:
+        d = game_detail_data(fetch_summary_cached(game["sport"], game["league"], game["id"]))
+    except Exception:
+        return None
+    if d.get("home_win") is None:
+        return None
+    hw = round(d["home_win"] * 100)
+    ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
+    return {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
+            "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}
 
 
 def fetch_summary(sport, league, event_id):
@@ -647,7 +738,8 @@ def team_status(entry):
     me = _find_me(event["competitions"][0], entry["team"]) or {}
     name = _rank(me, seeds_for(event, entry["sport"], entry["league"])) + base_name + (f" ({own})" if own else "")
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
-    return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
+    parts = score_parts(event, entry["team"])
+    return {"score": parts["score"], "status": parts["status"], "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
@@ -724,7 +816,7 @@ def playoff_games(debug=False, days=7):
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
-                   "league": name, "extra": extra,
+                   "league": name, "extra": extra, "score": score_parts(e)["score"], "status": score_parts(e)["status"],
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
                    "graphic": situation_graphic(sport, comp, league) if state == "in" else None}
@@ -789,6 +881,7 @@ def league_games():
             state, matchup, detail = summ
             comp = e["competitions"][0]
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
+                        "score": score_parts(e)["score"], "status": score_parts(e)["status"],
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
                         "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -882,12 +975,47 @@ def summarize_game(event, sport=None, league=None):
     return state, f"{ab(away)} @ {ab(home)}", text
 
 
+def score_parts(event, team_abbr=None):
+    """{"score": (a, b) | None, "status": text} for the big score on a card.
+
+    With `team_abbr` the order is (that team, opponent) and a finished game gets a W/L/T; otherwise (away, home).
+    """
+    if _state_of(event) == "pre":
+        return {"score": None, "status": ""}
+    state = _state_of(event)
+    comp = event["competitions"][0]
+    cs = comp.get("competitors", [])
+    detail = ((comp.get("status") or {}).get("type") or {}).get("shortDetail", "")
+    result = ""
+    if team_abbr:
+        me = _find_me(comp, team_abbr)
+        opp = next((c for c in cs if c is not me), None)
+        if (me is None or opp is None) and len(cs) == 2:
+            me, opp = cs
+        pair = (me, opp)
+    else:
+        away = next((c for c in cs if c.get("homeAway") == "away"), None)
+        home = next((c for c in cs if c.get("homeAway") == "home"), None)
+        pair = (away, home) if away and home else (tuple(cs) if len(cs) == 2 else (None, None))
+    if not pair[0] or not pair[1]:
+        return {"score": None, "status": detail}
+    a_, b_ = _score(pair[0]), _score(pair[1])
+    if team_abbr and state == "post":
+        try:
+            result = "W" if float(a_) > float(b_) else ("L" if float(a_) < float(b_) else "T")
+        except ValueError:
+            pass
+    played = _date_label(event) if state == "post" else ""
+    return {"score": (a_, b_), "status": " \u00b7 ".join(x for x in (result, detail, played) if x)}
+
+
 def pinned_status(pin):
     for e in fetch_scoreboard(pin["sport"], pin["league"], pin["date"]):
         if str(e.get("id")) == str(pin["id"]):
             s = summarize_game(e, pin["sport"], pin["league"])
             if s:
-                return {"name": s[1], "state": s[0], "line": "", "detail": s[2],
+                parts = score_parts(e)
+                return {"score": parts["score"], "status": parts["status"], "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
                         "game": {"sport": pin["sport"], "league": pin["league"], "id": str(pin["id"])},
@@ -1318,6 +1446,31 @@ def run_gui():
         view_btn.delete("all")
         view_btn.create_image(17, 17, image=view_imgs[mode])
 
+    # Tab bar (Games / Standings)
+    tabbar = tk.Frame(root, bg=BG)
+    tabbar.pack(fill="x", padx=12, pady=(0, 4))
+    tab_pills = {}
+
+    def make_tab(label, key):
+        import tkinter.font as tkfont
+        w_ = tkfont.Font(font=("Segoe UI", 9, "bold")).measure(label) + 26
+        c = tk.Canvas(tabbar, width=w_, height=26, bg=BG, highlightthickness=0, cursor="hand2")
+        shape = c.create_polygon(rr_points(1, 1, w_ - 1, 25, 8), smooth=True, fill=BG, outline=BG)
+        txt = c.create_text(w_ / 2, 13, text=label, font=("Segoe UI", 9, "bold"), fill=DIM)
+        c.pack(side="left", padx=(0, 6))
+        c.bind("<ButtonRelease-1>", lambda e: set_tab(key))
+        tab_pills[key] = (c, shape, txt)
+
+    def style_tabs():
+        cur = ui_state.get("tab", "games")
+        for key, (c, shape, txt) in tab_pills.items():
+            on = key == cur
+            c.itemconfigure(shape, fill=PANEL if on else BG, outline=PANEL if on else BG)
+            c.itemconfigure(txt, fill=FG if on else DIM)
+
+    make_tab("Games", "games")
+    make_tab("Standings", "standings")
+
     # Resize grip (bottom-right) packed first so it stays visible; content scrolls above it.
     grip = tk.Label(root, text="\u25e2", bg=BG, fg=DIM, cursor="size_nw_se" if sys.platform == "win32" else "bottom_right_corner", font=("Segoe UI", 9))
     grip.pack(side="bottom", anchor="se", padx=2)
@@ -1472,6 +1625,10 @@ def run_gui():
         draw_view_icon(mode)
         hbar.pack_configure(pady=(8, 12) if mode == "title" else (8, 2))  # extra bottom space when only the title shows
         if mode == "title":
+            tabbar.pack_forget()
+        elif not tabbar.winfo_manager():
+            tabbar.pack(fill="x", padx=12, pady=(0, 4), after=hbar)
+        if mode == "title":
             stamp.pack_forget()
         elif not stamp.winfo_manager():
             stamp.pack(fill="x")
@@ -1534,13 +1691,13 @@ def run_gui():
     # (refresh, expand, collapse, view change) is a single repaint and cannot flicker.
     # ------------------------------------------------------------------------------------------
     import time as _time
-    FONTS = {"name": ("Segoe UI", 10, "bold"), "line": ("Segoe UI", 9), "detb": ("Segoe UI", 9, "bold"),
+    FONTS = {"score": ("Segoe UI", 20, "bold"), "name": ("Segoe UI", 10, "bold"), "line": ("Segoe UI", 9), "detb": ("Segoe UI", 9, "bold"),
              "sec": ("Segoe UI", 8, "bold"), "hdr": ("Segoe UI", 9, "bold"), "small": ("Segoe UI", 8),
              "smallb": ("Segoe UI", 8, "bold")}
     PAD, GAP = 10, 6
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
-               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None}
+               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -1687,7 +1844,7 @@ def run_gui():
 
     def fetch_details(g):
         try:
-            session["details"][gkey(g)] = game_detail_data(fetch_summary(g["sport"], g["league"], g["id"]))
+            session["details"][gkey(g)] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=5))
         except Exception as ex:
             session["details"][gkey(g)] = {"error": str(ex)[:60]}
 
@@ -1720,16 +1877,39 @@ def run_gui():
         hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
         yy = y + GAP
-        _, h = ctext(ix, yy, r["name"], FONTS["name"], FG, width=ww, tags=tags)
+        sc = r.get("score")
+        text_w = ww
+        if sc:  # big score at the top right; the team names wrap to the space on its left
+            xr = cx0 + cw_ - PAD
+            try:
+                lead = (float(sc[0]) > float(sc[1])) - (float(sc[0]) < float(sc[1]))
+            except ValueError:
+                lead = 0
+            live = r["state"] == "in"
+            hi = COLORS["in"] if live else FG
+            c1 = hi if lead >= 0 or live else DIM
+            c2 = hi if lead <= 0 or live else DIM
+            i2, _h = ctext(xr, yy - 3, sc[1], FONTS["score"], c2, anchor="ne")
+            x2 = canvas.bbox(i2)[0]
+            idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
+            x1 = canvas.bbox(idash)[0]
+            i1, _h = ctext(x1 - 4, yy - 3, sc[0], FONTS["score"], c1, anchor="ne")
+            text_w = max(ww - (xr - canvas.bbox(i1)[0]) - 12, 80)
+        _, h = ctext(ix, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
         yy += h
         if r["line"]:
-            _, h = ctext(ix, yy, r["line"], FONTS["line"], DIM, width=ww, tags=tags)
+            _, h = ctext(ix, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
             yy += h
-        _, h = ctext(ix, yy, r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
+        if sc:
+            yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
+        _, h = ctext(ix, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
                      COLORS.get(r["state"], FG), width=ww, tags=tags)
         yy += h
         if r.get("graphic"):
             yy += graphics(ix, yy, r["graphic"], bgc, ww)
+        g_ = r.get("game")
+        if r.get("win") and not (g_ and gkey(g_) in session["expanded"]):
+            yy += graphics(ix, yy, r["win"], bgc, ww)
         if r.get("info"):
             _, h = ctext(ix, yy, r["info"], FONTS["line"], DIM, width=ww, tags=tags)
             yy += h
@@ -1786,6 +1966,19 @@ def run_gui():
             elif t == "text":
                 _, h = ctext(x + 2, y + 4, n["text"], FONTS["line"], DIM)
                 y += 4 + h + 4
+            elif t == "sub":  # standings sub-header: group name + column titles
+                _, h = ctext(x + 6, y + 6, n["text"], FONTS["smallb"], FG)
+                for k, title in enumerate(reversed(n["headers"])):
+                    ctext(x + w - 8 - 50 * k, y + 7, title, FONTS["small"], DIM, anchor="ne")
+                y += 6 + h + 4
+            elif t == "srow":  # standings row
+                if n["fav"]:
+                    canvas.create_rectangle(x + 2, y, x + w - 2, y + 18, fill=blend(BG, "#34d399", 0.18), outline="")
+                ctext(x + 24, y + 2, str(n["rank"]), FONTS["small"], DIM, anchor="ne")
+                ctext(x + 32, y + 2, n["name"], FONTS["detb"] if n["fav"] else FONTS["line"], FG)
+                for k, val in enumerate(reversed(n["vals"])):
+                    ctext(x + w - 8 - 50 * k, y + 2, val, FONTS["line"], FG if k == 0 else DIM, anchor="ne")
+                y += 18
             elif t == "card":
                 y = draw_card(n["row"], x, y, w, final)
             elif t == "group":
@@ -1813,7 +2006,31 @@ def run_gui():
                 (live_n > 0) if is_leagues else default_open, cards(games, True)))
         return out
 
+    def build_standings_nodes():
+        favs = {(e["league"], str(e["team"]).lower()) for e in entries}
+        nodes = []
+        for i, (abbr, sport, league) in enumerate(STANDINGS_LEAGUES):
+            data = session["standings"].get(abbr)
+            if data is None:
+                children = [{"t": "text", "text": "Loading..."}]
+            elif data == "error":
+                children = [{"t": "text", "text": "Standings unavailable"}]
+            else:
+                children = []
+                for g in data:
+                    headers = ["W-L"] + STANDINGS_HEADERS.get(abbr, ["PCT", "GB"])
+                    children.append({"t": "sub", "text": g["name"], "headers": headers})
+                    for rank, r in enumerate(g["rows"], start=1):
+                        rec, cols = standing_cells(abbr, r["stats"])
+                        name = r["name"] if len(r["name"]) <= 16 else r["short"]
+                        fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
+                        children.append({"t": "srow", "rank": rank, "name": name, "vals": [rec] + cols, "fav": fav})
+            nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
+        return nodes
+
     def build_nodes():
+        if ui_state.get("tab", "games") == "standings":
+            return build_standings_nodes()
         results, pin_results, playoffs, leagues = last["args"]
         live_view = ui_state.get("view", "full") == "live"
         if live_view:
@@ -1844,7 +2061,7 @@ def run_gui():
         return nodes
 
     def draw_all(final=False):
-        if not last:
+        if not last and ui_state.get("tab", "games") != "standings":
             return 0
         canvas.delete("all")
         session["hits"].clear()
@@ -1864,8 +2081,9 @@ def run_gui():
         return total
 
     def compute_sig():
-        return json.dumps([last["args"], ui_state, sorted(session["expanded"]),
-                           {k: session["details"].get(k) for k in session["expanded"]}, session.get("live")],
+        return json.dumps([last.get("args"), ui_state, sorted(session["expanded"]),
+                           {k: session["details"].get(k) for k in session["expanded"]}, session.get("live"),
+                           session["standings"] if ui_state.get("tab", "games") == "standings" else None],
                           default=str, sort_keys=True)
 
     # ---- animations: expand / collapse of games and groups -------------------------
@@ -2008,7 +2226,44 @@ def run_gui():
         draw_all()
         fit()
 
+    def load_standings():
+        """Fetch all five leagues' standings in the background (cached for 10 minutes)."""
+        def work():
+            for abbr, sport, league in STANDINGS_LEAGUES:
+                try:
+                    session["standings"][abbr] = parse_standings(standings_json(sport, league))
+                except Exception:
+                    session["standings"].setdefault(abbr, "error")
+                    if session["standings"][abbr] is None:
+                        session["standings"][abbr] = "error"
+            root.after(0, standings_loaded)
+        threading.Thread(target=work, daemon=True).start()
+
+    def standings_loaded():
+        if ui_state.get("tab", "games") == "standings":
+            session["sig"] = None
+            draw_all()
+            session["sig"] = compute_sig()
+            fit()
+
+    def set_tab(key):
+        if ui_state.get("tab", "games") == key or session["anims"]:
+            return
+        ui_state["tab"] = key
+        save_state(ui_state)
+        style_tabs()
+        canvas.yview_moveto(0)
+        session["sig"] = None
+        view_tween["next"] = True  # ease the window to the new content height
+        if key == "standings":
+            load_standings()
+        draw_all()
+        session["sig"] = compute_sig()
+        fit()
+
     def refresh():
+        if ui_state.get("tab", "games") == "standings":
+            load_standings()
         def work():
             res, pres, po, lg = fetch_all(entries), fetch_pinned(list(pins)), playoff_games(), league_games()
             shown = {r["_key"] for r in res + pres if r.get("_key")}
@@ -2017,6 +2272,13 @@ def run_gui():
             for k in list(session["expanded"]):
                 if k in session["games"]:
                     fetch_details(session["games"][k])
+            live_rows = [r for grp in (res, pres, po, lg) for r in grp if r.get("state") == "in" and r.get("game")]
+            if live_rows:  # win probability for the collapsed cards (one cached request per live game)
+                from concurrent.futures import ThreadPoolExecutor
+                with ThreadPoolExecutor(max_workers=6) as ex:
+                    for r, wbar in zip(live_rows, ex.map(lambda r: win_bar(r["game"]), live_rows)):
+                        if wbar:
+                            r["win"] = wbar
             root.after(0, lambda: render(res, pres, po, lg))
         threading.Thread(target=work, daemon=True).start()
 
@@ -2282,6 +2544,9 @@ def run_gui():
     apply_layout()
     threading.Thread(target=icon_precompute, daemon=True).start()
     stamp.config(text="Loading...")
+    style_tabs()
+    if ui_state.get("tab", "games") == "standings":
+        load_standings()
     spin()
     try:
         round_corners(root)
@@ -2302,9 +2567,14 @@ def demo_data():
     st = lambda n, v: {"name": n, "displayValue": str(v)}
     team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
                                               "team": {"id": i, "abbreviation": a, **TEAM_COLORS.get(a, {})}}
-    def row(name, sport, league, line, detail, comp, tint=None, state="in", next_line=""):
+    def row(name, sport, league, line, detail, comp, tint=None, state="in", next_line="", win=None):
+        m = re.match(r"^(?:([WLT])\s+)?(\d+)-(\d+)\s+(.*)$", detail)
+        score = (m.group(2), m.group(3)) if m else None
+        status = " \u00b7 ".join(x for x in ((m.group(1) or "") if m else "", m.group(4) if m else detail) if x)
+        wbar = {"kind": "versus", "label": "Win probability", "a_name": win[0], "a": win[1], "b_name": win[2], "b": win[3],
+                "a_color": win[4], "b_color": win[5]} if win else None
         return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/",
-                "next": next_line,
+                "score": score, "status": status, "win": wbar, "next": next_line,
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
            "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
@@ -2324,9 +2594,9 @@ def demo_data():
                        {"redCard": True, "clock": {"displayValue": "62'"}, "team": {"id": "2"}}],
            "competitors": [team("1", "home", "ARS", 1, [st("possessionPct", 61), st("totalShots", 12)]),
                            team("2", "away", "CHE", 1, [st("possessionPct", 39), st("totalShots", 6)])]}
-    return [row("San Francisco 49ers (4-1)", "football", "nfl", "@ Dallas Cowboys (3-2)", "21-17  Q3 5:12", nfl, tint="#aa0000"),
-            row("San Francisco Giants (85-77)", "baseball", "mlb", "@ Los Angeles Dodgers (98-64)", "3-2  Top 7th", mlb, tint="#fd5a1e"),
-            row("(4) Golden State Warriors (48-34)", "basketball", "nba", "@ (1) Boston Celtics (64-18)", "78-74  Q3 5:12", nba, tint="#1d428a"),
+    return [row("San Francisco 49ers (4-1)", "football", "nfl", "@ Dallas Cowboys (3-2)", "21-17  Q3 5:12", nfl, tint="#aa0000", win=("SF", 62, "DAL", 38, "#b3995d", "#869397")),
+            row("San Francisco Giants (85-77)", "baseball", "mlb", "@ Los Angeles Dodgers (98-64)", "3-2  Top 7th", mlb, tint="#fd5a1e", win=("SFG", 58, "LAD", 42, "#fd5a1e", "#005a9c")),
+            row("(4) Golden State Warriors (48-34)", "basketball", "nba", "@ (1) Boston Celtics (64-18)", "78-74  Q3 5:12", nba, tint="#1d428a", win=("GS", 59, "BOS", 41, "#1d428a", "#007a33")),
             row("New Jersey Devils (3-1-0)", "hockey", "nhl", "@ Boston Bruins (2-2-0)", "2-1  P2 6:47", nhl, tint="#ce1126"),
             row("Arsenal (6-1-2)", "soccer", "eng.1", "vs Chelsea (5-2-2)", "1-1  67'", soc, tint="#ef0107"),
             row("#12 San Diego State Aztecs Football (7-2)", "football", "college-football", "vs Boise State (8-1)",
@@ -2335,7 +2605,10 @@ def demo_data():
 
 
 def demo_leagues():
-    g = lambda lg, name, state, detail, tint: {"name": name, "state": state, "line": "", "league": lg, "detail": detail,
+    def g(lg, name, state, detail, tint):
+        m = re.match(r"^(\d+)-(\d+)\s+(.*)$", detail)
+        return {"score": (m.group(1), m.group(2)) if m else None, "status": m.group(3) if m else detail,
+                "name": name, "state": state, "line": "", "league": lg, "detail": detail,
                                                "tint": tint, "info": "", "graphic": None, "_key": (lg, name),
                                                "url": "https://www.espn.com/"}
     return [g("MLB", "Boston Red Sox @ Toronto Blue Jays", "in", "2-1  Bot 4th", "#134a8e"),
