@@ -13,6 +13,7 @@ Edit `teams.json`. Each entry: `sport`, `league`, and ESPN `team` abbreviation o
 `basketball/nba/lal`, `football/nfl/dal`, `baseball/mlb/nyy`, `hockey/nhl/bos`, `soccer/eng.1/arsenal`.
 
 ## Use
+The widget has its own taskbar button; click it to minimize or restore the widget.
 Drag to move. Right-click: track a game, untrack, refresh, toggle always-on-top, quit.
 Resize with the grip in the bottom-right corner (double-click it to auto-fit again). A scrollbar appears when content is taller than the window; the mouse wheel scrolls.
 Auto-start: put a shortcut to `run.bat` in `shell:startup`.

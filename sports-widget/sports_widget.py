@@ -1413,6 +1413,51 @@ def round_corners(root):
     root.bind("<Configure>", clip)
 
 
+def app_icon_pixels(size, ss=4):
+    """Taskbar icon: dark tile with a light ring and a red live dot. Rows of hex colors."""
+    tile, fg, dot = _rgb("#1e1e24"), _rgb("#f2f2f2"), _rgb("#e53935")
+    c, R, w, rd = size / 2, size * 0.30, size * 0.09, size * 0.13
+    dc = (size * 0.74, size * 0.26)
+    rows = []
+    for py in range(size):
+        row = []
+        for px in range(size):
+            acc = [0.0, 0.0, 0.0]
+            for sy in range(ss):
+                for sx in range(ss):
+                    x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
+                    col = tile
+                    if abs(((x - c) ** 2 + (y - c) ** 2) ** 0.5 - R) <= w / 2:
+                        col = fg
+                    if (x - dc[0]) ** 2 + (y - dc[1]) ** 2 <= rd * rd:
+                        col = dot
+                    for i in range(3):
+                        acc[i] += col[i]
+            n = ss * ss
+            row.append("#%02x%02x%02x" % tuple(int(v / n) for v in acc))
+        rows.append(row)
+    return rows
+
+
+def show_in_taskbar(root):
+    """Windows: give the borderless (overrideredirect) window a taskbar button that minimizes/restores it."""
+    if sys.platform != "win32":
+        return
+    import ctypes
+    user32 = ctypes.windll.user32
+    GWL_STYLE, GWL_EXSTYLE = -16, -20
+    WS_MINIMIZEBOX, WS_EX_TOOLWINDOW, WS_EX_APPWINDOW = 0x00020000, 0x00000080, 0x00040000
+    root.update_idletasks()
+    hwnd = user32.GetParent(root.winfo_id()) or root.winfo_id()
+    ex = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+    user32.SetWindowLongW(hwnd, GWL_EXSTYLE, (ex & ~WS_EX_TOOLWINDOW) | WS_EX_APPWINDOW)
+    # Lets a click on the taskbar button minimize the window, like a normal app.
+    user32.SetWindowLongW(hwnd, GWL_STYLE, user32.GetWindowLongW(hwnd, GWL_STYLE) | WS_MINIMIZEBOX)
+    # The taskbar only picks up the new style when the window is re-shown.
+    root.withdraw()
+    root.after(10, root.deiconify)
+
+
 def run_gui():
     import tkinter as tk
 
@@ -1540,8 +1585,21 @@ def run_gui():
         style_menu(om["menu"])
         return om
 
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            # Own taskbar group and icon instead of being lumped in with pythonw.exe.
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("SportsWidget")
+        except Exception:
+            pass
     root = tk.Tk()
     root.title("Sports")
+    try:
+        app_icon = tk.PhotoImage(width=32, height=32)
+        app_icon.put(" ".join("{" + " ".join(row) + "}" for row in app_icon_pixels(32)))
+        root.iconphoto(True, app_icon)
+    except tk.TclError:
+        pass
     root.configure(bg=BG)
     root.overrideredirect(True)
     root.attributes("-topmost", True)
@@ -3006,6 +3064,10 @@ def run_gui():
         round_corners(root)
     except Exception:
         pass  # cosmetic only
+    try:
+        show_in_taskbar(root)
+    except Exception:
+        pass
     tick()
     root.mainloop()
 
