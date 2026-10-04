@@ -3666,8 +3666,8 @@ def run_gui():
         stxt_ = f'{r.get("status") or ""} {r.get("detail") or ""}'
         quiet_ = not (lp and lp.get("text")) and not (info or "").strip()  # nothing else is shown in the middle
         at_half = r["state"] == "in" and (r.get("game") or {}).get("sport") != "baseball" and bool(
-            re.search(r"\bhalf-?time\b", stxt_, re.I)
-            or quiet_ and re.search(r"\b(end of|intermission|break|delay(?:ed)?|suspended)\b", stxt_, re.I))  # halftime, quarter / period breaks, delays
+            re.search(r"\b(half-?time|end of|intermission)\b", stxt_, re.I)
+            or quiet_ and re.search(r"\b(break|delay(?:ed)?|suspended)\b", stxt_, re.I))  # halftime and quarter / period ends always; other breaks and delays when nothing else is shown
         if (r["state"] == "post" or at_half) and r.get("game"):  # a finished game, or one at halftime: its team stats fill the middle
             d_ = ensure_stats(r["game"], at_half)
             if isinstance(d_, dict) and d_.get("all_stats"):
@@ -3712,7 +3712,7 @@ def run_gui():
                 canvas.create_polygon(ax - 5 * d_, ay - 6, ax + 5 * d_, ay, ax - 5 * d_, ay + 6, fill="#fbbf24" if has else bgc,
                                       outline="#fbbf24" if has else DIM, width=1, tags=tags)
             my += h
-        if lp and live:  # what just happened, in the free space at the bottom of the middle
+        if lp and live and not at_half:  # what just happened, in the free space at the bottom of the middle
             cap_ = 60 if bb else 84  # baseball's middle is already full
             text = lp["text"]
             football = (r.get("game") or {}).get("sport") == "football" or any(g_["kind"] == "football" for g_ in gl)
@@ -3733,7 +3733,7 @@ def run_gui():
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         bon = [bool(((tos or {}).get("bonus") or {}).get(t["ha"])) and r["state"] == "in" for t in teams]
-        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (15 if any(bon) else 0) + (13 if any(t.get("record") for t in teams) else 0)
+        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (18 if any(bon) else 0) + (13 if any(t.get("record") for t in teams) else 0)
         if mh < nat - 2:  # a short middle: what is below the status line is centred against the teams
             if my > my_hdr:
                 for i_ in items_since(n_hdr):
@@ -3777,9 +3777,9 @@ def run_gui():
                 yy += 12 + gap
             if bon[i]:  # in the bonus: this team shoots free throws on the next foul
                 bw_ = text_width(FONTS["sec"], "BONUS") + 10
-                crisp_rr(cx - bw_ / 2, yy + 1, cx + bw_ / 2, yy + 14, 3, "#fb923c", tags)
-                canvas.create_text(round(cx), round(yy + 7.5), text="BONUS", font=FONTS["sec"], fill="#1e1e24", tags=tags)
-                yy += 15
+                crisp_rr(cx - bw_ / 2, yy + 4, cx + bw_ / 2, yy + 17, 3, "#fb923c", tags)
+                canvas.create_text(round(cx), round(yy + 10.5), text="BONUS", font=FONTS["sec"], fill="#1e1e24", tags=tags)
+                yy += 18
             colb = max(colb, yy)
         yy = max(colb, my) + 2
         sr = r.get("series") if r["state"] == "post" else None
@@ -5847,7 +5847,7 @@ def run_gui():
                         w.configure(**{opt: mapping[v_]})
                 except tk.TclError:
                     pass
-            if isinstance(w, tk.Canvas) and w is not canvas and w is not scroll:
+            if isinstance(w, tk.Canvas) and w is not canvas and w is not scroll and not getattr(w, "keep_fills", False):
                 for i_ in w.find_all():
                     for opt in ("fill", "outline"):
                         try:
@@ -6120,6 +6120,7 @@ def run_gui():
             shown_ = usable_bg(col_)
             c_ = tk.Canvas(presets, width=26, height=26, bg=BG, highlightthickness=0, cursor="hand2")
             c_.create_oval(3, 3, 23, 23, fill=shown_, outline=DIM, width=1)
+            c_.keep_fills = True  # a swatch's colour is its own: a theme change must not recolour it
             c_.bind("<ButtonRelease-1>", lambda e, h_=col_: apply_bg(h_))
             c_.bind("<Enter>", lambda e, n_=name_: bg_tip.config(text=n_))
             c_.bind("<Leave>", lambda e: bg_tip.config(text="Presets: default and your teams"))
