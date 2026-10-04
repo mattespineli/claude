@@ -131,10 +131,20 @@ COLLEGE_SECTIONS = {
         ("ACC", "acc", "1"), ("Big 12", "big 12", "4"), ("Big Ten", "big ten", "5"), ("Pac-12", "pac-12", "9"),
         ("SEC", "sec", "8"), ("American", "american", "151"), ("C-USA", "conference usa", "12"),
         ("MAC", "mid-american", "15"), ("Mountain West", "mountain west", "17"), ("Sun Belt", "sun belt", "37")]},
-    "CBB": {"title": "College Basketball", "sport": "basketball", "league": "mens-college-basketball", "confs": [
+    "CBB": {"title": "Men's College Basketball", "sport": "basketball", "league": "mens-college-basketball", "confs": [
         ("ACC", "acc", "2"), ("Big 12", "big 12", "8"), ("Big East", "big east", "4"), ("Big Ten", "big ten", "7"),
         ("Pac-12", "pac-12", "21"), ("SEC", "sec", "23"), ("American", "american", "62"), ("A-10", "atlantic 10", "3"),
         ("Mountain West", "mountain west", "44"), ("WCC", "west coast", "29")]},
+    "WCBB": {"title": "Women's College Basketball", "sport": "basketball", "league": "womens-college-basketball", "confs": [
+        ("ACC", "acc", "2"), ("Big 12", "big 12", "8"), ("Big East", "big east", "4"), ("Big Ten", "big ten", "7"),
+        ("Pac-12", "pac-12", "21"), ("SEC", "sec", "23"), ("American", "american", "62"), ("A-10", "atlantic 10", "3"),
+        ("Mountain West", "mountain west", "44"), ("WCC", "west coast", "29")]},
+    # College baseball has no AP poll (the first poll ESPN lists is used), and its conference ids are looked up by
+    # name only: a conference ESPN doesn't list shows "Standings unavailable" rather than a wrong guess.
+    "CBASE": {"title": "College Baseball", "sport": "baseball", "league": "college-baseball", "poll": "Top 25", "confs": [
+        ("ACC", "acc", None), ("Big 12", "big 12", None), ("Big Ten", "big ten", None), ("SEC", "sec", None),
+        ("American", "american", None), ("Big West", "big west", None), ("C-USA", "conference usa", None),
+        ("Mountain West", "mountain west", None), ("Sun Belt", "sun belt", None), ("WCC", "west coast", None)]},
 }
 STANDINGS_KEYS = [a for a, _, _ in STANDINGS_LEAGUES] + list(COLLEGE_SECTIONS)
 CONFERENCES = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard/conferences"
@@ -195,7 +205,7 @@ def conference_group(cfg, label, pattern, fallback):
     for c in _conf_ids[key]:
         names = [str(c.get("shortName", "")).lower(), str(c.get("name", "")).lower()]
         if label.lower() in names or any(n == pattern or n.startswith(pattern + " ") for n in names):
-            return str(c.get("groupId") or fallback)
+            return str(c.get("groupId") or fallback or "") or None
     return fallback
 
 
@@ -2491,7 +2501,7 @@ def run_gui():
             elif data == "error":
                 children.append({"t": "text", "text": "Standings unavailable"})
             elif sel == "top25":
-                children.append({"t": "sub", "text": "AP Top 25", "headers": ["Record", "Pts"]})
+                children.append({"t": "sub", "text": cfg.get("poll", "AP Top 25"), "headers": ["Record", "Pts"]})
                 for r in data:
                     fav = (cfg["league"], r["id"]) in favs or (cfg["league"], r["abbr"].lower()) in favs
                     children.append({"t": "srow", "rank": r["rank"], "name": r["name"], "vals": [r["record"], r["points"]], "fav": fav})
@@ -2755,6 +2765,8 @@ def run_gui():
                 else:
                     label, pattern, fallback = next(c for c in cfg["confs"] if f"conf:{c[0]}" == sel)
                     gid = conference_group(cfg, label, pattern, fallback)
+                    if gid is None:
+                        raise LookupError(label)
                     groups = parse_standings(standings_json(cfg["sport"], cfg["league"], group=gid))
                     store[sel] = groups if any(g["rows"] for g in groups) else "error"
             except Exception:
