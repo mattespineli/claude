@@ -3475,7 +3475,7 @@ def run_gui():
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
     TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "TWO-POINTER": 2, "SLAM DUNK!": 2, "SAFETY": 2,
-                   "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TOUCHDOWN!": 6, "BLOCKED FIELD GOAL TOUCHDOWN!": 6}
+                   "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TOUCHDOWN!": 6, "BLOCKED FG TOUCHDOWN!": 6}
 
     def test_score(r, k, side, head, pts=None):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
@@ -3898,7 +3898,7 @@ def run_gui():
             if n >= 6 and "intercept" in low:  # the defence takes it back for a touchdown
                 return "PICK SIX!", True
             if n >= 6 and "blocked" in low and ("punt" in low or "field goal" in low):
-                return ("BLOCKED PUNT TOUCHDOWN!" if "punt" in low else "BLOCKED FIELD GOAL TOUCHDOWN!"), True
+                return ("BLOCKED PUNT TOUCHDOWN!" if "punt" in low else "BLOCKED FG TOUCHDOWN!"), True
             return {6: "TOUCHDOWN!", 7: "TOUCHDOWN!", 8: "TOUCHDOWN!", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
         if sport in ("hockey", "soccer"):
             return "GOAL!", True
@@ -4371,7 +4371,7 @@ def run_gui():
              ("Triple play", "TRIPLE PLAY!", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
-             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked field goal touchdown", "BLOCKED FIELD GOAL TOUCHDOWN!", "score", None),
+             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked field goal touchdown", "BLOCKED FG TOUCHDOWN!", "score", None),
              ("Blocked PAT", "BLOCKED PAT!", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
              ("Call challenged", "CALL CHALLENGED", "play", "#ef4444"), ("Successful challenge", "SUCCESSFUL CHALLENGE!", "play", "#34d399"), ("Failed challenge", "FAILED CHALLENGE", "play", "#f87171"),
