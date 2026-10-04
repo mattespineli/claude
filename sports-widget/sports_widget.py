@@ -3154,7 +3154,19 @@ def run_gui():
             session["sig"] = compute_sig()
         styled_option(win, digital_choice, ["Off", "On"], command=on_digital, width=12).grid(
             row=5, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=6, column=1, padx=16, pady=(10, 16), sticky="e")
+        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=6, column=0, padx=16, pady=(6, 4), sticky="w")
+
+        def clear_logos():
+            import shutil
+            shutil.rmtree(LOGO_DIR, ignore_errors=True)
+            logo_imgs.clear()
+            logo_pending.clear()
+            logo_done.clear()
+            session["sig"] = None
+            draw_all()  # redraws and downloads the logos again
+            session["sig"] = compute_sig()
+        styled_button(win, "Clear cache", clear_logos).grid(row=6, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=7, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
