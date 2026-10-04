@@ -276,6 +276,8 @@ def summarize_event(event, team_abbr, sport=None, league=None):
         line = f"{sep} {opp_name}"
         return state, line, text
     ms, os_ = _score(me), _score(opp)
+    if ms == "" and os_ == "":  # no score from ESPN (yet): just the status, never a bare hyphen
+        return state, f"{sep} {opp_name}", detail
     result = ""
     if state == "post":
         try:
@@ -664,6 +666,19 @@ def situation_graphic(sport, comp, league=""):
     return out or None
 
 
+def fresh_event(entry, event):
+    """The live game from ESPN's scoreboard, fetched now (schedule data lacks live scores and situation)."""
+    today = datetime.now().astimezone().date()
+    rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
+    try:
+        for e in fetch_scoreboard(entry["sport"], entry["league"], rng):
+            if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
+                return e
+    except Exception:
+        pass
+    return None
+
+
 def live_info(entry, event):
     """Fetch the scoreboard entry for a live game (schedule data lacks situation)."""
     today = datetime.now().astimezone().date()
@@ -754,7 +769,9 @@ def scoreboard_event(sport, league, event):
 def with_records(event, sport, league):
     """Schedule data often lacks team records; borrow the scoreboard's copy of the game when it does."""
     comp = event["competitions"][0]
-    if comp.get("competitors") and all(_record(c) for c in comp["competitors"]):
+    started = _state_of(event) != "pre"
+    if comp.get("competitors") and all(_record(c) for c in comp["competitors"]) and \
+            not (started and any(_score(c) == "" for c in comp["competitors"])):
         return event
     return scoreboard_event(sport, league, event) or event
 
@@ -778,7 +795,11 @@ def team_status(entry):
             next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "No upcoming game scheduled"
     if not event:
         return None
-    if _state_of(event) != "in":
+    fresh = None
+    if _state_of(event) == "in":
+        fresh = fresh_event(entry, event)  # live scores, records and situation come from the scoreboard
+        event = fresh or event
+    else:
         event = with_records(event, entry["sport"], entry["league"])
     s = summarize_event(event, entry["team"], entry["sport"], entry["league"])
     if not s:
@@ -786,7 +807,10 @@ def team_status(entry):
     state, line, detail = s
     me = _find_me(event["competitions"][0], entry["team"]) or {}
     name = _rank(me, seeds_for(event, entry["sport"], entry["league"])) + base_name + (f" ({own})" if own else "")
-    info, graphic = live_info(entry, event) if state == "in" else ("", None)
+    info, graphic = "", None
+    if state == "in":
+        comp_ = event["competitions"][0]
+        info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
     return {"score": parts["score"], "status": parts["status"], "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
@@ -1017,6 +1041,8 @@ def summarize_game(event, sport=None, league=None):
     if state == "pre":
         when = _parse_date(event.get("date"))
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
+    elif _score(away) == "" and _score(home) == "":
+        text = detail
     else:
         text = f"{_score(away)}-{_score(home)}  {detail}"
         if state == "post" and _date_label(event):
@@ -1049,6 +1075,8 @@ def score_parts(event, team_abbr=None):
     if not pair[0] or not pair[1]:
         return {"score": None, "status": detail}
     a_, b_ = _score(pair[0]), _score(pair[1])
+    if a_ == "" and b_ == "":
+        return {"score": None, "status": detail}
     if team_abbr and state == "post":
         try:
             result = "W" if float(a_) > float(b_) else ("L" if float(a_) < float(b_) else "T")
