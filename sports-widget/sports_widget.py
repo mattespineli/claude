@@ -931,6 +931,21 @@ def comp_logos(comp):
     return [_logo(c.get("team", {})) for c in pair]
 
 
+# Badge colors (background, text) for the networks that show games; others get a neutral badge.
+NETWORK_STYLES = {
+    "espn": ("#cc0000", "#ffffff"), "espn2": ("#cc0000", "#ffffff"), "espnu": ("#cc0000", "#ffffff"), "espn+": ("#d4a017", "#111111"),
+    "abc": ("#f2f2f2", "#111111"), "fox": ("#0b3d91", "#ffffff"), "fs1": ("#0b3d91", "#ffffff"), "fs2": ("#0b3d91", "#ffffff"),
+    "nbc": ("#e0a800", "#111111"), "cbs": ("#0b4aa6", "#ffffff"), "tnt": ("#2a2a2a", "#ffcc00"), "tbs": ("#1e5fd8", "#ffffff"),
+    "trutv": ("#ffcc00", "#111111"), "peacock": ("#111111", "#ffffff"), "prime video": ("#00a8e1", "#ffffff"),
+    "amazon prime video": ("#00a8e1", "#ffffff"), "apple tv+": ("#f2f2f2", "#111111"), "apple tv": ("#f2f2f2", "#111111"),
+    "netflix": ("#e50914", "#ffffff"), "paramount+": ("#0064ff", "#ffffff"), "max": ("#5b2ee6", "#ffffff"),
+    "nba tv": ("#c9082a", "#ffffff"), "nfl network": ("#013369", "#ffffff"), "mlb network": ("#0a2a5c", "#ffffff"),
+    "nhl network": ("#222222", "#ffffff"), "youtube": ("#ff0000", "#ffffff"), "cw": ("#00a651", "#ffffff"),
+    "usa": ("#1a73e8", "#ffffff"), "big ten network": ("#0088ce", "#ffffff"), "acc network": ("#013ca6", "#ffffff"),
+    "sec network": ("#004b8d", "#ffffff"), "pac-12 network": ("#0a5a9c", "#ffffff"),
+}
+
+
 def tv_channels(comp, limit=3):
     """'ESPN · Peacock': the TV and streaming channels showing a game (national TV first, then streaming), or ''."""
     found = []  # (not national, is streaming, name)
@@ -1283,7 +1298,7 @@ def team_status(entry):
         text = series_from_schedule(events, event, entry["team"])
         if text:
             ser = {"head": (ser or {}).get("head", ""), "text": text}
-    return {"tv": tv_channels(event["competitions"][0]) if state == "in" else "", "series": ser,
+    return {"tv": tv_channels(event["competitions"][0]) if state in ("in", "pre") else "", "series": ser,
             "teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
@@ -1409,7 +1424,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             parts = score_parts(e)
-            row = {"tv": tv_channels(comp) if state == "in" else "", "logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
+            row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
                    "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -1481,7 +1496,7 @@ def league_games():
             comp = e["competitions"][0]
             parts = score_parts(e)
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail, "logos": comp_logos(comp),
-                        "teams": comp_teams(comp), "tv": tv_channels(comp) if state == "in" else "",
+                        "teams": comp_teams(comp), "tv": tv_channels(comp) if state in ("in", "pre") else "",
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
@@ -1664,7 +1679,7 @@ def pinned_status(pin):
             s = summarize_game(e, pin["sport"], pin["league"])
             if s:
                 parts = score_parts(e)
-                return {"tv": tv_channels(e["competitions"][0]) if s[0] == "in" else "",
+                return {"tv": tv_channels(e["competitions"][0]) if s[0] in ("in", "pre") else "",
                         "logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0]),
                         "series": series_info(e["competitions"][0]) if s[0] == "post" else None,
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
@@ -2729,6 +2744,21 @@ def run_gui():
             threading.Thread(target=work, daemon=True).start()
         return None
 
+    def tv_badges(x, y, text, tags=(), center=False, limit=3):
+        """Channel names as small badges in each network's colors (ESPN gives names, not logos); returns the width used."""
+        import tkinter.font as tkfont
+        font = tkfont.Font(font=FONTS["small"])
+        names = text.split(" \u00b7 ")[:limit]
+        widths = [font.measure(n) + 10 for n in names]
+        total = sum(widths) + 4 * (len(names) - 1)
+        px = x - total / 2 if center else x
+        for n, pw in zip(names, widths):
+            bg_, fg_ = NETWORK_STYLES.get(n.lower(), (PANEL, FG))
+            canvas.create_polygon(rr_points(px, y, px + pw, y + 14, 5), smooth=True, fill=bg_, outline=bg_, tags=tags)
+            canvas.create_text(px + pw / 2, y + 7, text=n, font=FONTS["small"], fill=fg_, tags=tags)
+            px += pw + 4
+        return total
+
     def draw_score(xr, y, text, color, bgc, key):
         """One side's score, right-aligned at xr; rolls from the last value drawn for `key`. Returns the left edge."""
         prev = session["roll_last"].get(key)
@@ -2865,9 +2895,16 @@ def run_gui():
         rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
         my = top + 2
         live = r["state"] == "in"
-        if live:
-            canvas.create_polygon(rr_points(mx - 17, my, mx + 17, my + 14, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
-            canvas.create_text(mx, my + 7, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+        if live:  # the LIVE flag with the channel(s) beside it, centred together
+            import tkinter.font as tkfont
+            f_ = tkfont.Font(font=FONTS["small"])
+            names_ = r["tv"].split(" \u00b7 ")[:2] if r.get("tv") else []
+            tv_w = sum(f_.measure(n) + 10 for n in names_) + 4 * max(len(names_) - 1, 0)
+            x0 = mx - (34 + (8 + tv_w if tv_w else 0)) / 2
+            canvas.create_polygon(rr_points(x0, my, x0 + 34, my + 14, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
+            canvas.create_text(x0 + 17, my + 7, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+            if tv_w:
+                tv_badges(x0 + 42, my, " \u00b7 ".join(names_), tags)
             my += 18
         elif r["state"] == "pre":
             sep = (r.get("line") or "@").split(" ")[0]
@@ -2880,9 +2917,9 @@ def run_gui():
             session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
             canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
         my += h + 4
-        if live and r.get("tv"):  # the channel(s) showing it
-            _, h = ctext(mx, my - 3, r["tv"], FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
-            my += h - 1
+        if r["state"] == "pre" and r.get("tv"):  # upcoming: the channel(s) under the start time
+            tv_badges(mx, my - 2, r["tv"], tags, center=True)
+            my += 16
         if r["state"] == "post" and r.get("game"):  # a finished game: its team stats fill the middle
             d_ = ensure_stats(r["game"])
             if isinstance(d_, dict) and d_.get("all_stats"):
@@ -3039,6 +3076,8 @@ def run_gui():
                 canvas.create_polygon(rr_points(tx, yy + 2, tx + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
                 canvas.create_text(tx + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
                 sx = tx + bw + 6
+                if r.get("tv"):  # the channel(s) right beside the LIVE flag
+                    sx += tv_badges(sx, yy + 2, r["tv"], tags, limit=2) + 8
             ys = yy  # top of the status row: the baseball panel starts here too
             sid, h = ctext(sx, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
                            COLORS.get(r["state"], FG), width=lw - (sx - ix), tags=tags)
@@ -3047,9 +3086,9 @@ def run_gui():
                 session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
                 canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
             yy += max(h, 18 if r["state"] == "in" else 0)
-            if r.get("tv") and r["state"] == "in":
-                _, h = ctext(tx, yy, "on " + r["tv"], FONTS["small"], DIM, width=lw - (tx - ix), tags=tags)
-                yy += h
+            if r.get("tv") and r["state"] == "pre":
+                tv_badges(tx, yy + 2, r["tv"], tags)
+                yy += 18
             if urls:
                 yy = max(yy, y_head + len(urls) * (lg_size + 2))  # the logo spans name, opponent and status lines
             if bb:
@@ -4105,7 +4144,7 @@ def demo_data():
             else {"at": time.time(), "secs": int(cm.group(3)) * 60 - 30, "up": True, "minute": int(cm.group(3))})
         return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/", "clock": clock,
                 "score": score, "status": status, "win": wbar, "next": next_line,
-                "tv": {"nfl": "FOX", "mlb": "TBS", "nba": "ESPN \u00b7 ABC", "nhl": "TNT"}.get(league, "") if state == "in" else "",
+                "tv": {"nfl": "FOX", "mlb": "TBS", "nba": "ESPN \u00b7 ABC", "nhl": "TNT"}.get(league, "") if state in ("in", "pre") else "",
                 "teams": comp_teams(comp, (comp.get("competitors") or [None])[0]) if state != "none" else [],
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
@@ -4147,6 +4186,7 @@ def demo_leagues():
         m = re.match(r"^(\d+)-(\d+)\s+(.*)$", detail)
         return {"score": (m.group(1), m.group(2)) if m else None, "status": m.group(3) if m else detail,
                 "name": name, "state": state, "line": "", "league": lg, "detail": detail,
+                "tv": {"MLB": "TBS \u00b7 Peacock", "NFL": "FOX", "NBA": "ESPN \u00b7 ABC"}.get(lg, "") if state != "post" else "",
                                                "tint": tint, "info": "", "graphic": None, "_key": (lg, name),
                                                "teams": [{"logo": None, "ha": h, "abbr": t.split()[-1][:3].upper()}
                                                          for h, t in zip(("away", "home"), name.split(" @ "))],
