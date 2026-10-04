@@ -2298,7 +2298,7 @@ def run_gui():
             h += 2 + graphic_one(ox, oy + h + 2, g, bg, int(W))
         return h
 
-    def draw_details(x, y, w, bgc, d, win_shown=False):
+    def draw_details(x, y, w, bgc, d, win_shown=False):  # win_shown: no win probability here (shown on the card, or game over)
         """Expanded-game section; returns its height."""
         y0 = y
         if d is None:
@@ -2333,7 +2333,7 @@ def run_gui():
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 y += h
-        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None or win_shown):
+        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None and not win_shown):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
             y += h
         return y - y0
@@ -2616,7 +2616,7 @@ def run_gui():
         if g and gkey(g) in session["expanded"]:
             key = "game:" + gkey(g)
             y0 = yy
-            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)), bool(r.get("win")))
+            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)), bool(r.get("win")) or r["state"] == "post")
             yy = y0 + H  # always drawn at full height; an animation only moves things afterwards
             if key in session["anims"]:
                 cover = canvas.create_rectangle(cx0 - 1, yy + GAP, cx0 + cw_ + 1, yy + GAP + 3, fill=BG, outline="")
