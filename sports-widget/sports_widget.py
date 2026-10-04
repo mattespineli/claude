@@ -4174,11 +4174,12 @@ def run_gui():
     def height_setup(cw, total):
         """After a full redraw: start easing each card whose height changed, and group the items below each card."""
         now, shows, recs = _time.perf_counter(), session["hshow"], session["hcards"]
+        snap = session.pop("h_snap", False) or bool(session["anims"])
         live = {}
         for rec in recs:
             h = rec["bottom"] - rec["top"]
             st = shows.get(rec["k"])
-            if st is None or session["anims"]:  # new card, or an expand/collapse is animating it already
+            if st is None or snap:  # new card, or an expand/collapse is animating (or just animated) it already
                 st = {"v0": h, "v1": h, "t0": now - HEIGHT_SECS}
             elif h != st["v1"]:
                 st = {"v0": height_now(st, now), "v1": h, "t0": now}
@@ -4269,6 +4270,7 @@ def run_gui():
         canvas.configure(scrollregion=(0, 0, ctx["cw"], session["total"] + int(dy)))
 
     def finish_anim(key):
+        session["h_snap"] = True  # the expand / collapse already eased the card's height: the next redraw must not again
         cb = session["anims"].pop(key).get("on_done")
         if cb:
             cb()
