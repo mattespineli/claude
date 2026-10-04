@@ -4443,7 +4443,7 @@ def run_gui():
             sizes = (5, 10, 14, 19, 25)  # pt for 0 (where it grows in from), 1, 2, 3 and 4+ runs
             now_s, was_s = sizes[min(scored, 4)], sizes[min(scored, 4) - 1]
             age = min(arrivals)  # seconds since the latest run scored
-            size = was_s + (now_s - was_s) * ease(min(1.0, age / 0.35))
+            size = now_s if scored == 1 else was_s + (now_s - was_s) * ease(min(1.0, age / 0.35))  # the 1 just appears (and shakes)
             shake = max(0.0, 1 - age / 0.45)
             canvas.create_text(cx + 4 * shake * math.sin(age * 70), cy + 2 * shake * math.cos(age * 85), text=str(scored),
                                font=("Segoe UI", max(6, int(round(size))), "bold"), fill=blend(bg, fill, a), tags=lay["tag"])
