@@ -2999,7 +2999,8 @@ def run_gui():
                     y += h
         if d.get("box"):
             y += draw_box(x, y, w, bgc, d, g)
-        if d["stats"]:
+        show_stats = bool(d["stats"]) and not (g and g.get("sport") == "baseball")  # baseball's team stats just repeat the box score
+        if show_stats:
             _, h = ctext(x, y + 4, "Team stats", FONTS["smallb"], DIM)
             y += 4 + h
             mid = x + w / 2  # away value at the left edge, home value at the right edge, label centred between
@@ -3016,7 +3017,7 @@ def run_gui():
                 if n_ % 2 == 0:
                     stripe(x, y, w, h, bgc, first)
                 y += h
-        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("box") or d.get("linescore") or d.get("home_win_start") is not None
+        if not (d["plays"] or d["scoring"] or show_stats or d.get("box") or d.get("linescore") or d.get("home_win_start") is not None
                 or d.get("home_win") is not None and not win_shown):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
             y += h
