@@ -55,10 +55,10 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|aa".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|aa8".encode()).hexdigest()[:16] + ".png")
 
 
-LOGO_SS = 4  # logos are fetched this many times larger and averaged down, which antialiases the edges
+LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
 
 
 def _png_rgba(data):
@@ -136,23 +136,27 @@ def _shrink_png(data, f):
         return None
     w, h, px = dec
     ow, oh = w // f, h // f
-    out = bytearray()
-    for oy in range(oh):
+    cols = []  # horizontal pass: per source row, f-pixel sums of (r*a, g*a, b*a, a)
+    for y in range(oh * f):
+        row = []
+        base = y * w * 4
         for ox in range(ow):
             r = g = b = a = 0
-            for dy in range(f):
-                base = ((oy * f + dy) * w + ox * f) * 4
-                for dx in range(f):
-                    i = base + dx * 4
-                    al = px[i + 3]
-                    r += px[i] * al
-                    g += px[i + 1] * al
-                    b += px[i + 2] * al
-                    a += al
-            if a:
-                out += bytes((r // a, g // a, b // a, a // (f * f)))
-            else:
-                out += b"\x00\x00\x00\x00"
+            for i in range(base + ox * f * 4, base + (ox + 1) * f * 4, 4):
+                al = px[i + 3]
+                r += px[i] * al
+                g += px[i + 1] * al
+                b += px[i + 2] * al
+                a += al
+            row += (r, g, b, a)
+        cols.append(row)
+    out = bytearray()
+    for oy in range(oh):  # vertical pass: f rows added together
+        rows = cols[oy * f:(oy + 1) * f]
+        for ox in range(ow):
+            k = ox * 4
+            r, g, b, a = (sum(rw[k + c] for rw in rows) for c in range(4))
+            out += bytes((r // a, g // a, b // a, a // (f * f))) if a else b"\x00\x00\x00\x00"
     return _png_bytes(ow, oh, out)
 
 
