@@ -754,7 +754,7 @@ def _flat_stats(team_entry):
             val = st.get("displayValue", st.get("value"))
             if val in (None, ""):
                 continue
-            label = st.get("abbreviation") or st.get("shortDisplayName") or st.get("label") or st.get("displayName") or st.get("name")
+            label = st.get("displayName") or st.get("shortDisplayName") or st.get("label") or st.get("abbreviation") or st.get("name")
             out[f"{prefix}{st.get('name') or label}"] = (f"{prefix}{label}", str(val))
     return out
 
@@ -769,6 +769,12 @@ BOX_COLS = {
     "forwards": ["G", "A", "+/-", "S", "TOI"], "defenses": ["G", "A", "+/-", "S", "TOI"], "goalies": ["SA", "SV", "GA", "SV%"],
     "": ["MIN", "PTS", "REB", "AST", "STL", "BLK"],  # basketball: one unnamed category
 }
+# Column titles spelled out where the box score has the room (it falls back to ESPN's short form column by column)
+FULL_COLS = {"C/ATT": "Comp/Att", "YDS": "Yards", "CAR": "Carries", "REC": "Catches", "LONG": "Longest", "TOT": "Tackles", "SACKS": "Sacks",
+             "TFL": "TFL", "PD": "Pass Def", "INT": "Int", "FUM": "Fumbles", "LOST": "Lost", "PCT": "Pct", "NO": "Number", "AVG": "Average",
+             "AB": "At Bats", "R": "Runs", "H": "Hits", "BB": "Walks", "K": "Strikeouts", "IP": "Innings", "ER": "Earned", "G": "Goals",
+             "A": "Assists", "S": "Shots", "TOI": "Ice Time", "SA": "Shots Against", "SV": "Saves", "GA": "Goals Against", "SV%": "Save %",
+             "MIN": "Minutes", "PTS": "Points", "REB": "Rebounds", "AST": "Assists", "STL": "Steals", "BLK": "Blocks"}
 BOX_SHOW = ("passing", "rushing", "receiving", "defensive", "kicking", "batting", "pitching", "forwards", "defenses", "goalies", "")
 
 
@@ -3002,6 +3008,9 @@ def run_gui():
             y += h
             for n_, (label, a_, h_) in enumerate(d["stats"]):
                 first, _ = ctext(x, y, a_, FONTS["small"], FG, anchor="nw")
+                room_ = w - 2 * max(text_width(FONTS["small"], a_), text_width(FONTS["small"], h_)) - 16  # spelled out while it fits
+                while len(label) > 4 and text_width(FONTS["small"], label) > room_:
+                    label = label.rstrip("\u2026")[:-1] + "\u2026"
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 if n_ % 2 == 0:
@@ -3040,12 +3049,18 @@ def run_gui():
         for cat in d["box"][side]:
             cols = cat["cols"]
             vals = [r_[1] for r_ in cat["rows"]] + ([cat["totals"]] if cat["totals"] else [])
-            cw = [max([text_width(FONTS["smallb"], c)] + [text_width(FONTS["small"], v[j]) for v in vals if j < len(v)]) + 8
-                  for j, c in enumerate(cols)]
+            valw = [max([text_width(FONTS["small"], v[j]) for v in vals if j < len(v)] or [0]) for j in range(len(cols))]
+            disp = [FULL_COLS.get(c, c) for c in cols]
+            widths = lambda ds: [max(text_width(FONTS["smallb"], d_), valw[j]) + 8 for j, d_ in enumerate(ds)]
+            while w - sum(widths(disp)) < 90 and any(disp[j] != cols[j] for j in range(len(cols))):  # keep room for the player names
+                j = max((j for j in range(len(cols)) if disp[j] != cols[j]),
+                        key=lambda j: text_width(FONTS["smallb"], disp[j]) - text_width(FONTS["smallb"], cols[j]))
+                disp[j] = cols[j]
+            cw = widths(disp)
             name_w = w - sum(cw)
             ctext(x, y + 2, cat["title"], FONTS["smallb"], FG)
             xr = x + w
-            for c, wd in zip(reversed(cols), reversed(cw)):
+            for c, wd in zip(reversed(disp), reversed(cw)):
                 ctext(xr, y + 2, c, FONTS["smallb"], DIM, anchor="ne")
                 xr -= wd
             y += 18
