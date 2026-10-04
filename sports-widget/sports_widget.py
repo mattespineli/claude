@@ -1072,7 +1072,7 @@ def comp_teams(comp, first=None):
     else:
         away = next((c for c in cs if c.get("homeAway") == "away"), None)
         order = [away, [c for c in cs if c is not away][0]] if away else list(cs)
-    return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""), "record": _record(c).strip(" ()"),
+    return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""), "record": _record(c).strip(" ()"), "id": str((c.get("team") or {}).get("id", c.get("id", ""))),
              "color": team_colors(c, "#34d399"),
              "abbr": (c.get("team") or {}).get("abbreviation") or (c.get("athlete") or {}).get("shortName") or "?"}
             for c in order]
@@ -1166,7 +1166,7 @@ def situation_graphic(sport, comp, league=""):
     sit = comp.get("situation") or {}
     last = str((sit.get("lastPlay") or {}).get("text") or "").strip()  # what just happened (Scoreboard layout)
     if last and not _halftime(comp):
-        out.append({"kind": "lastplay", "text": last})
+        out.append({"kind": "lastplay", "text": last, "team": str(((sit.get("lastPlay") or {}).get("team") or {}).get("id", ""))})
     # per-team remaining timeouts / ABS challenges: dots under each team in the Scoreboard layout
     def side(k, words):  # a team's count, or None when ESPN leaves it out (which is not the same as 0)
         for key, v in sit.items():
@@ -2471,7 +2471,8 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}}
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {},
+               "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -3046,8 +3047,7 @@ def run_gui():
             yy = top
             img = logo_img(t["logo"], lg) if t.get("logo") else None
             if ce and i == ce["side"]:
-                draw_rings(cx, yy + lg / 2, lg / 2, ce, ct, bgc,
-                           (cx0 + 1, top - GAP + 1, cx0 + cw_ - 1, top + max(nat, mh) + GAP - 1))
+                session["ring_center"] = (cx, yy + lg / 2, lg / 2)
             if img:
                 canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
             yy += lg + 2 + gap
@@ -3085,7 +3085,7 @@ def run_gui():
         return yy, "\n".join(lines)
 
     # ---- scoring celebrations: a ring pulse or card flash, plus a banner with the play ----------------
-    BANNER_SECS, GRAND_SECS, RING_SECS, FLASH_SECS, CONFETTI_SECS = 5.0, 7.0, 0.9, 1.2, 2.8
+    BANNER_SECS, GRAND_SECS, RING_SECS, FLASH_SECS = 5.0, 7.0, 1.3, 1.2
     GOLD = "#fbbf24"
 
     def card_key(r):
@@ -3181,18 +3181,14 @@ def run_gui():
 
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None):
         """Start a celebration (animation + optional sound) on card k."""
-        import random
         now = _time.perf_counter()
         teams = r.get("teams") or []
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
-        rnd = random.Random(now)
         session["celebs"][k] = {
             "t0": now, "side": side if t else 0, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#34d399",
             "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
-            "grand": grand, "run": run, "tag": tag, "secs": secs,
-            "bits": [(rnd.uniform(0.15, 0.85) * 3.14159, rnd.uniform(110, 330), rnd.choice((3, 4, 5)),
-                      rnd.choice((GOLD, "#ffffff", t.get("color") or "#34d399", "#f87171", "#34d399")))
-                     for _ in range(48 if grand else 0)]}
+            "grand": grand, "run": run, "tag": tag, "secs": secs}
+        session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
         if sound:
             play_sound(sound)
         if not session["celeb_on"]:
@@ -3238,6 +3234,7 @@ def run_gui():
             prev = session["score_prev"].get(k)
             seen[k] = (cur[0], cur[1], loaded)
             ptext = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
+            ptid = next((g_.get("team", "") for g_ in gl if g_["kind"] == "lastplay"), "")
             plays[k] = ptext
             wv = (r.get("win") or {}).get("a")
             if wv is not None:
@@ -3251,7 +3248,7 @@ def run_gui():
                 before, after = prev[0] - prev[1], cur[0] - cur[1]
                 tag = ("TIES IT UP" if after == 0 else "TAKES THE LEAD" if before * after < 0 or (before == 0 and after != 0) else "")
                 grand = head == "GRAND SLAM!"
-                make_event(r, k, side, head, GOLD if grand else None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
+                make_event(r, k, side, head, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
                            banner=banner or bool(tag), grand=grand, run=sport == "baseball", tag=tag,
                            sound="grand" if grand else "score")
                 if not banner and tag:  # a basket that changes the lead: say that instead
@@ -3261,9 +3258,10 @@ def run_gui():
             old = session["play_prev"].get(k)  # nobody scored: a big play?
             big = classify_play(sport, ptext) if old is not None and ptext and ptext != old else None
             if big and k not in session["celebs"]:
-                make_event(r, k, 0, big[0], big[1], big[2], "play", ptext, sound="turnover" if big[0] in (
+                tm = r.get("teams") or []
+                pside = next((i_ for i_, t_ in enumerate(tm) if ptid and t_.get("id") == ptid), 0)  # the team the play belongs to
+                make_event(r, k, pside, big[0], None, big[2], "play", ptext, sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") else None)
-                session["celebs"][k]["abbr"] = ""
                 continue
             old_w = session["win_prev"].get(k)  # or a big swing in win probability
             if wv is not None and old_w is not None and abs(wv - old_w) >= 25 and k not in session["celebs"]:
@@ -3354,12 +3352,10 @@ def run_gui():
         mode = ui_state.get("score_anim", "pulse")
         mode = "pulse" if mode == "off" else mode
         scoring = kind in ("score", "run", "grand")
-        make_event(r, k, 0, head, color, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
+        make_event(r, k, 0, head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
                    mode if scoring else "play", "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final"}.get(kind))
-        if not scoring:
-            session["celebs"][k]["abbr"] = r["teams"][0]["abbr"] if kind in ("swing", "final") else ""
 
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
@@ -3370,45 +3366,78 @@ def run_gui():
             styled_button(f, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 2, column=i % 2, padx=4, pady=3, sticky="w")
         return f
 
+    def celeb_frame():
+        """One cheap animation frame: recolor the banner / crossfade / flash and redraw the ripple. No full redraw."""
+        now = _time.perf_counter()
+        for lay in session["layers"].values():
+            ce = lay["ce"]
+            t = now - ce["t0"]
+            if t >= ce["secs"]:
+                continue
+            bgc = lay["bgc"]
+            a = banner_alpha(ce, t)
+            try:
+                for i_, col in lay["banner"]:
+                    canvas.itemconfigure(i_, fill=blend(bgc, col, a))
+                for i_, opt, base in lay["fade"]:
+                    canvas.itemconfigure(i_, **{opt: blend(bgc, base, 1 - a)})
+                if lay["flash"]:
+                    bgid, hit, base = lay["flash"]
+                    col = blend(base, ce["color"], 0.5 * max(0.0, 1 - t / FLASH_SECS) ** 2)
+                    for i_ in (bgid, hit):
+                        if i_:
+                            canvas.itemconfigure(i_, fill=col, **({"outline": col} if i_ == bgid else {}))
+                canvas.delete(lay["tag"])
+                if lay["ring"]:
+                    draw_rings(*lay["ring"][0], ce, t, bgc, lay["ring"][1], lay["tag"])
+            except tk.TclError:
+                pass
+
     def celeb_tick():
         now = _time.perf_counter()
         live = {k: e for k, e in session["celebs"].items() if now - e["t0"] < e["secs"]}
         finished = len(live) != len(session["celebs"])
         session["celebs"] = live
-        if not session["anims"] or finished:
+        if session["anims"]:
+            pass  # an expand / collapse is running; it redraws everything itself
+        elif finished or session["celeb_dirty"]:
+            session["celeb_dirty"] = False
             draw_all()
+        else:
+            celeb_frame()
         if live:
-            root.after(40, celeb_tick)
+            root.after(25, celeb_tick)
         else:
             session["celeb_on"] = False
 
-    def draw_rings(cx, cy, rad, ce, t, bgc, bounds):
-        """Rings expanding from a logo in the scoring team's color, kept inside the card (x0, y0, x1, y1)."""
+    def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
+        """A ripple spreading from a logo across the whole card (three rings, clipped to the card x0, y0, x1, y1)."""
         if ce["mode"] != "pulse" and not ce["grand"]:
             return
         x0, y0, x1, y1 = bounds
-        for delay in (0.0, 0.22):
+        rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
+        for delay in (0.0, 0.25, 0.5):
             pp = (t - delay) / RING_SECS
             if not 0 <= pp <= 1:
                 continue
-            r_ = rad + 4 + 26 * (1 - (1 - pp) ** 2)
-            pts = [(cx + r_ * math.cos(a_ * math.pi / 36), cy + r_ * math.sin(a_ * math.pi / 36)) for a_ in range(72)]
+            r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pp) ** 2)
+            pts = [(cx + r_ * math.cos(a_ * math.pi / 45), cy + r_ * math.sin(a_ * math.pi / 45)) for a_ in range(90)]
             inside = [x0 <= px_ <= x1 and y0 <= py_ <= y1 for px_, py_ in pts]
             if not any(inside):
                 continue
             start = inside.index(False) if not all(inside) else 0  # begin outside the card so runs don't wrap around
-            order = [(start + i_) % 72 for i_ in range(72)]
+            order = [(start + i_) % 90 for i_ in range(90)]
             run = []
-            col, wd = blend(bgc, ce["color"], 0.95 * (1 - pp)), 3 if pp < 0.5 else 2
+            col, wd = blend(bgc, ce["color"], 0.9 * (1 - pp) ** 1.5), 3 if pp < 0.5 else 2
             for i_ in order + [order[0]] if all(inside) else order:
                 if inside[i_]:
                     run.append(pts[i_])
                 else:
                     if len(run) > 1:
-                        canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd)
+                        canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd, tags=(tag,))
                     run = []
             if len(run) > 1:
-                canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd)
+                canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd, tags=(tag,))
 
     def banner_alpha(ce, t):
         """0..1 visibility of a banner: eased (smoothstep) fades, slower out than in."""
@@ -3423,43 +3452,47 @@ def run_gui():
                     c_ = canvas.itemcget(i_, opt)
                     if len(c_) == 7 and c_.startswith("#"):
                         canvas.itemconfigure(i_, **{opt: blend(bgc, c_, f)})
+                        if session["cur_layer"]:
+                            session["cur_layer"]["fade"].append((i_, opt, c_))
                 except tk.TclError:
                     pass
 
     def draw_banner(cx, y0, y1, w, ce, t, bgc):
         """The scoring banner centred in the box (y0..y1): team, what happened, the play. Fades in and out."""
         a = banner_alpha(ce, t)
+        lay = session["cur_layer"]
         n0_ = len(canvas.find_all())
         y = y0
+        parts = []  # (text item, its full-strength color): the frames recolor these as the banner fades
         if ce["abbr"]:
-            _, h = ctext(cx, y, ce["abbr"], FONTS["smallb"], blend(bgc, FG, a * 0.7), anchor="n")
+            col = blend(bgc, FG, 0.7)
+            i_, h = ctext(cx, y, ce["abbr"], FONTS["smallb"], blend(bgc, col, a), anchor="n")
+            parts.append((i_, col))
             y += h
-        _, h = ctext(cx, y, ce["head"], FONTS["ban"], blend(bgc, blend(ce["color"], "#ffffff", 0.3), a), anchor="n")
+        col = blend(ce["color"], "#ffffff", 0.2)
+        i_, h = ctext(cx, y, ce["head"], FONTS["ban"], blend(bgc, col, a), anchor="n")
+        parts.append((i_, col))
         y += h
         if ce["detail"]:
-            _, h = ctext(cx, y + 2, ce["detail"], FONTS["small"], blend(bgc, FG, a * 0.9), width=w, anchor="n", justify="center")
+            col = blend(bgc, FG, 0.9)
+            i_, h = ctext(cx, y + 2, ce["detail"], FONTS["small"], blend(bgc, col, a), width=w, anchor="n", justify="center")
+            parts.append((i_, col))
             y += 2 + h
         shift = (y1 - y0 - (y - y0)) / 2
         for i_ in canvas.find_all()[n0_:]:
             canvas.move(i_, 0, max(shift, 0))
-
-    def draw_confetti(x0, x1, y0, y1, ce, t):
-        """A grand slam: a burst of confetti from the middle of the card."""
-        if not ce["grand"] or t > CONFETTI_SECS:
-            return
-        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
-        for ang, speed, size, col in ce["bits"]:
-            x = cx + speed * math.cos(ang) * t
-            y = cy - speed * math.sin(ang) * t * 0.7 + 260 * t * t
-            if x0 <= x <= x1 and y0 <= y <= y1:
-                sz = size * (1 - max(0.0, t - CONFETTI_SECS + 0.6) / 0.6)
-                canvas.create_rectangle(x - sz, y - sz, x + sz, y + sz, fill=col, outline="")
+        if lay:
+            lay["banner"] += parts
 
     def draw_card(r, x, y, w, final):
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
         ce, ct = celeb_of(r)  # this card's team just scored
         session["cur_celeb"] = (ce, ct)
+        base_bgc = bgc
+        lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
+               "tag": f"fx{len(session['layers'])}"} if ce else None
+        session["cur_layer"], session["ring_center"] = lay, None
         flashing = bool(ce) and ce["mode"] == "flash" and ct < FLASH_SECS
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
@@ -3471,6 +3504,8 @@ def run_gui():
         hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
         yy = y + GAP
+        if flashing:
+            lay["flash"] = (bgid, hit, base_bgc)
         sc = r.get("score")
         gl = r.get("graphic") or []
         gl = [gl] if isinstance(gl, dict) else gl
@@ -3510,8 +3545,7 @@ def run_gui():
                 if img:
                     canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
                 if ce and i == (ce["side"] if len(urls) == 2 else (0 if ce["side"] == 0 else -1)):
-                    draw_rings(ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2, ce, ct, bgc,
-                               (cx0 + 1, y + 1, cx0 + cw_ - 1, y + GAP + len(urls) * (lg_size + 2) + 10))
+                    session["ring_center"] = (ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2)
             n_head = len(canvas.find_all())
             _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
             y_head = yy
@@ -3582,7 +3616,12 @@ def run_gui():
                        "bg": bgid, "hit": hit, "geo": (cx0, y, cx0 + cw_), "dy": 0}
         bottom = yy + GAP
         if ce:
-            draw_confetti(cx0, cx0 + cw_, y, bottom, ce, ct)
+            bounds = (cx0 + 1, y + 1, cx0 + cw_ - 1, bottom - 1)
+            lay["ring"] = (session["ring_center"], bounds) if session["ring_center"] else None
+            if lay["ring"]:
+                draw_rings(*session["ring_center"], ce, ct, base_bgc, bounds, lay["tag"])
+            session["layers"][card_key(r)] = lay
+            session["cur_layer"] = None
         if clutch_of(r) or session["force_clutch"].get(card_key(r), 0) > _time.perf_counter():
             pid = canvas.create_polygon(rr_points(cx0 + 1, y + 1, cx0 + cw_ - 1, bottom - 1, 10), smooth=True, fill="",
                                         outline="#fb923c", width=2)
@@ -3798,6 +3837,7 @@ def run_gui():
         session["roll_cells"].clear()
         session["clock_items"].clear()
         session["pulse_items"].clear()
+        session["layers"].clear()
         session["actx"] = None
         cw = max(canvas.winfo_width(), MIN_BODY_W)
         y = draw_nodes(build_nodes(), 0, 2, cw, final)
