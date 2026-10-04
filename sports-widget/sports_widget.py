@@ -58,25 +58,40 @@ def logo_path(url, size):
     return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}".encode()).hexdigest()[:16] + ".png")
 
 
+def _fetch_logo(src, size):
+    req = urllib.request.Request(f"https://a.espncdn.com/combiner/i?img={src}&w={size}&h={size}",
+                                 headers={"User-Agent": "sports-widget/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        body = r.read()
+    return body if body.startswith(b"\x89PNG") else None
+
+
 def logo_file(url, size):
-    """Local PNG of a team logo scaled to size x size px (ESPN's image resizer), downloaded once; None on failure."""
+    """Local PNG of a team logo scaled to size x size px (ESPN's image resizer), downloaded once; None on failure.
+
+    ESPN's "500-dark" variant is made for dark backgrounds (dark logos stay visible), so it is tried first.
+    """
     path = logo_path(url, size)
     if os.path.exists(path):
         return path
+    src = re.sub(r"^https?://[^/]+", "", url)
+    body = None
+    for cand in ([src.replace("/500/", "/500-dark/")] if "/500/" in src else []) + [src]:
+        try:
+            body = _fetch_logo(cand, size)
+        except Exception:
+            body = None
+        if body:
+            break
+    if not body:
+        return None
     try:
-        src = re.sub(r"^https?://[^/]+", "", url)
-        req = urllib.request.Request(f"https://a.espncdn.com/combiner/i?img={src}&w={size}&h={size}",
-                                     headers={"User-Agent": "sports-widget/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as r:
-            body = r.read()
-        if not body.startswith(b"\x89PNG"):
-            return None
         os.makedirs(LOGO_DIR, exist_ok=True)
         with open(path + ".part", "wb") as f:
             f.write(body)
         os.replace(path + ".part", path)
         return path
-    except Exception:
+    except OSError:
         return None
 
 
