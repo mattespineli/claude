@@ -2755,7 +2755,7 @@ def run_gui():
             session["shown"][key] = target
             if not session["tween_on"]:
                 session["tween_on"] = True
-                root.after(1, tween_tick)
+                root.after(1, run_in, session.get("view"), tween_tick)
         if tw:
             p = (now - tw["t0"]) / tw["dur"]
             if p >= 1:
@@ -2782,7 +2782,7 @@ def run_gui():
             if p >= 1:
                 session["tweens"].pop(key, None)
         if session["tweens"]:
-            root.after(frame_delay(now), tween_tick)
+            root.after(frame_delay(now), run_in, session.get("view"), tween_tick)
         else:
             session["tween_on"] = False
 
@@ -2864,8 +2864,6 @@ def run_gui():
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
             c.create_polygon(18, 31, 24, 31, 24, 34, 21, 37, 18, 34, fill=bg, outline=DIM)  # home plate
             ce_, ct_ = session["cur_celeb"]
-            if ce_ and ce_.get("run") and session["cur_layer"] is not None:  # the runner's path is drawn per frame (see celeb_frame)
-                session["cur_layer"]["diamond"] = (c.ox, c.oy)
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
                                                             ("O", min(g["outs"], 3), 3, "#f87171"))):
@@ -3222,7 +3220,7 @@ def run_gui():
                                             "dur": max(ROLL_MIN, min(ROLL_MAX, steps * ROLL_STEP))}
             if not session["rolling"]:
                 session["rolling"] = True
-                root.after(0, roll_tick)
+                root.after(0, run_in, session.get("view"), roll_tick)
         if not roll:
             i, _h = ctext(xr, y, text, FONTS["score"], color, anchor="ne")
             xf, lay = session["xfade"], session["cur_layer"]
@@ -3269,10 +3267,10 @@ def run_gui():
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
-    TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
+    TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "TWO-POINTER": 2, "SLAM DUNK!": 2, "SAFETY": 2,
                    "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TOUCHDOWN!": 6, "BLOCKED FIELD GOAL TOUCHDOWN!": 6}
 
-    def test_score(r, k, side, head):
+    def test_score(r, k, side, head, pts=None):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
         try:
             a_, b_ = float(r["score"][0]), float(r["score"][1])
@@ -3283,7 +3281,7 @@ def run_gui():
             new = max(mine, other)
         else:
             runs = re.match(r"(\d+)-RUN ", head)  # N-RUN SINGLE / DOUBLE / TRIPLE score N
-            new = mine + (int(runs.group(1)) if runs else TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
+            new = mine + (pts if pts is not None else int(runs.group(1)) if runs else TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
         session["test_scores"][k] = {"side": side, "text": f"{new:g}", "ce": session["celebs"].get(k)}
 
     tv = {"view": None}  # the Settings dummy card's (canvas, session), while Settings is open
@@ -3310,7 +3308,8 @@ def run_gui():
         if not ov:
             return r
         ce = session["celebs"].get(k)
-        if ce is not ov["ce"] or _time.perf_counter() - ce["t0"] >= ce["secs"]:  # over: back to the real score, no roll
+        queued = bool(session["celeb_next"].get(k))  # the test's follow-ups (runners, takes the lead...) keep its score showing
+        if not queued and (ce is None or _time.perf_counter() - ce["t0"] >= ce["secs"]):  # over: back to the real score, no roll
             del session["test_scores"][k]
             session["roll_last"][(k, ov["side"])] = str(r["score"][ov["side"]])
             session["rolls"].pop((k, ov["side"]), None)
@@ -3318,7 +3317,8 @@ def run_gui():
         sc = list(r["score"])
         real = str(sc[ov["side"]])
         sc[ov["side"]] = ov["text"]
-        return dict(r, score=sc, _real=r, _xfade=((k, ov["side"]), real))
+        last_ = ce is not None and not queued and not ce.get("chained_out")  # only the last event fades the test score back to the real one
+        return dict(r, score=sc, _real=r, **({"_xfade": ((k, ov["side"]), real)} if last_ else {}))
 
     def xfade_apply(lay, t):
         """Test score -> real score while the banner fades out: the test score fades away, then the real one fades in."""
@@ -3339,9 +3339,9 @@ def run_gui():
         for k in done:
             del session["rolls"][k]
         if done:
-            draw_all()  # finished wheels go back to plain text
+            redraw()  # finished wheels go back to plain text
         if session["rolls"]:
-            root.after(frame_delay(now), roll_tick)
+            root.after(frame_delay(now), run_in, session.get("view"), roll_tick)
         else:
             session["rolling"] = False
 
@@ -3589,22 +3589,10 @@ def run_gui():
             return {6: "TOUCHDOWN!", 7: "TOUCHDOWN!", 8: "TOUCHDOWN!", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
         if sport in ("hockey", "soccer"):
             return "GOAL!", True
-        if sport == "basketball":  # every basket would be too much: threes and lead changes only
-            if n == 3:
-                return "THREE-POINTER", True
-            before, after = prev[0] - prev[1], cur[0] - cur[1]
-            if before * after < 0 or (before == 0 and after != 0):
-                return "TAKES THE LEAD", True
-            return "", False
+        if sport == "basketball":  # shots only (no free throws); detect_scores plays them only as the lead-in to a Then animation
+            head = "SLAM DUNK!" if "dunk" in low else "THREE-POINTER" if n == 3 else "TWO-POINTER" if n == 2 else ""
+            return head, bool(head)
         return "SCORE", True
-
-    def run_path(head):
-        """Bases a baseball animation lights in turn (0-2 = 1st-3rd, 3 = home): a hit runs the batter to the base
-        it reached, a run-scoring hit then lights home, anything else that scores goes all the way round."""
-        hit = next((n_ for w_, n_ in (("SINGLE", 1), ("DOUBLE", 2), ("TRIPLE", 3)) if head.endswith(w_)), None)
-        if hit is None:
-            return [0, 1, 2, 3]
-        return list(range(hit)) + ([3] if "-RUN" in head else [])
 
     def classify_play(sport, text):
         """(headline, color, seconds) for a big play named in ESPN's last-play text, or None."""
@@ -3737,8 +3725,9 @@ def run_gui():
         return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), None)  # None: no team to attach it to
 
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None,
-                   chained_in=False, chained_out=False):
-        """Start a celebration (animation + optional sound) on card k."""
+                   chained_in=False, chained_out=False, field=None, out=None):
+        """Start a celebration (animation + optional sound) on card k. `field`: a baseball run's (head, men on, runs), drawn as
+        a little diamond instead of text; `out`: how long its fade-out takes."""
         now = _time.perf_counter()
         secs = max(secs, ripple_end(secs) + 0.4)  # long enough for the ripples to clear before the fade-out
         teams = r.get("teams") or []
@@ -3746,7 +3735,8 @@ def run_gui():
         session["celebs"][k] = {
             "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
             "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
-            "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out}
+            "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out,
+            "field": field, "out": out}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
         if sound:
             play_sound(sound)
@@ -3825,6 +3815,12 @@ def run_gui():
             return
         queue.append((args, dict(kw, chained_in=True)))
 
+    def chain_field(k, r, side, head, mode, occ=None, n=0):
+        """After a baseball run's banner has completely faded, a diamond of its own plays the runners round the bases."""
+        runners = field_runners(head, occ, n)
+        end = max(d_ + (len(p_) - 1) * FIELD_LEG for d_, p_ in runners)
+        chain_event(k, (r, k, side, "", None, end + 1.7, mode, ""), {"field": (head, occ, n), "out": 0.6})
+
     def detect_scores(groups):
         """Compare live games with the last refresh and start an animation for each card where something happened:
         a score, a big play, a swing in win probability, or the final whistle."""
@@ -3901,13 +3897,18 @@ def run_gui():
                 before, after = prev[0] - prev[1], cur[0] - cur[1]
                 tag = ("TIES IT UP" if after == 0 else "TAKES THE LEAD" if before * after < 0 or (before == 0 and after != 0) else "")
                 grand = head == "GRAND SLAM!"
+                dag = (k, side) not in session["daggers"] and is_dagger(r, side, prev, cur)  # late and out of reach now, once per team per game
+                if sport == "basketball" and banner and not (tag or dag or swing):
+                    continue  # a basket only plays as the lead-in to a Then animation
                 make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
                            banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
+                if sport == "baseball" and banner and is_field_play(head):
+                    chain_field(k, r, side, head, mode, None, int(d[side]))
                 if banner and tag and head != tag:  # the lead changing hands follows the score that did it
                     tm_ = [t_.get("abbr", "") for t_ in r.get("teams") or []]
                     line = f"{tm_[0]} {cur[0]:g} \u2013 {tm_[1]} {cur[1]:g}" if len(tm_) == 2 else ""
                     chain_event(k, (r, k, side, tag, None, FOLLOW_SECS, mode, line), {})
-                if (k, side) not in session["daggers"] and is_dagger(r, side, prev, cur):  # late and out of reach now, once per team per game
+                if dag:
                     session["daggers"].add((k, side))
                     chain_event(k, (r, k, side, "DAGGER!", None, FOLLOW_SECS, mode, ptext), {})
                 if swing:
@@ -3918,6 +3919,8 @@ def run_gui():
             if (not big and m4 and fb_ and session["down_prev"].get(k) == 4 and downs.get(k) == 1 and session["poss_prev"].get(k)
                     and session["poss_prev"][k] != fb_["off"] and not re.search(r"punt|field goal|kick|intercept|fumble", ptext.lower())):
                 big = ("TURNOVER ON DOWNS!", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
+            if big and sport == "basketball" and not swing:
+                big = None  # blocks and steals only play as the lead-in to a Then animation
             if big and k not in session["celebs"]:
                 side = (kick_side(r, big[0], ptext, session["poss_prev"].get(k)) if big[0] in KICK_PLAYS
                         else acting_side(r, big[0], ptid))
@@ -3929,6 +3932,8 @@ def run_gui():
                         side = tm_.index(pm.group(1).upper())
                 make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS!") + KICK_PLAYS else None)
+                if sport == "baseball" and big[0] in ("SINGLE", "DOUBLE", "TRIPLE"):
+                    chain_field(k, r, side, big[0], mode)
                 if big[0] == "FUMBLE":  # then who recovered it
                     rec = recovery_side(r, ptext)
                     if rec is not None:
@@ -3948,7 +3953,7 @@ def run_gui():
     def start_pulse():
         if not session["pulse_on"]:
             session["pulse_on"] = True
-            root.after(FRAME_MS, pulse_tick)
+            root.after(FRAME_MS, run_in, session.get("view"), pulse_tick)
 
     def pulse_tick():
         """Breathe the outline of the clutch border / red-zone glow items (no redraw: only their colors change)."""
@@ -3962,7 +3967,7 @@ def run_gui():
                 canvas.itemconfigure(i, outline=blend(bgc, col, 0.3 + 0.65 * k))
             except tk.TclError:
                 pass
-        root.after(FRAME_MS, pulse_tick)
+        root.after(FRAME_MS, run_in, session.get("view"), pulse_tick)
 
     def clutch_of(r):
         """A close game in its closing minutes (or extra innings): the card gets a pulsing border."""
@@ -3987,7 +3992,7 @@ def run_gui():
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
     TESTS = [("Touchdown", "TOUCHDOWN!", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
              ("Home run", "HOME RUN!", "run", None), ("Inside-the-park HR", "INSIDE THE PARK HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
-             ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX!", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
+             ("Three-pointer", "THREE-POINTER", "score", None), ("Two-pointer", "TWO-POINTER", "score", None), ("Slam dunk", "SLAM DUNK!", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX!", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
@@ -4016,9 +4021,25 @@ def run_gui():
         r = session["dummy"]
         shown = [(0, r)]
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
-        runs = MAIN.get("test_runs", 0)
-        if head in ("SINGLE", "DOUBLE", "TRIPLE") and runs:  # a hit that scores N runs
-            head, kind = f"{runs}-RUN {head}", "run"
+        if session.get("sport") == "Basketball" and head in ("THREE-POINTER", "TWO-POINTER", "SLAM DUNK!", "BLOCK", "STEAL") and not MAIN.get("test_follow"):
+            return "Basketball plays this only as the lead-in to a Then animation. Pick one above."
+        gb_ = next((g_ for g_ in ([r["graphic"]] if isinstance(r.get("graphic"), dict) else r.get("graphic") or []) if g_["kind"] == "baseball"), None)
+        occ = tuple(gb_["bases"]) if gb_ else None  # the men on base decide the runs
+        runs = None
+        if occ:
+            c_ = sum(occ)
+            if head == "GRAND SLAM!":
+                occ, runs = (True, True, True), 4
+            elif head in ("HOME RUN!", "INSIDE THE PARK HOME RUN!"):
+                runs = 1 + c_
+                if c_ == 3 and head == "HOME RUN!":
+                    head, kind = "GRAND SLAM!", "grand"
+            elif head in ("SINGLE", "DOUBLE", "TRIPLE"):  # a single scores the runners on 2nd and 3rd, a double or triple everyone
+                runs = occ[1] + occ[2] if head == "SINGLE" else c_
+                if runs:
+                    head, kind = f"{runs}-RUN {head}", "run"
+            elif head == "RUN SCORES":
+                runs = 1
         if kind == "redzone":  # needs a card with the football field strip
             def has_field(r_):
                 gl_ = r_.get("graphic") or []
@@ -4044,6 +4065,8 @@ def run_gui():
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
         session["celeb_next"].pop(k, None)
+        if occ is not None and is_field_play(head):  # the runners go round once the banner has faded
+            chain_field(k, r, side, head, mode, occ, runs or 0)
         follows = list(MAIN.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
         for follow in follows:
             fside = mine if side is not None else None  # follow-ups play for the same team
@@ -4052,7 +4075,7 @@ def run_gui():
         session["test_scores"].pop(k, None)
         if scoring and side is not None and r.get("score"):
             lead = next((f_ for f_ in follows if f_ in ("TAKES THE LEAD", "TIES IT UP")), None)
-            test_score(r, k, side, lead or head)
+            test_score(r, k, side, lead or head, runs if runs is not None and not lead else None)
 
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
@@ -4082,14 +4105,13 @@ def run_gui():
                          ("Ball", "poss", (("SF", "SF"), ("DAL", "DAL")))],
             "Baseball": [("Men on", "bases", ("1st", "2nd", "3rd")), ("Outs", "outs", (("0", 0), ("1", 1), ("2", 2))),
                          ("Balls", "balls", tuple((str(i), i) for i in range(4))), ("Strikes", "strikes", tuple((str(i), i) for i in range(3))), MINE_,
-                         ("Half", "half", (("Top", "Top"), ("Bottom", "Bot"))), ("Inning", "inning", (("1st", 1), ("7th", 7), ("9th", 9))), LEAD_,
-                         ("Runs", "runs", tuple((str(i), i) for i in range(5)))],  # runs a Single / Double / Triple test scores
+                         ("Half", "half", (("Top", "Top"), ("Bottom", "Bot"))), ("Inning", "inning", (("1st", 1), ("7th", 7), ("9th", 9))), LEAD_],
             "Basketball": [MINE_, LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("8:00", "8:00"), ("4:00", "4:00"), ("1:30", "1:30")))],
             "Hockey": [MINE_, LEAD_, QTR_("Period", 3), ("Clock", "clock", (("15:00", "15:00"), ("10:00", "10:00"), ("2:00", "2:00"))),
                        ("Power play", "pp", (("On", True), ("Off", False)))],
             "Soccer": [MINE_, LEAD_, ("Minute", "min", (("20'", 20), ("67'", 67), ("85'", 85))), ("Red card", "red", (("On", True), ("Off", False)))]}
         DEFAULTS_ = {"Football": {"mine": 0, "lead": "close", "q": 3, "clock": "4:10", "down": 3, "dist": 4, "field": "mid", "poss": "SF"},
-                     "Baseball": {"mine": 0, "bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close", "runs": MAIN.get("test_runs", 0)},
+                     "Baseball": {"mine": 0, "bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close"},
                      "Basketball": {"mine": 0, "lead": "close", "q": 3, "clock": "4:00"},
                      "Hockey": {"mine": 0, "lead": "close", "q": 2, "clock": "10:00", "pp": True},
                      "Soccer": {"mine": 0, "lead": "close", "min": 67, "red": True}}
@@ -4101,13 +4123,14 @@ def run_gui():
             lg_ = {"Football": "nfl", "Baseball": "mlb", "Basketball": "nba", "Hockey": "nhl"}.get(sport_)
             for t_ in row_.get("teams") or []:
                 if lg_ and not t_.get("logo"):
-                    t_["logo"] = f"https://a.espncdn.com/i/teamlogos/{lg_}/500/{t_['abbr'].lower()}.png"
+                    t_["logo"] = f"https://a.espncdn.com/i/teamlogos/{lg_}/500/{ {'SFG': 'sf'}.get(t_['abbr'], t_['abbr'].lower()) }.png"
             return row_
 
         def show_dummy(rebuild=True):
             def go():
                 if rebuild:
                     tsession["dummy"] = build_dummy(sport_var.get())
+                    tsession["sport"] = sport_var.get()
                     for key in ("celebs", "celeb_next", "test_scores", "force_clutch", "force_red", "daggers"):
                         tsession[key].clear()
                 draw_test()
@@ -4138,8 +4161,6 @@ def run_gui():
                             st_[k_][v_] = not st_[k_][v_]
                         else:
                             st_[k_] = v_
-                            if k_ == "runs":
-                                MAIN["test_runs"] = v_
                             if k_ == "mine":  # one choice for every sport
                                 tsession["mine"] = v_
                                 for d_ in dstate_.values():
@@ -4248,7 +4269,7 @@ def run_gui():
                                  "Blocked punt touchdown", "Blocked field goal touchdown", "Blocked PAT", "Onside kick", "Punt", "Red zone"),
                     "Baseball": ("Home run", "Inside-the-park HR", "Grand slam", "Strikeout", "Double play", "Out", "Single", "Double", "Triple",
                                  "Run scores", "Triple play", "Caught stealing", "Picked off"),
-                    "Basketball": ("Three-pointer", "Block", "Steal"), "Hockey": ("Goal", "Penalty"), "Soccer": ("Goal",)}
+                    "Basketball": ("Three-pointer", "Two-pointer", "Slam dunk", "Block", "Steal"), "Hockey": ("Goal", "Penalty"), "Soccer": ("Goal",)}
         everywhere = ("Final", "Clutch border")
         btns = []
         for label, *_rest in sorted(TESTS, key=lambda t_: t_[0].lower()):  # alphabetical, across the rows
@@ -4302,8 +4323,8 @@ def run_gui():
                 canvas.delete(lay["tag"])
                 if lay["ring"]:
                     draw_rings(*lay["ring"][0], ce, t, bgc, lay["ring"][1], lay["tag"])
-                if lay.get("diamond") and not ce.get("chained_out"):
-                    draw_path(lay, ce, t)
+                if lay.get("field"):
+                    draw_field(lay, ce, t)
             except tk.TclError:
                 pass
 
@@ -4330,20 +4351,96 @@ def run_gui():
 
     UNIT_CIRCLE = [(math.cos(a_ * math.pi / 45), math.sin(a_ * math.pi / 45)) for a_ in range(90)]
 
-    def draw_path(lay, ce, t):
-        """Baseball: once the card's own info fades back in, the batter's run lights each base of the diamond in turn."""
-        u = t - (ce["secs"] - out_secs(ce))
-        if u < 0:
-            return
-        path = run_path(ce["head"])
-        spots = ((29, 23), (21, 15), (13, 23), (21, 34))
-        last = min(int(u / 0.3), len(path) - 1)
-        ox, oy = lay["diamond"]
-        a = info_alpha(ce, t)
-        for j, b_ in enumerate(path[:last + 1]):
-            bx_, by_ = spots[b_]
-            canvas.create_oval(ox + bx_ - 7, oy + by_ - 7, ox + bx_ + 7, oy + by_ + 7, width=2 if j == last else 1,
-                               outline=blend(lay["bgc"], GOLD, a), tags=lay["tag"])
+    FIELD_LEG = 0.4  # seconds a runner takes between two bases
+
+    def is_field_play(head):
+        """Baseball headlines that get the base-running diamond after their banner."""
+        return bool(re.search(r"HOME RUN|GRAND SLAM|^\d+-RUN |RUN SCORES|RUNS SCORE|(SINGLE|DOUBLE|TRIPLE)$", head)) and "PLAY" not in head
+
+    def field_runners(head, occ, n):
+        """Who runs: [(delay s, [spots: 0 home, 1 first, 2 second, 3 third])]. occ: the men on base before the play (None when
+        unknown), n: the runs that score. Runners on base score first, from the farthest base; the batter goes last."""
+        hit = next((h_ for h_ in ("SINGLE", "DOUBLE", "TRIPLE") if head.endswith(h_)), None)
+        homer = "HOME RUN" in head or head.startswith("GRAND SLAM")
+        order = [3, 2, 1]
+        if occ:
+            order = [b_ for b_ in order if occ[b_ - 1]]
+        scorers = order[:max(0, n - 1 if homer else n)]
+        if not occ and not homer and head == "RUN SCORES":
+            scorers = [3]
+        runners = [(0.35 * i, list(range(b_, 4)) + [0]) for i, b_ in enumerate(scorers)]
+        delay = 0.35 * len(scorers)
+        if homer:
+            runners.append((delay, [0, 1, 2, 3, 0]))
+        elif hit:
+            runners.append((delay, list(range(hit + 1))))
+        return runners
+
+    def draw_field(lay, ce, t):
+        """The banner's little diamond: runners glide base to base, each base lights as it is touched, home pulses on a score."""
+        cx, top, S = lay["field"]
+        a = banner_alpha(ce, t)
+        bg = lay["bgc"]
+        cy = top + S
+        spot = ((cx, cy + S), (cx + S, cy), (cx, cy - S), (cx - S, cy))
+        fhead, focc, fn = ce["field"]
+        runners = field_runners(fhead, focc, fn)
+        total = sum(1 for _d, p_ in runners if p_[-1] == 0)
+        u = t - 0.5  # the diamond has faded in
+        LEG = FIELD_LEG
+        ease = lambda v: v * v * (3 - 2 * v)
+
+        def at(path, p):  # position after p legs (eased within each leg)
+            p = max(0.0, min(len(path) - 1.0, p))
+            i = min(int(p), len(path) - 2)
+            f = ease(p - i)
+            (x0, y0), (x1, y1) = spot[path[i]], spot[path[i + 1]]
+            return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
+        lit, scored, arrivals = set(), 0, []
+        for delay, path in runners:
+            p = (u - delay) / LEG
+            if path[0] != 0 and p < 0:
+                lit.add(path[0])  # runners wait on their bases
+            for idx in range(1, len(path)):
+                if p >= idx and path[idx] != 0:
+                    lit.add(path[idx])
+            if path[-1] == 0 and p >= len(path) - 1:
+                scored += 1
+                arrivals.append((p - (len(path) - 1)) * LEG)
+        for i in range(4):  # the basepaths
+            x0, y0 = spot[i]
+            x1, y1 = spot[(i + 1) % 4]
+            canvas.create_line(x0, y0, x1, y1, fill=blend(bg, DIM, 0.5 * a), tags=lay["tag"])
+        fill = blend(ce["color"], "#ffffff", 0.2)
+        for b_ in range(4):
+            x0, y0 = spot[b_]
+            r_ = 5
+            on = b_ in lit
+            canvas.create_polygon(x0, y0 - r_, x0 + r_, y0, x0, y0 + r_, x0 - r_, y0, tags=lay["tag"],
+                                  fill=blend(bg, fill, a) if on else blend(bg, bg, a), outline=blend(bg, fill if on else DIM, a), width=2)
+        for age in arrivals:  # home plate pulses
+            if 0 <= age < 0.5:
+                rr_ = 5 + age * 26
+                canvas.create_oval(spot[0][0] - rr_, spot[0][1] - rr_, spot[0][0] + rr_, spot[0][1] + rr_, tags=lay["tag"],
+                                   outline=blend(bg, GOLD, a * (1 - age / 0.5)), width=2)
+        for delay, path in runners:
+            p = (u - delay) / LEG
+            if p < 0 or (path[-1] == 0 and p >= len(path) - 1):
+                if p < 0 and path[0] != 0:
+                    x, y = spot[path[0]]
+                    canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=blend(bg, "#ffffff", a), outline="", tags=lay["tag"])
+                elif p < 0:
+                    x, y = spot[0]
+                    canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=blend(bg, "#ffffff", a), outline="", tags=lay["tag"])
+                continue
+            moving = p < len(path) - 1
+            for k in range(5, 0, -1) if moving else ():  # a short fading trail
+                x, y = at(path, p - k * 0.14)
+                canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=blend(bg, GOLD, a * (1 - k / 6) * 0.7), outline="", tags=lay["tag"])
+            x, y = at(path, p)
+            canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, GOLD, a), tags=lay["tag"])
+        if total >= 2 and scored:  # runs count up in the middle
+            canvas.create_text(cx, cy, text=str(scored), font=FONTS["smallb"], fill=blend(bg, GOLD, a), tags=lay["tag"])
 
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
         """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
@@ -4383,6 +4480,8 @@ def run_gui():
 
     def out_secs(ce):
         """The fade-out starts only once the last ripple has cleared, and takes as long as a set of ripples (0.5 s stagger + 1.3 s)."""
+        if ce.get("out"):
+            return ce["out"]
         return max(0.4, min(RING_SECS + 0.5, ce["secs"] - ripple_end(ce["secs"])))
 
     def info_alpha(ce, t):
@@ -4415,6 +4514,11 @@ def run_gui():
         a = banner_alpha(ce, t)
         lay = session["cur_layer"]
         y = y0
+        if ce.get("field"):  # a baseball run's diamond: the card frames draw it (draw_field), centred in the box
+            S = max(14, min(30, int((y1 - y0 - 10) / 2)))
+            if lay is not None:
+                lay["field"] = (cx, y0 + (y1 - y0) / 2 - S, S)
+            return
         parts = []  # (text item, its full-strength color): the frames recolor these as the banner fades
         if ce["abbr"]:
             col = blend(bgc, FG, 0.7)
@@ -4455,7 +4559,7 @@ def run_gui():
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None
+        flashing = bool(ce) and not ce.get("field") and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
         cx0, cw_ = x + 2, w - 4
