@@ -2716,7 +2716,7 @@ def run_gui():
                 if None in v:
                     v = find(names) or ("-", "-")
                 extra.append((lab, v))
-        cols = labels + ["R" if sport == "baseball" else "T"] + [lab for lab, _ in extra]
+        cols = labels + ["R" if sport == "baseball" else "TOT"] + [lab for lab, _ in extra]
         lab_w = 38
         cw = min((w - lab_w) / len(cols), 34)
         rows = [(d["away_abbr"], ls["away"], d["away_score"], [v[0] for _, v in extra]),
