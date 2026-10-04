@@ -3848,7 +3848,7 @@ def run_gui():
         """Start a celebration (animation + optional sound) on card k. `field`: a baseball run's (head, men on, runs), drawn as
         a little diamond instead of text; `out`: how long its fade-out takes."""
         now = _time.perf_counter()
-        secs = max(secs, ripple_end(secs) + 0.4)  # long enough for the ripples to clear before the fade-out
+        secs = max(secs, ripple_end(secs) + 0.4) + 0.85  # long enough for the ripples to clear before the fade-out, plus the info's fades
         teams = r.get("teams") or []
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
         session["celebs"][k] = {
@@ -4646,17 +4646,28 @@ def run_gui():
             return ce["out"]
         return max(0.4, min(RING_SECS + 0.5, ce["secs"] - ripple_end(ce["secs"])))
 
+    INFO_OUT, INFO_IN, BAN_IN = 0.35, 0.5, 0.5  # the card's own info fades out, then the banner fades in; on the way back, the other way round
+
+    def ease(v):
+        """Smootherstep: no jerk at either end."""
+        u = max(0.0, min(1.0, v))
+        return u * u * u * (u * (u * 6 - 15) + 10)
+
     def info_alpha(ce, t):
-        """0..1 visibility of the card's own middle info under a banner: hidden while it shows, and kept hidden
-        across two chained events (the first fades out, the next fades in, then the info returns)."""
-        if t < ce["secs"] / 2 and ce.get("chained_in") or t >= ce["secs"] / 2 and ce.get("chained_out"):
+        """0..1 visibility of the card's own middle info under a banner. It fades out completely before the banner
+        starts to fade in, and only starts to return once the banner has completely gone. Across two chained events
+        it stays hidden (the first fades out, the next fades in, then the info returns)."""
+        if t < ce["secs"] / 2:
+            return 0.0 if ce.get("chained_in") else 1 - ease(t / INFO_OUT)
+        if ce.get("chained_out"):
             return 0.0
-        return 1 - banner_alpha(ce, t)
+        return ease((t - (ce["secs"] - INFO_IN)) / INFO_IN)
 
     def banner_alpha(ce, t):
-        """0..1 visibility of a banner: eased (smoothstep) fades, slower out than in."""
-        ease = lambda v: (lambda u: u * u * (3 - 2 * u))(max(0.0, min(1.0, v)))
-        return ease(t / 0.45) * ease((ce["secs"] - t) / out_secs(ce))
+        """0..1 visibility of a banner: it waits for the info to clear, and is gone before the info returns."""
+        din = 0.0 if ce.get("chained_in") else INFO_OUT
+        dout = 0.0 if ce.get("chained_out") else INFO_IN
+        return ease((t - din) / BAN_IN) * ease((ce["secs"] - dout - t) / out_secs(ce))
 
     def fade_items(ids, bgc, f):
         """Blend the colors of existing canvas items toward the card background (f = 1: unchanged, 0: gone)."""
