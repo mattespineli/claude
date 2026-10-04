@@ -2855,15 +2855,12 @@ def run_gui():
     ROLL_STEP, ROLL_MIN, ROLL_MAX = 0.09, 0.45, 1.1  # seconds per digit passed, shortest and longest roll
 
     def roll_seq(a, b):
-        """Digits one wheel shows going from a to b: counting up through 0-9 like an odometer."""
+        """Digits one wheel shows going from a to b: counting up to a higher digit, down to a lower one."""
         if a == b:
             return [b]
         if a.isdigit() and b.isdigit():
-            seq, d = [a], int(a)
-            while str(d) != b:
-                d = (d + 1) % 10
-                seq.append(str(d))
-            return seq
+            step = 1 if int(b) > int(a) else -1
+            return [str(d) for d in range(int(a), int(b) + step, step)]
         return [a, b]  # a digit appearing or disappearing (9 -> 10), or a non-digit
 
     # ---- seven-segment ("digital") digits, drawn as shapes so no font is needed ----------
@@ -2971,7 +2968,8 @@ def run_gui():
             cx, cy = x - cw / 2, y + hgt / 2
             anchor = canvas.create_rectangle(cx, cy, cx, cy, outline="", state="hidden")  # moves with the card
             items = [canvas.create_text(cx, cy, text="", font=FONTS["score"], fill=color) for _ in range(2)]
-            session["roll_cells"].append({"roll": roll, "seq": seq, "anchor": anchor, "items": items,
+            down = len(seq) > 1 and seq[0].isdigit() and seq[-1].isdigit() and int(seq[-1]) < int(seq[0])
+            session["roll_cells"].append({"roll": roll, "seq": seq, "anchor": anchor, "items": items, "dir": -1 if down else 1,
                                           "color": color, "bg": bgc, "h": hgt})
             x -= cw
         roll_frame()
@@ -2995,7 +2993,7 @@ def run_gui():
                     canvas.itemconfigure(item, text="")
                     continue
                 d = abs(off)
-                canvas.coords(item, ax, ay + off * travel)
+                canvas.coords(item, ax, ay + off * travel * c["dir"])  # up when counting up, down when counting down
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
