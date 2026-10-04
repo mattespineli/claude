@@ -4446,6 +4446,14 @@ def run_gui():
     def settings_dialog():
         win = tk.Toplevel(root)
         win.title("Settings")
+        ui_state["settings_open"] = True  # still open when the app quits or restarts: it opens again on the next start
+        save_state(ui_state)
+
+        def close():
+            ui_state["settings_open"] = False
+            save_state(ui_state)
+            win.destroy()
+        win.protocol("WM_DELETE_WINDOW", close)
         win.configure(bg=BG)
         win.attributes("-topmost", True)
         win.resizable(False, False)
@@ -4580,6 +4588,8 @@ def run_gui():
                     win.geometry(f"+{moved[0][0]}+{moved[0][1]}")
                     moved[0] = None
             test_btn.itemconfigure(2, text="Hide" if shown[0] else "Test...")
+            ui_state["settings_tests"] = shown[0]
+            save_state(ui_state)
         test_btn = styled_button(win, "Test...", toggle_tests)
         test_btn.grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
@@ -4594,9 +4604,11 @@ def run_gui():
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
         styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=12, column=1, padx=16, pady=(10, 16), sticky="e")
+        styled_button(win, "Close", close).grid(row=12, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
+        if ui_state.get("settings_tests"):  # the test buttons were showing last time
+            toggle_tests()
 
     def untrack_menu(event):
         items = [(f"Untrack {p['label']} ({p['date']})", lambda p=p: untrack(p)) for p in list(pins)]
@@ -4918,6 +4930,8 @@ def run_gui():
         pass
     tick()
     dock_poll()
+    if ui_state.get("settings_open"):  # Settings was open when the app last closed or restarted
+        root.after(300, settings_dialog)
     root.mainloop()
 
 
