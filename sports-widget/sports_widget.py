@@ -3905,7 +3905,6 @@ def run_gui():
             return 1 - i
         return idx(rec.group(1)) if rec else None
 
-    SOUNDBOARD = [("Chord", "chord")]  # what the Settings soundboard plays: every animation uses this one sound
     chord = {}
 
     def chord_wav():
@@ -4444,6 +4443,8 @@ def run_gui():
             show_dummy()
         tk.Label(side_, text="Dummy card", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
         styled_option(side_, sport_var, [n_ for n_, _ in sports_], command=on_sport, width=12).pack(anchor="w")
+        tk.Label(side_, text="Sound", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(8, 4))
+        styled_button(side_, "Play chord", lambda: play_sound(force=True)).pack(anchor="w")  # the one sound every animation uses; plays even while muted
         draw_options()
         tcanvas.bind("<Map>", lambda e: show_dummy(False) if tsession.get("dummy") else None)
         f.after(50, show_dummy)
@@ -5958,17 +5959,14 @@ def run_gui():
         win_ref[0] = win
         tests = test_buttons(win)
         shown = [False]
-        board_shown = [False]
         moved = [None]  # where the window was, if showing a side panel had to nudge it to stay on screen
-        board = tk.Frame(win, bg=BG)  # one button per sound; plays even while muted
 
         def set_side(which):
-            """Show the tests or the soundboard beside the options (None hides both); opening one closes the other."""
-            shown[0], board_shown[0] = which == "tests", which == "board"
-            panel = tests if shown[0] else board if board_shown[0] else None
-            for p_ in (tests, board):
-                if p_ is not panel:
-                    p_.grid_remove()
+            """Show the animation tests (with the sound button) beside the options, or hide them."""
+            shown[0] = which == "tests"
+            panel = tests if shown[0] else None
+            if panel is None:
+                tests.grid_remove()
             if panel is not None:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
                 panel.grid(row=0, column=2, rowspan=15, padx=(0, 16), pady=16, sticky="n")
                 win.update_idletasks()
@@ -5981,9 +5979,7 @@ def run_gui():
                 win.geometry(f"+{moved[0][0]}+{moved[0][1]}")
                 moved[0] = None
             test_btn.itemconfigure(2, text="Hide" if shown[0] else "Test...")
-            board_btn.itemconfigure(2, text="Hide" if board_shown[0] else "Test...")
             ui_state["settings_tests"] = shown[0]
-            ui_state["settings_sounds"] = board_shown[0]
             save_state(ui_state)
 
         def toggle_tests():
@@ -6002,15 +5998,6 @@ def run_gui():
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
         styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Soundboard", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
-        tk.Label(board, text="Soundboard", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=2, padx=4, pady=(0, 4), sticky="w")
-        for i, (label, kind) in enumerate(SOUNDBOARD):
-            styled_button(board, label, lambda k_=kind: play_sound(k_, force=True)).grid(row=1 + i // 2, column=i % 2, padx=4, pady=3, sticky="w")
-
-        def toggle_board():
-            set_side(None if board_shown[0] else "board")
-        board_btn = styled_button(win, "Test...", toggle_board)
-        board_btn.grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
         styled_button(win, "Close", close).grid(row=14, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         sp = ui_state.get("settings_pos")
@@ -6021,8 +6008,6 @@ def run_gui():
         win.geometry(f"+{sx}+{sy}")
         if ui_state.get("settings_tests"):  # a side panel was showing last time
             set_side("tests")
-        elif ui_state.get("settings_sounds"):
-            set_side("board")
         pos_save = {"id": None}
 
         def on_move(e):
