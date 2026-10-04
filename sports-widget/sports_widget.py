@@ -855,8 +855,8 @@ def team_status(entry):
                 nxt = with_records(nxt, entry["sport"], entry["league"])
             s_next = summarize_event(nxt, entry["team"], entry["sport"], entry["league"]) if nxt else None
             next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "No upcoming game scheduled"
-    if not event:
-        return None
+    if not event:  # nothing live, soon or just played: still list the team, dimmed
+        return quiet_status(entry, events, base_name + (f" ({own})" if own else ""))
     fresh = None
     if _state_of(event) == "in":
         fresh = fresh_event(entry, event)  # live scores, records and situation come from the scoreboard
@@ -879,6 +879,18 @@ def team_status(entry):
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
             "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
+
+
+def quiet_status(entry, events, name):
+    """Card for a team with no game soon: its last result, and its next game or "Out of season"."""
+    sport, league = entry["sport"], entry["league"]
+    done = [e for e in events if e.get("competitions") and _state_of(e) == "post"]
+    last = max(done, key=lambda e: e.get("date", ""), default=None)
+    s_last = summarize_event(last, entry["team"], sport, league) if last else None
+    nxt = next_event(events)
+    s_next = summarize_event(nxt, entry["team"], sport, league) if nxt else None
+    return {"name": name, "state": "none", "line": f"Last: {s_last[1]} \u00b7 {s_last[2]}" if s_last else "",
+            "detail": f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "Out of season", "info": "", "graphic": None}
 
 
 def fetch_all(entries):
@@ -2314,8 +2326,8 @@ def run_gui():
                 "default": default, "open": bool(store.get(key, default)), "children": children}
 
     def sort_key(r):
-        """Live games first, then alphabetical (ignoring a leading '#12 ' rank or '(3) ' seed)."""
-        return (0 if r["state"] == "in" else 1, re.sub(r"^(#\d+|\(\d+\))\s+", "", r["name"]).lower())
+        """Live games first and quiet (off-season) teams last, then alphabetical (ignoring a leading '#12 ' rank or '(3) ' seed)."""
+        return ({"in": 0, "none": 2}.get(r["state"], 1), re.sub(r"^(#\d+|\(\d+\))\s+", "", r["name"]).lower())
 
     def cards(rows, extra_line=False):
         rows = sorted(rows, key=sort_key)
@@ -3047,7 +3059,9 @@ def demo_data():
             row("Arsenal (6-1-2)", "soccer", "eng.1", "vs Chelsea (5-2-2)", "1-1  67'", soc, tint="#ef0107"),
             row("#12 San Diego State Aztecs Football (7-2)", "football", "college-football", "vs Boise State (8-1)",
                 "W 31-24  Final", {}, tint="#c41230", state="post",
-                next_line="Next: @ #7 Boise State (8-1) \u00b7 Sat Oct 10 6:00 PM")]
+                next_line="Next: @ #7 Boise State (8-1) \u00b7 Sat Oct 10 6:00 PM"),
+            {"name": "Las Vegas Aces (30-14)", "state": "none", "line": "Last: vs New York Liberty (32-12) \u00b7 L 76-84  Final \u00b7 Sat Sep 19",
+             "detail": "Out of season", "info": "", "graphic": None}]
 
 
 def demo_leagues():
