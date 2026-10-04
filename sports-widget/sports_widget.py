@@ -679,6 +679,12 @@ def game_detail_data(data, max_plays=14, max_stats=14):
     wp = data.get("winprobability") or []
     if wp and wp[-1].get("homeWinPercentage") is not None:
         out["home_win"] = float(wp[-1]["homeWinPercentage"])
+    def periods(c):
+        return [str(l.get("displayValue") if l.get("displayValue") not in (None, "") else int(float(l.get("value") or 0)))
+                for l in c.get("linescores") or []]
+    out["hits_errors"] = [(c.get("hits"), c.get("errors")) for c in (away, home)]
+    if periods(away) or periods(home):
+        out["linescore"] = {"away": periods(away), "home": periods(home)}
     plays = data.get("plays") or []
     if not plays:
         drives = data.get("drives") or {}
@@ -745,6 +751,24 @@ def pick_stats(sport, full, n=4):
         if v:
             out.append((label, *[x if not pct or "%" in x else x + "%" for x in v]))
     return out[:n] if len(out) >= 2 else [(label, a_, h_) for _k, label, a_, h_ in full[:n]]
+
+
+def period_labels(sport, league, n):
+    """Column titles for n periods: innings, quarters, halves or periods, with overtime after regulation."""
+    if sport == "baseball":
+        return [str(i + 1) for i in range(n)]
+    reg = {"football": 4, "hockey": 3, "soccer": 2}.get(sport, 2 if league == "mens-college-basketball" else 4)
+    pre = {"football": "Q", "basketball": "" if reg == 2 else "Q", "hockey": "", "soccer": ""}.get(sport, "")
+    out = []
+    for i in range(n):
+        if i < reg:
+            out.append(f"{pre}{i + 1}")
+        elif sport == "soccer":
+            out.append("ET" if i == reg else f"ET{i - reg + 1}")
+        else:
+            ot = i - reg + 1
+            out.append("OT" if ot == 1 else f"{ot}OT")
+    return out
 
 
 def situation_text(sport, comp):
@@ -1294,7 +1318,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
-LAYOUT_CHOICES = [("Default", "default"), ("Scoreboard", "scoreboard")]
+LAYOUT_CHOICES = [("Scoreboard", "scoreboard"), ("List", "list")]  # "default" in an older state.json means List
 DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
                    ("5 minutes", 300), ("10 minutes", 600), ("15 minutes", 900)]
@@ -2399,7 +2423,46 @@ def run_gui():
             h += 2 + graphic_one(ox, oy + h + 2, g, bg, int(W))
         return h
 
-    def draw_details(x, y, w, bgc, d, win_shown=False):  # win_shown: no win probability here (shown on the card, or game over)
+    def draw_linescore(x, y, w, d, g):
+        """Points per period (quarter, half, inning...) as a small table with the total at the right; returns its height."""
+        ls = d["linescore"]
+        n = max(len(ls["away"]), len(ls["home"]))
+        sport = g["sport"] if g else ""
+        labels = period_labels(sport, g["league"] if g else "", n)
+        extra = []  # baseball is the classic line score: an inning per column, then runs, hits and errors
+        if sport == "baseball":
+            find = lambda names: next(((a_, h_) for k_, lb, a_, h_ in d.get("all_stats", [])
+                                       if re.sub(r"[^a-z0-9]", "", k_.lower()) in names), None)
+            for j, (lab, names) in enumerate((("H", ("bathits", "bath")), ("E", ("flderrors", "flde")))):
+                he = d.get("hits_errors") or [(None, None), (None, None)]
+                v = tuple(str(he[t][j]) if he[t][j] is not None else None for t in (0, 1))
+                if None in v:
+                    v = find(names) or ("-", "-")
+                extra.append((lab, v))
+        cols = labels + ["R" if sport == "baseball" else "T"] + [lab for lab, _ in extra]
+        lab_w = 38
+        cw = min((w - lab_w) / len(cols), 34)
+        rows = [(d["away_abbr"], ls["away"], d["away_score"], [v[0] for _, v in extra]),
+                (d["home_abbr"], ls["home"], d["home_score"], [v[1] for _, v in extra])]
+        h0 = 0
+        for i, lab in enumerate(cols):
+            xr = x + lab_w + cw * (i + 1) - 2
+            _, h = ctext(xr, y, lab, FONTS["small"], DIM if i < n else FG, anchor="ne")
+            h0 = max(h0, h)
+        yy = y + h0 + 1
+        canvas.create_line(x, yy, x + w, yy, fill="#33333d")
+        if extra:  # a divider between the innings and the R H E columns
+            sx_ = x + lab_w + cw * n + 1
+            canvas.create_line(sx_, y, sx_, yy + 2 * (h0 + 2), fill="#33333d")
+        for abbr, vals, total, ex in rows:
+            _, h = ctext(x, yy + 1, abbr, FONTS["smallb"], FG)
+            cells = list(vals) + [""] * (n - len(vals)) + [total] + ex
+            for i, v in enumerate(cells):
+                ctext(x + lab_w + cw * (i + 1) - 2, yy + 1, v, FONTS["smallb"] if i >= n else FONTS["small"], FG if i >= n or v not in ("0", "") else DIM, anchor="ne")
+            yy += h + 1
+        return yy - y
+
+    def draw_details(x, y, w, bgc, d, win_shown=False, g=None):  # win_shown: no win probability here (shown on the card, or game over)
         """Expanded-game section; returns its height."""
         y0 = y
         if d is None:
@@ -2410,6 +2473,8 @@ def run_gui():
             return 6 + h
         canvas.create_line(x, y + 6, x + w, y + 6, fill=DIM)
         y += 11
+        if d.get("linescore") and d.get("state") != "pre":
+            y += draw_linescore(x, y, w, d, g) + 4
         if d.get("home_win") is not None and not win_shown:  # a card already showing it keeps it where it was
             hw = round(d["home_win"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
@@ -2434,7 +2499,7 @@ def run_gui():
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 y += h
-        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None and not win_shown):
+        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("linescore") or d.get("home_win") is not None and not win_shown):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
             y += h
         return y - y0
@@ -2782,7 +2847,7 @@ def run_gui():
         gl = [g_ for g_ in gl if g_["kind"] != "timeouts"]
         info = r.get("info") or ""
         lw = ww
-        if ui_state.get("layout") == "scoreboard" and len(r.get("teams") or []) == 2 and r["state"] in ("pre", "in", "post"):
+        if ui_state.get("layout", "scoreboard") == "scoreboard" and len(r.get("teams") or []) == 2 and r["state"] in ("pre", "in", "post"):
             yy, info = draw_scoreboard(r, cx0, cw_, yy, bgc, tags, gl, tos, info)
         else:
             text_w = ww
@@ -2863,7 +2928,7 @@ def run_gui():
         if g and gkey(g) in session["expanded"]:
             key = "game:" + gkey(g)
             y0 = yy
-            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)), bool(r.get("win")) or r["state"] == "post")
+            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)), bool(r.get("win")) or r["state"] == "post", g)
             yy = y0 + H  # always drawn at full height; an animation only moves things afterwards
             if key in session["anims"]:
                 cover = canvas.create_rectangle(cx0 - 1, yy + GAP, cx0 + cw_ + 1, yy + GAP + 3, fill=BG, outline="")
@@ -3515,7 +3580,7 @@ def run_gui():
         styled_option(win, digital_choice, ["Off", "On"], command=on_digital, width=12).grid(
             row=5, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Card layout", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=6, column=0, padx=16, pady=(6, 4), sticky="w")
-        layout_choice = tk.StringVar(value=next((l for l, v in LAYOUT_CHOICES if v == ui_state.get("layout", "default")), "Default"))
+        layout_choice = tk.StringVar(value=next((l for l, v in LAYOUT_CHOICES if v == ui_state.get("layout", "scoreboard")), "List"))
 
         def on_layout(label):
             ui_state["layout"] = dict(LAYOUT_CHOICES)[label]
