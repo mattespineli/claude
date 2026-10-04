@@ -1969,15 +1969,25 @@ def run_gui():
             elif t == "sub":  # standings sub-header: group name + column titles
                 _, h = ctext(x + 6, y + 6, n["text"], FONTS["smallb"], FG)
                 for k, title in enumerate(reversed(n["headers"])):
-                    ctext(x + w - 8 - 50 * k, y + 7, title, FONTS["small"], DIM, anchor="ne")
+                    ctext(x + w - 8 - 40 * k, y + 7, title, FONTS["small"], DIM, anchor="ne")
                 y += 6 + h + 4
             elif t == "srow":  # standings row
                 if n["fav"]:
                     canvas.create_rectangle(x + 2, y, x + w - 2, y + 18, fill=blend(BG, "#34d399", 0.18), outline="")
                 ctext(x + 24, y + 2, str(n["rank"]), FONTS["small"], DIM, anchor="ne")
-                ctext(x + 32, y + 2, n["name"], FONTS["detb"] if n["fav"] else FONTS["line"], FG)
+                limit = x + w
                 for k, val in enumerate(reversed(n["vals"])):
-                    ctext(x + w - 8 - 50 * k, y + 2, val, FONTS["line"], FG if k == 0 else DIM, anchor="ne")
+                    vid, _ = ctext(x + w - 8 - 40 * k, y + 2, val, FONTS["line"], FG if k == 0 else DIM, anchor="ne")
+                    limit = min(limit, canvas.bbox(vid)[0])
+                limit -= 8
+                bold = n["fav"]
+                nid, _ = ctext(x + 32, y + 2, n["name"], FONTS["detb"] if bold else FONTS["line"], FG)
+                if canvas.bbox(nid)[2] > limit:  # always the full "City Name": shrink the font, then trim, to fit
+                    canvas.itemconfigure(nid, font=FONTS["smallb"] if bold else FONTS["small"])
+                    text = n["name"]
+                    while canvas.bbox(nid)[2] > limit and len(text) > 4:
+                        text = text[:-1]
+                        canvas.itemconfigure(nid, text=text.rstrip() + "\u2026")
                 y += 18
             elif t == "card":
                 y = draw_card(n["row"], x, y, w, final)
@@ -2030,7 +2040,7 @@ def run_gui():
                     children.append({"t": "sub", "text": g["name"], "headers": headers})
                     for rank, r in enumerate(g["rows"], start=1):
                         rec, cols = standing_cells(abbr, r["stats"])
-                        name = r["name"] if len(r["name"]) <= 16 else r["short"]
+                        name = r["name"]  # always the full city + team name
                         fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
                         children.append({"t": "srow", "rank": rank, "name": name, "vals": [rec] + cols, "fav": fav})
             nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
