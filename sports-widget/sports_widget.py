@@ -3200,6 +3200,7 @@ def run_gui():
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None):
         """Start a celebration (animation + optional sound) on card k."""
         now = _time.perf_counter()
+        secs = max(secs, ripple_end(secs) + 0.4)  # long enough for the ripples to clear before the fade-out
         teams = r.get("teams") or []
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
         session["celebs"][k] = {
@@ -3451,22 +3452,14 @@ def run_gui():
             return
         x0, y0, x1, y1 = bounds
         rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
-        u = max(0.0, min(1.0, (ce["secs"] - t) / out_secs(ce)))
-        out = u * u * (3 - 2 * u)  # the held rings fade out together with the banner text
         sets = 3 if ce["secs"] >= 6 else 1  # short events get one set
-        for n in range(sets * 3):  # sets of three ripples; the last set holds until the banner goes
+        for n in range(sets * 3):  # sets of three ripples; every ripple has cleared before the text starts to fade out
             delay = (n // 3) * 1.4 + (n % 3) * 0.25
-            if t < delay:
+            pp = (t - delay) / RING_SECS
+            if not 0 <= pp < 1:
                 continue
-            pp = min(1.0, (t - delay) / RING_SECS)
-            hold = n >= (sets - 1) * 3  # the last set comes out exactly like the others, then stays spread out until the banner fades
-            if not hold and pp >= 1:
-                continue
-            pe = min(pp, (0.5, 0.62, 0.74)[n - (sets - 1) * 3]) if hold else pp
-            r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pe) ** 2)
-            intensity = 0.9 * (1 - pe) ** 1.5
-            if hold:
-                intensity = max(intensity, 0.22) * out
+            r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pp) ** 2)
+            intensity = 0.9 * (1 - pp) ** 1.5
             pts = [(cx + r_ * math.cos(a_ * math.pi / 45), cy + r_ * math.sin(a_ * math.pi / 45)) for a_ in range(90)]
             inside = [x0 <= px_ <= x1 and y0 <= py_ <= y1 for px_, py_ in pts]
             if not any(inside):
@@ -3485,9 +3478,13 @@ def run_gui():
             if len(run) > 1:
                 canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd, tags=(tag,))
 
+    def ripple_end(secs):
+        """When the last ripple has cleared: three sets for long events, one for short ones."""
+        return ((3 if secs >= 6 else 1) - 1) * 1.4 + 0.5 + RING_SECS
+
     def out_secs(ce):
-        """How long the fade-out takes: as long as a set of three ripples takes to clear (0.5 s stagger + 1.3 s), less for short events."""
-        return min(RING_SECS + 0.5, 0.45 * ce["secs"])
+        """The fade-out starts only once the last ripple has cleared, and takes as long as a set of ripples (0.5 s stagger + 1.3 s)."""
+        return max(0.4, min(RING_SECS + 0.5, ce["secs"] - ripple_end(ce["secs"])))
 
     def banner_alpha(ce, t):
         """0..1 visibility of a banner: eased (smoothstep) fades, slower out than in."""
