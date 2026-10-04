@@ -50,6 +50,36 @@ def get_json(url, timeout=10):
     return json.loads(body)
 
 
+LOGO_DIR = os.path.join(HERE, "logos")
+
+
+def logo_path(url, size):
+    import hashlib
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}".encode()).hexdigest()[:16] + ".png")
+
+
+def logo_file(url, size):
+    """Local PNG of a team logo scaled to size x size px (ESPN's image resizer), downloaded once; None on failure."""
+    path = logo_path(url, size)
+    if os.path.exists(path):
+        return path
+    try:
+        src = re.sub(r"^https?://[^/]+", "", url)
+        req = urllib.request.Request(f"https://a.espncdn.com/combiner/i?img={src}&w={size}&h={size}",
+                                     headers={"User-Agent": "sports-widget/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            body = r.read()
+        if not body.startswith(b"\x89PNG"):
+            return None
+        os.makedirs(LOGO_DIR, exist_ok=True)
+        with open(path + ".part", "wb") as f:
+            f.write(body)
+        os.replace(path + ".part", path)
+        return path
+    except Exception:
+        return None
+
+
 _cache, _cache_lock, _key_locks = {}, threading.Lock(), {}
 
 
@@ -670,6 +700,20 @@ def team_colors(c, fallback):
     return _lighten(cands[0]) if cands else fallback
 
 
+def _logo(team):
+    """Logo URL ESPN gives for a team object, or None."""
+    return team.get("logo") or next((l.get("href") for l in team.get("logos") or [] if l.get("href")), None)
+
+
+def comp_logos(comp):
+    """[away, home] logo URLs of a game (the competitor order when there is no home/away)."""
+    cs = comp.get("competitors", [])
+    away = next((c for c in cs if c.get("homeAway") == "away"), None)
+    home = next((c for c in cs if c.get("homeAway") == "home"), None)
+    pair = (away, home) if away and home else tuple(cs[:2])
+    return [_logo(c.get("team", {})) for c in pair]
+
+
 def tint_color(team):
     """Primary team color (alternate if the primary is nearly black), or None."""
     cands = [("#" + str(x).lstrip("#")) for x in (team.get("color"), team.get("alternateColor")) if _valid_hex(x)]
@@ -871,7 +915,8 @@ def team_status(entry):
                 start = season_start(entry, (data.get("season") or {}).get("year"))
                 next_line = season_label(start) if start else "No upcoming game scheduled"
     if not event:  # nothing live, soon or just played: still list the team, dimmed
-        return quiet_status(entry, events, base_name + (f" ({own})" if own else ""), (data.get("season") or {}).get("year"))
+        return quiet_status(entry, events, base_name + (f" ({own})" if own else ""), (data.get("season") or {}).get("year"),
+                            logo=_logo(team))
     fresh = None
     if _state_of(event) == "in":
         fresh = fresh_event(entry, event)  # live scores, records and situation come from the scoreboard
@@ -889,7 +934,8 @@ def team_status(entry):
         comp_ = event["competitions"][0]
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
-    return {"score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
+    return {"logos": [_logo(me.get("team", {})) or _logo(team)],
+            "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
@@ -928,7 +974,7 @@ def season_label(d):
     return f"Season starts {d:%b} {d.day}" + (f", {d.year}" if d.year != datetime.now().year else "")
 
 
-def quiet_status(entry, events, name, season_year=None):
+def quiet_status(entry, events, name, season_year=None, logo=None):
     """Card for a team with no game soon: its last result, and its next game or when its next season starts."""
     sport, league = entry["sport"], entry["league"]
     done = [e for e in events if e.get("competitions") and _state_of(e) == "post"]
@@ -938,7 +984,7 @@ def quiet_status(entry, events, name, season_year=None):
     s_next = summarize_event(nxt, entry["team"], sport, league) if nxt else None
     return {"name": name, "state": "none", "line": f"Last: {s_last[1]} \u00b7 {s_last[2]}" if s_last else "",
             "detail": f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else season_label(season_start(entry, season_year)),
-            "info": "", "graphic": None}
+            "info": "", "graphic": None, "logos": [logo]}
 
 
 def fetch_all(entries):
@@ -1013,7 +1059,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             parts = score_parts(e)
-            row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+            row = {"logos": comp_logos(comp), "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
                    "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
@@ -1082,7 +1128,7 @@ def league_games():
             state, matchup, detail = summ
             comp = e["competitions"][0]
             parts = score_parts(e)
-            out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
+            out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail, "logos": comp_logos(comp),
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
@@ -1263,7 +1309,8 @@ def pinned_status(pin):
             s = summarize_game(e, pin["sport"], pin["league"])
             if s:
                 parts = score_parts(e)
-                return {"score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
+                return {"logos": comp_logos(e["competitions"][0]),
+                        "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
                         "game": {"sport": pin["sport"], "league": pin["league"], "id": str(pin["id"])},
@@ -1964,7 +2011,7 @@ def run_gui():
     def cycle_view(_=None):
         if view_tween["on"] or icon["busy"]:
             return  # let the running transition finish
-        order = [m for m, _ in VIEWS]
+        order = [m for m, _ in VIEWS if m != "title" or not docked()]  # no minimized title view while docked
         cur = ui_state.get("view", "full")
         new = order[(order.index(cur) + 1) % len(order)] if cur in order else "full"
         ui_state["view"] = new
@@ -2011,6 +2058,7 @@ def run_gui():
              "sec": ("Segoe UI", 8, "bold"), "hdr": ("Segoe UI", 9, "bold"), "small": ("Segoe UI", 8),
              "smallb": ("Segoe UI", 8, "bold")}
     PAD, GAP = 10, 6
+    LOGO_W, BB_W = 40, 112  # width reserved for a logo in front of the name; baseball bases/count panel
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
@@ -2122,7 +2170,7 @@ def run_gui():
             h += 2 + graphic_one(ox, oy + h + 2, g, bg, int(W))
         return h
 
-    def draw_details(x, y, w, bgc, d):
+    def draw_details(x, y, w, bgc, d, win_shown=False):
         """Expanded-game section; returns its height."""
         y0 = y
         if d is None:
@@ -2133,7 +2181,7 @@ def run_gui():
             return 6 + h
         canvas.create_line(x, y + 6, x + w, y + 6, fill=DIM)
         y += 11
-        if d.get("home_win") is not None:
+        if d.get("home_win") is not None and not win_shown:  # a card already showing it keeps it where it was
             hw = round(d["home_win"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
             y += graphics(x, y, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
@@ -2157,7 +2205,7 @@ def run_gui():
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 y += h
-        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None):
+        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None or win_shown):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
             y += h
         return y - y0
@@ -2201,10 +2249,77 @@ def run_gui():
             return seq
         return [a, b]  # a digit appearing or disappearing (9 -> 10), or a non-digit
 
+    # ---- seven-segment ("digital") digits, drawn as shapes so no font is needed ----------
+    SEGMENTS = {"0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg", "5": "acdfg", "6": "acdefg",
+                "7": "abc", "8": "abcdefg", "9": "abcdfg", "-": "g"}
+    DIG_W, DIG_H, DIG_T, DIG_GAP = 13, 22, 3, 5
+
+    def digital_text(xr, y, text, color, bgc):
+        """Right-aligned seven-segment text ending at xr; returns its left edge. Unlit segments show faintly."""
+        q = DIG_T / 2
+        x = xr
+        for ch in reversed(text):
+            x -= DIG_W
+            lit = SEGMENTS.get(ch, "")
+            dim = blend(bgc, color, 0.14)
+            xa, xb, h2 = x + q + 1, x + DIG_W - q - 1, DIG_H / 2
+
+            def hseg(yc):
+                return [xa, yc, xa + q, yc - q, xb - q, yc - q, xb, yc, xb - q, yc + q, xa + q, yc + q]
+
+            def vseg(xc, ya, yb):
+                return [xc, ya, xc + q, ya + q, xc + q, yb - q, xc, yb, xc - q, yb - q, xc - q, ya + q]
+            shapes = {"a": hseg(y + q), "g": hseg(y + h2), "d": hseg(y + DIG_H - q),
+                      "f": vseg(x + q, y + q + 1, y + h2 - 1), "b": vseg(x + DIG_W - q, y + q + 1, y + h2 - 1),
+                      "e": vseg(x + q, y + h2 + 1, y + DIG_H - q - 1), "c": vseg(x + DIG_W - q, y + h2 + 1, y + DIG_H - q - 1)}
+            for name, pts in shapes.items():
+                if name in lit:
+                    canvas.create_polygon(*pts, fill=color, outline="")
+                elif ch != "-":
+                    canvas.create_polygon(*pts, fill=dim, outline="")
+            x -= DIG_GAP
+        return x + DIG_GAP
+
+    # ---- team logos: downloaded once to logos/, loaded on first use, cards redraw when they arrive -------------
+    logo_imgs, logo_pending, logo_done = {}, set(), set()
+
+    def logos_ready():
+        logo_pending.clear()
+        logo_done.clear()
+        session["sig"] = None
+        draw_all()
+        session["sig"] = compute_sig()
+        fit()
+
+    def logo_img(url, size):
+        key = (url, size)
+        if key in logo_imgs:
+            return logo_imgs[key]
+        path = logo_path(url, size)
+        if os.path.exists(path):
+            try:
+                logo_imgs[key] = tk.PhotoImage(file=path)
+            except tk.TclError:
+                logo_imgs[key] = None
+            return logo_imgs[key]
+        if key not in logo_pending and not session["anims"]:
+            logo_pending.add(key)
+
+            def work():
+                if not logo_file(url, size):
+                    logo_imgs[key] = None  # unavailable: don't keep retrying
+                logo_done.add(key)
+                if logo_pending <= logo_done:
+                    root.after(0, logos_ready)  # the last outstanding logo arrived
+            threading.Thread(target=work, daemon=True).start()
+        return None
+
     def draw_score(xr, y, text, color, bgc, key):
         """One side's score, right-aligned at xr; rolls from the last value drawn for `key`. Returns the left edge."""
         prev = session["roll_last"].get(key)
         session["roll_last"][key] = text
+        if ui_state.get("digital"):
+            return digital_text(xr, y + 4, text, color, bgc)
         roll = session["rolls"].get(key)
         if prev is not None and prev != text and not (roll and roll["to"] == text):
             n = max(len(prev), len(text))
@@ -2304,36 +2419,66 @@ def run_gui():
             c2 = hi if lead <= 0 else DIM
             rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
             x2 = draw_score(xr, yy - 3, sc[1], c2, bgc, (rk, 1))
-            idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
-            x1 = canvas.bbox(idash)[0]
+            if ui_state.get("digital"):
+                x1 = digital_text(x2 - 4, yy + 1, "-", DIM, bgc)
+            else:
+                idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
+                x1 = canvas.bbox(idash)[0]
             text_w = max(ww - (xr - draw_score(x1 - 4, yy - 3, sc[0], c1, bgc, (rk, 0))) - 12, 80)
-        _, h = ctext(ix, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
+        urls = [u for u in (r.get("logos") or []) if u]  # team logo(s) in front of the name
+        lg_size = 34 if len(urls) == 1 else 20
+        tx = ix + (LOGO_W if urls else 0)
+        text_w = max(text_w - (tx - ix), 60)
+        for i, u in enumerate(urls):
+            img = logo_img(u, lg_size)
+            if img:
+                canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
+        _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
+        y_head = yy
         yy += h
         if r["line"]:
-            _, h = ctext(ix, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
+            _, h = ctext(tx, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
             yy += h
+        if urls:
+            yy = max(yy, y_head + len(urls) * (lg_size + 2))
         if sc:
             yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
+        gl = r.get("graphic") or []
+        gl = [gl] if isinstance(gl, dict) else gl
+        bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases and count go to a panel on the right
+        lw = ww - BB_W - 10 if bb else ww
         sx = ix
         if r["state"] == "in":  # red LIVE pill in front of the clock
             bw = 34
             canvas.create_polygon(rr_points(ix, yy + 2, ix + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
             canvas.create_text(ix + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
             sx = ix + bw + 6
+        ys = yy  # top of the status row: the baseball panel starts here too
         sid, h = ctext(sx, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
-                       COLORS.get(r["state"], FG), width=ww - (sx - ix), tags=tags)
+                       COLORS.get(r["state"], FG), width=lw - (sx - ix), tags=tags)
         clock = r.get("clock") if r["state"] == "in" else None
         if clock:
             session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
             canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
         yy += max(h, 18 if r["state"] == "in" else 0)
-        if r.get("graphic"):
-            yy += graphics(ix, yy, r["graphic"], bgc, ww)
+        info = r.get("info") or ""
+        if bb:
+            yy += graphics(ix, yy, [g_ for g_ in gl if g_ not in bb], bgc, lw)
+            rx = ix + ww - BB_W
+            rh = graphics(rx, ys, bb, bgc, BB_W)
+            for part in (p_ for l_ in info.split("\n") if l_.startswith("AB:") for p_ in l_.split(" \u00b7 ")):
+                _, h = ctext(rx, ys + rh, part, FONTS["small"], FG, width=BB_W, tags=tags)
+                rh += h
+            yy = max(yy, ys + rh + 2)
+            info = "\n".join(l_ for l_ in info.split("\n")
+                             if not l_.startswith(("Runners:", "Bases empty", "AB:")))
+        elif gl:
+            yy += graphics(ix, yy, gl, bgc, ww)
         g_ = r.get("game")
-        if r.get("win") and not (g_ and gkey(g_) in session["expanded"]):
-            yy += graphics(ix, yy, r["win"], bgc, ww)
-        if r.get("info"):
-            _, h = ctext(ix, yy, r["info"], FONTS["line"], DIM, width=ww, tags=tags)
+        if r.get("win"):
+            yy += graphics(ix, yy, r["win"], bgc, lw)
+        if info:
+            _, h = ctext(ix, yy, info, FONTS["line"], DIM, width=ww, tags=tags)
             yy += h
         if r.get("next"):
             _, h = ctext(ix, yy + 3, r["next"], FONTS["small"], DIM, width=ww, tags=tags)
@@ -2343,7 +2488,7 @@ def run_gui():
         if g and gkey(g) in session["expanded"]:
             key = "game:" + gkey(g)
             y0 = yy
-            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)))
+            H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)), bool(r.get("win")))
             yy = y0 + H  # always drawn at full height; an animation only moves things afterwards
             if key in session["anims"]:
                 cover = canvas.create_rectangle(cx0 - 1, yy + GAP, cx0 + cw_ + 1, yy + GAP + 3, fill=BG, outline="")
@@ -2530,8 +2675,13 @@ def run_gui():
             nodes.append({"t": "text", "text": "No live games"})
         if pin_results:
             nodes += [{"t": "section", "text": "Tracked Games"}] + cards(pin_results)
-        if results:
-            nodes += [{"t": "section", "text": "My Teams"}] + cards(results)
+        active = [r for r in results if r["state"] != "none"]
+        off = [r for r in results if r["state"] == "none"]
+        if active or off:
+            nodes.append({"t": "section", "text": "My Teams"})
+            nodes += cards(active)
+            if off:
+                nodes.append(group_node("offseason", f"Out of season \u00b7 {len(off)}", DIM, 0, True, False, cards(off)))
         elif not (pin_results or playoffs or leagues or live_view):
             nodes.append({"t": "text", "text": "No games in the next 7 days"})
         if leagues:
@@ -2978,7 +3128,18 @@ def run_gui():
         dock_choice = tk.StringVar(value=next((l for l, v in DOCK_CHOICES if v == ui_state.get("dock", "off")), "Off"))
         styled_option(win, dock_choice, [l for l, _ in DOCK_CHOICES], command=lambda label: set_dock(dict(DOCK_CHOICES)[label]),
                       width=12).grid(row=4, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=5, column=1, padx=16, pady=(10, 16), sticky="e")
+        tk.Label(win, text="Digital scores", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=5, column=0, padx=16, pady=(6, 4), sticky="w")
+        digital_choice = tk.StringVar(value="On" if ui_state.get("digital") else "Off")
+
+        def on_digital(label):
+            ui_state["digital"] = label == "On"
+            save_state(ui_state)
+            session["sig"] = None
+            draw_all()
+            session["sig"] = compute_sig()
+        styled_option(win, digital_choice, ["Off", "On"], command=on_digital, width=12).grid(
+            row=5, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=6, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
@@ -3153,6 +3314,27 @@ def run_gui():
         l, _t, r, _b = area or dock_area()
         return l - (w or dock_width()) + DOCK_STRIP if ui_state.get("dock") == "left" else r - DOCK_STRIP
 
+    def autohide():
+        return ui_state.get("autohide", True)
+
+    def draw_pin():
+        """Push-pin button: outlined while autohide is on, filled (pinned open) while it is off."""
+        pin_btn.delete("all")
+        on = autohide()
+        col = DIM if on else FG
+        fill = "" if on else FG
+        pin_btn.create_polygon(11, 8, 23, 8, 21, 16, 26, 21, 8, 21, 13, 16, outline=col, fill=fill, width=2, joinstyle="round")
+        pin_btn.create_line(17, 21, 17, 28, fill=col, width=2, capstyle="round")
+
+    def toggle_autohide(_=None):
+        ui_state["autohide"] = not autohide()
+        save_state(ui_state)
+        draw_pin()
+        dock["leave"] = _time.monotonic() if autohide() else None
+
+    pin_btn = tk.Canvas(hbar, width=34, height=34, bg=BG, highlightthickness=0, cursor="hand2")
+    pin_btn.bind("<ButtonRelease-1>", toggle_autohide)
+
     def dock_keep_out():
         """True while the widget must stay visible regardless of where the pointer is."""
         if dock["held"]:
@@ -3168,7 +3350,7 @@ def run_gui():
                 top, h, w = area[1], area[3] - area[1], dock_width()
                 px, py = root.winfo_pointerxy()
                 x = dock["x"]
-                if (x <= px < x + w and top <= py < top + h) or dock_keep_out():
+                if (x <= px < x + w and top <= py < top + h) or dock_keep_out() or not autohide():
                     dock["leave"], want = None, True
                 elif dock["shown"]:
                     dock["leave"] = dock["leave"] or now
@@ -3191,6 +3373,12 @@ def run_gui():
     def set_dock(side):
         ui_state["dock"] = side
         save_state(ui_state)
+        if side != "off" and ui_state.get("view") == "title":
+            ui_state["view"] = "full"
+            save_state(ui_state)
+            apply_layout()
+            if last:
+                render(*last["args"])
         if side == "off":  # back to a normal floating window, fully on screen where it was last shown
             l, t, r, b = screen_bounds()
             w = dock_width()
@@ -3215,13 +3403,20 @@ def run_gui():
         dock["held"] = on
 
     def sync_grip():
-        """The resize grip is hidden while docked (and in the Title view)."""
+        """The resize grip is hidden while docked (and in the Title view); the autohide button shows only while docked."""
+        if docked() and not pin_btn.winfo_manager():
+            draw_pin()
+            pin_btn.pack(side="right", padx=(8, 0))
+        elif not docked() and pin_btn.winfo_manager():
+            pin_btn.pack_forget()
         if docked() or ui_state.get("view", "full") == "title":
             grip.pack_forget()
         elif not grip.winfo_manager():
             grip.pack(side="bottom", anchor="se", padx=2, **({"before": container} if container.winfo_manager() else {}))
 
     if docked():
+        if ui_state.get("view") == "title":
+            ui_state["view"] = "full"
         dock["x"] = dock_shown_x()
         dock["leave"] = _time.monotonic() + 1.0  # stay out briefly at startup, then tuck away
         sync_grip()
