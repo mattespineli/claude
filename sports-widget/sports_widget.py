@@ -6112,8 +6112,9 @@ def run_gui():
         bg_entry.bind("<FocusOut>", on_bg_entry)
         presets = tk.Frame(win, bg=BG)  # the default, then the colours of the teams you follow
         presets.grid(row=13, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
-        bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8))
-        bg_tip.pack(side="right", padx=(8, 0))
+        bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w")
+        bg_tip.grid(row=99, column=0, columnspan=8, sticky="w", pady=(2, 0))  # its own line, so it never widens the window
+        n_presets = [0]
 
         def add_preset(name_, col_):
             shown_ = usable_bg(col_)
@@ -6122,7 +6123,8 @@ def run_gui():
             c_.bind("<ButtonRelease-1>", lambda e, h_=col_: apply_bg(h_))
             c_.bind("<Enter>", lambda e, n_=name_: bg_tip.config(text=n_))
             c_.bind("<Leave>", lambda e: bg_tip.config(text="Presets: default and your teams"))
-            c_.pack(side="left", padx=2)
+            c_.grid(row=n_presets[0] // 8, column=n_presets[0] % 8, padx=2)  # eight to a row, wrapping
+            n_presets[0] += 1
         add_preset("Default", DEFAULT_BG)
 
         def load_team_colors():
