@@ -1440,7 +1440,7 @@ def team_status(entry):
     own = team.get("recordSummary") or ((team.get("record") or {}).get("items") or [{}])[0].get("summary")
     events = data.get("events", [])
     event = pick_event(events)  # live game, else next game within a week
-    next_line = ""
+    next_line, next_tv = "", ""
     if not event or _state_of(event) != "in":
         recent = recent_result(events)
         if recent:  # a game that just ended: show the result and when the next one is
@@ -1451,6 +1451,7 @@ def team_status(entry):
             s_next = summarize_event(nxt, entry["team"], entry["sport"], entry["league"]) if nxt else None
             if s_next:
                 next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}"
+                next_tv = tv_channels(nxt["competitions"][0])
             else:  # e.g. eliminated while the league's playoffs go on: say when next season starts
                 start = season_start(entry, (data.get("season") or {}).get("year"))
                 next_line = season_label(start) if start else "No upcoming game scheduled"
@@ -1488,7 +1489,7 @@ def team_status(entry):
                           f" \u00b7 {streak}" if i == 0 and streak else ""))
                       for i, t in enumerate(comp_teams(event["competitions"][0], me or None))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
-            "next": next_line,
+            "next": next_line, "next_tv": next_tv,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
             "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
@@ -1536,7 +1537,8 @@ def quiet_status(entry, events, name, season_year=None, logo=None):
     s_next = summarize_event(nxt, entry["team"], sport, league) if nxt else None
     return {"name": name, "state": "none", "line": f"Last: {s_last[1]} \u00b7 {s_last[2]}" if s_last else "",
             "detail": f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else season_label(season_start(entry, season_year)),
-            "info": "", "graphic": None, "logos": [logo]}
+            "info": "", "graphic": None, "logos": [logo],
+            "next_tv": tv_channels(nxt["competitions"][0]) if s_next else ""}
 
 
 def fetch_all(entries):
@@ -4738,6 +4740,9 @@ def run_gui():
             if r.get("tv") and r["state"] == "pre":
                 tv_badges(tx, yy + 2, r["tv"], tags)
                 yy += 18
+            elif r["state"] == "none" and r.get("next_tv"):  # a quiet team's next game
+                tv_badges(tx, yy + 2, r["next_tv"], tags)
+                yy += 18
             if urls:
                 yy = max(yy, y_head + len(urls) * (lg_size + 2))  # the logo spans name, opponent and status lines
             if bb:
@@ -4762,6 +4767,9 @@ def run_gui():
             canvas.create_line(ix, yy + 5, ix + ww, yy + 5, fill=blend(bgc, FG, 0.12))  # a subtle divider above the next game
             _, h = ctext(ix, yy + 9, r["next"], FONTS["small"], DIM, width=ww, tags=tags)
             yy += 9 + h
+            if r.get("next_tv"):  # where to watch it
+                tv_badges(ix, yy + 1, r["next_tv"], tags, limit=3)
+                yy += 17
         g = r.get("game")
         ctx = None
         if g and gkey(g) in session["expanded"]:
@@ -6056,7 +6064,7 @@ def demo_data(o=None):
             {"at": time.time(), "secs": int(cm.group(1)) * 60 + int(cm.group(2)), "up": False} if cm.group(1)
             else {"at": time.time(), "secs": int(cm.group(3)) * 60 - 30, "up": True, "minute": int(cm.group(3))})
         return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/", "clock": clock,
-                "score": score, "status": status, "win": wbar, "next": next_line,
+                "score": score, "status": status, "win": wbar, "next": next_line, "next_tv": "NBC \u00b7 Peacock" if next_line else "",
                 "tv": {"nfl": "FOX", "mlb": "TBS", "nba": "ESPN \u00b7 ABC", "nhl": "TNT"}.get(league, "") if state in ("in", "pre") else "",
                 "teams": comp_teams(comp, (comp.get("competitors") or [None])[0]) if state != "none" else [],
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
@@ -6106,7 +6114,9 @@ def demo_data(o=None):
                 "W 31-24  Final", {}, tint="#c41230", state="post",
                 next_line="Next: @ #7 Boise State (8-1) \u00b7 Sat Oct 10 6:00 PM"),
             {"name": "Las Vegas Aces (30-14)", "state": "none", "line": "Last: vs New York Liberty (32-12) \u00b7 L 76-84  Final \u00b7 Sat Sep 19",
-             "detail": "Season starts May 15, 2027", "info": "", "graphic": None}]
+             "detail": "Season starts May 15, 2027", "info": "", "graphic": None},
+            {"name": "Seattle Storm (20-24)", "state": "none", "line": "Last: @ Phoenix Mercury (27-17) \u00b7 L 70-81  Final \u00b7 Sat Sep 19",
+             "detail": "Next: vs Chicago Sky \u00b7 Sat Oct 10 7:00 PM", "info": "", "graphic": None, "next_tv": "ESPN \u00b7 ABC"}]
 
 
 def demo_leagues():
