@@ -4060,7 +4060,7 @@ def run_gui():
         return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), None)  # None: no team to attach it to
 
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None,
-                   chained_in=False, chained_out=False, field=None, out=None, shake=False):
+                   chained_in=False, chained_out=False, field=None, out=None):
         """Start a celebration (animation + optional sound) on card k. `field`: a baseball run's (head, men on, runs), drawn as
         a little diamond instead of text; `out`: how long its fade-out takes."""
         now = _time.perf_counter()
@@ -4071,7 +4071,7 @@ def run_gui():
             "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
             "tcolor": t.get("gcolor") or t.get("color"), "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
             "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out,
-            "field": field, "out": out, "shake": shake or grand}
+            "field": field, "out": out}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
         if banner and not field and not chained_in:  # every animation plays the same chord (the steps of a base run do not repeat it)
             play_sound()
@@ -4143,10 +4143,8 @@ def run_gui():
         queue = session["celeb_next"].setdefault(k, [])
         if queue:
             queue[-1][1]["chained_out"] = True
-            queue[-1][1]["shake"] = queue[-1][0][3] != "FAILED CHALLENGE"  # the headline shakes when something follows it, but a failed challenge deflates
         elif k in session["celebs"]:
             session["celebs"][k]["chained_out"] = True
-            session["celebs"][k]["shake"] = session["celebs"][k]["head"] != "FAILED CHALLENGE"
         else:
             make_event(*args, **kw)
             return
@@ -4942,6 +4940,14 @@ def run_gui():
                 except tk.TclError:
                     pass
 
+    def shakes(ce):
+        """Does this banner's headline tremble? Per the Shake setting: a grand slam always; leading: when a Then animation follows it;
+        both: also the follow-up. A failed challenge and its call standing deflate, so they stay still."""
+        mode = ui_state.get("shake", "lead")
+        if mode == "off" or ce["head"] in ("FAILED CHALLENGE", "CALL STANDS") or ce.get("field"):
+            return False
+        return bool(ce.get("grand") or ce.get("chained_out") or (mode == "all" and ce.get("chained_in")))
+
     def draw_banner(cx, y0, y1, w, ce, t, bgc):
         """The scoring banner centred in the box (y0..y1): team, what happened, the play. Fades in and out."""
         a = banner_alpha(ce, t)
@@ -4979,7 +4985,7 @@ def run_gui():
                 canvas.move(i_, 0, shift)
         if lay:
             lay["banner"] += parts
-            if ce.get("shake"):
+            if shakes(ce):
                 lay["shake"] = (head_i, *canvas.coords(head_i)[:2])
 
     FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
@@ -6151,7 +6157,16 @@ def run_gui():
             save_state(ui_state)
         styled_option(win, sound_choice, ["On", "Muted"], command=on_sound, width=12).grid(
             row=9, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=10, column=0, padx=16, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Shake", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=10, column=0, padx=16, pady=(6, 4), sticky="w")
+        SHAKES = {"Off": "off", "Leading": "lead", "Both": "all"}  # leading: the animation a Then animation follows; both: it and what follows
+        shake_choice = tk.StringVar(value=next(k_ for k_, v_ in SHAKES.items() if v_ == ui_state.get("shake", "lead")))
+
+        def on_shake(label):
+            ui_state["shake"] = SHAKES[label]
+            save_state(ui_state)
+        styled_option(win, shake_choice, list(SHAKES), command=on_shake, width=12).grid(
+            row=10, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
         win_ref[0] = win
         tests = test_buttons(win)
         shown = [False]
@@ -6164,7 +6179,7 @@ def run_gui():
             if panel is None:
                 tests.grid_remove()
             if panel is not None:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
-                panel.grid(row=0, column=2, rowspan=15, padx=(0, 16), pady=16, sticky="n")
+                panel.grid(row=0, column=2, rowspan=16, padx=(0, 16), pady=16, sticky="n")
                 win.update_idletasks()
                 l, _t, r, _b = screen_bounds()
                 if win.winfo_x() + win.winfo_reqwidth() > r:
@@ -6181,8 +6196,8 @@ def run_gui():
         def toggle_tests():
             set_side(None if shown[0] else "tests")
         test_btn = styled_button(win, "Test...", toggle_tests)
-        test_btn.grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
+        test_btn.grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
             import shutil
@@ -6193,10 +6208,10 @@ def run_gui():
             session["sig"] = None
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
-        styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Background", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
+        styled_button(win, "Clear cache", clear_logos).grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Background", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=13, column=0, padx=16, pady=(6, 4), sticky="w")
         bgbox = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground=PANEL, highlightcolor=DIM)  # a HEX field with a preview
-        bgbox.grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
+        bgbox.grid(row=13, column=1, padx=16, pady=(6, 4), sticky="e")
         bg_swatch = tk.Canvas(bgbox, width=20, height=20, bg=PANEL, highlightthickness=0)
         bg_dot = bg_swatch.create_oval(3, 3, 17, 17, fill=BG, outline=DIM)
         bg_swatch.pack(side="left", padx=(6, 0))
@@ -6221,7 +6236,7 @@ def run_gui():
         bg_entry.bind("<Return>", on_bg_entry)
         bg_entry.bind("<FocusOut>", on_bg_entry)
         presets = tk.Frame(win, bg=BG)  # the default, then the colours of the teams you follow
-        presets.grid(row=13, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
+        presets.grid(row=14, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
         bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w")
         bg_tip.grid(row=99, column=0, columnspan=8, sticky="w", pady=(2, 0))  # its own line, so it never widens the window
         n_presets = [0]
@@ -6259,7 +6274,7 @@ def run_gui():
                     pass  # the window was closed meanwhile
             root.after(0, show)
         threading.Thread(target=load_team_colors, daemon=True).start()
-        styled_button(win, "Close", close).grid(row=14, column=1, padx=16, pady=(10, 16), sticky="e")
+        styled_button(win, "Close", close).grid(row=15, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         sp = ui_state.get("settings_pos")
         if isinstance(sp, list) and len(sp) == 2:  # where it was last time (kept on screen)
