@@ -2486,7 +2486,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {},
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {},
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -2708,13 +2708,14 @@ def run_gui():
                     pts += [x1 - 3 + 3 * math.cos(t), 17 - 3 * math.sin(t)] if right else ([x1, 20] if k == 0 else [x1, 14] if k == 8 else [])
                 return pts
             c.create_polygon(cap(0, W, True, True), fill=TRACK, outline="")
-            if g["red"]:
+            red = g["red"] or session["force_red"].get(session["cur_key"], 0) > _time.perf_counter()  # (or the Settings test)
+            if red:
                 c.create_rectangle(px(80), 14, px(100), 20, fill="#7f3b3b", outline="")
             c.create_polygon(cap(0, px(0), True, False), fill=g.get("color", "#52526a"), outline="")  # end zones in team colors:
             c.create_polygon(cap(px(100), W, False, True), fill=g.get("def_color", "#52526a"), outline="")  # own, then the one attacked
             for yd in range(0, 101, 10):  # goal lines and a line every 10 yards
                 c.create_line(px(yd), 14, px(yd), 20, fill=FG if yd in (0, 100) else "#7a7a88")
-            if g["red"]:  # red zone: the field bar glows
+            if red:  # red zone: the field bar glows
                 pid = c.create_rectangle(-2, 11, W + 2, 23, outline="#ef4444", fill="", width=2)
                 session["pulse_items"].append((pid, "#ef4444", bg))
                 start_pulse()
@@ -3530,7 +3531,8 @@ def run_gui():
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Momentum swing", "MOMENTUM SWING", "swing", None),
-             ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None)]
+             ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None),
+             ("Red zone", "", "redzone", None)]
 
     win_ref = [None]
 
@@ -3548,10 +3550,18 @@ def run_gui():
         if not r:
             styled_message("Test animations", "No game card is in view to play it on. Switch to the Games tab and scroll to a game.", win_ref[0])
             return
-        k = card_key(r)
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
-        if kind == "clutch":
-            session["force_clutch"][k] = _time.perf_counter() + 8
+        if kind == "redzone":  # needs a card with the football field strip
+            def has_field(r_):
+                gl_ = r_.get("graphic") or []
+                return any(g_["kind"] == "football" for g_ in ([gl_] if isinstance(gl_, dict) else gl_))
+            r = next((r_ for _y, r_ in shown if has_field(r_)), None)
+            if not r:
+                styled_message("Test animations", "The red zone shows on a live football game's field strip. Scroll to one and try again.", win_ref[0])
+                return
+        k = card_key(r)
+        if kind in ("clutch", "redzone"):
+            session["force_clutch" if kind == "clutch" else "force_red"][k] = _time.perf_counter() + 8
             session["sig"] = None
             draw_all()
             root.after(8200, lambda: (session.update(sig=None), draw_all()))
