@@ -57,6 +57,12 @@ def _parse_date(s):
         return None
 
 
+def _date_label(event):
+    """'Sat Oct 3' (local time) for a game's start, or ''."""
+    d = _parse_date(event.get("date"))
+    return f"{d.astimezone():%a %b} {d.astimezone().day}" if d else ""
+
+
 def _record(c):
     """' (50-32)' for a competitor, or '' when ESPN sends no record."""
     recs = c.get("records") or c.get("record") or []
@@ -122,7 +128,8 @@ def summarize_event(event, team_abbr):
             result = "W " if float(ms) > float(os_) else ("L " if float(ms) < float(os_) else "T ")
         except ValueError:
             pass
-    return state, f"{sep} {opp_name}", f"{result}{ms}-{os_}  {detail}"
+    played = f" \u00b7 {_date_label(event)}" if state == "post" and _date_label(event) else ""
+    return state, f"{sep} {opp_name}", f"{result}{ms}-{os_}  {detail}{played}"
 
 
 # Per-sport team stats to show on live games: (label, candidate ESPN stat names).
@@ -624,8 +631,6 @@ def playoff_games(debug=False, days=7):
                 prio = 1
             else:
                 prio = 2
-                if local:
-                    detail += f" · {local:%b} {local.day}"
             comp = e["competitions"][0]
             note = (comp.get("notes") or [{}])[0].get("headline", "")
             series = comp.get("series", {}).get("summary", "")
@@ -784,6 +789,8 @@ def summarize_game(event):
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
     else:
         text = f"{_score(away)}-{_score(home)}  {detail}"
+        if state == "post" and _date_label(event):
+            text += f" \u00b7 {_date_label(event)}"
     return state, f"{ab(away)} @ {ab(home)}", text
 
 
