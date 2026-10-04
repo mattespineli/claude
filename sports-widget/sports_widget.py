@@ -836,6 +836,56 @@ def box_score(data, away_id="", home_id=""):
     return out if any(out) else None
 
 
+# Top-performer pages for break and final cards: (box score category, page title, stats to rank by, stats to show).
+TOP_PAGES = {
+    "football": [("passing", "Passing", ("YDS",), ("C/ATT", "YDS", "TD", "INT")), ("rushing", "Rushing", ("YDS",), ("CAR", "YDS", "TD")),
+                 ("receiving", "Receiving", ("YDS",), ("REC", "YDS", "TD")), ("defensive", "Defense", ("TOT", "SACKS"), ("TOT", "SACKS", "TFL"))],
+    "basketball": [("", "Scoring", ("PTS",), ("PTS", "FG", "3PT")), ("", "Rebounds", ("REB",), ("REB", "OREB", "DREB")),
+                   ("", "Assists", ("AST",), ("AST", "TO", "STL"))],
+    "baseball": [("batting", "Batting", ("H", "RBI", "HR"), ("H-AB", "R", "RBI", "HR")), ("pitching", "Pitching", ("IP", "K"), ("IP", "H", "ER", "K"))],
+    "hockey": [(("forwards", "defenses"), "Skaters", ("G+A", "G", "S"), ("G", "A", "S")), ("goalies", "Goalies", ("SA",), ("SA", "SV", "SV%"))],
+}
+
+
+def top_pages(data, sport, away_id, home_id):
+    """[{"title", "names": (away player, home player), "rows": [(label, away, home)]}]: each team's best in each category."""
+    players = (data.get("boxscore") or {}).get("players") or []
+    if len(players) != 2 or sport not in TOP_PAGES:
+        return []
+    by_id = {str((p.get("team") or {}).get("id")): p for p in players}
+    sides = [by_id.get(str(away_id), players[0]), by_id.get(str(home_id), players[1])]
+
+    def num(v):
+        m = re.match(r"-?[\d.]+", str(v))
+        try:
+            return float(m.group(0)) if m else 0.0
+        except ValueError:
+            return 0.0
+    out = []
+    for cat, title, rank, show in TOP_PAGES[sport]:
+        cats = cat if isinstance(cat, tuple) else (cat,)
+        best = []
+        for side in sides:
+            blocks = [st for st in side.get("statistics") or [] if (str(st.get("name") or "").lower() in cats) or (cat == "" and st is (side.get("statistics") or [None])[0])]
+            top, key = None, None
+            for st in blocks:
+                labels = [str(l) for l in (st.get("labels") or st.get("names") or [])]
+                for a in st.get("athletes") or []:
+                    vals = a.get("stats") or []
+                    if a.get("didNotPlay") or not vals:
+                        continue
+                    get = lambda lb: vals[labels.index(lb)] if lb in labels and labels.index(lb) < len(vals) else ""
+                    k_ = tuple(num(get("G")) + num(get("A")) if r_ == "G+A" else num(get(r_)) for r_ in rank)
+                    if key is None or k_ > key:
+                        ath = a.get("athlete") or {}
+                        nm = ath.get("lastName") or (ath.get("shortName") or ath.get("displayName") or "?").split(" ")[-1]
+                        top, key = (nm, {lb: str(get(lb)) for lb in show}), k_
+            best.append(top)
+        if all(best) and any(any(v for v in b[1].values()) for b in best):
+            out.append({"title": title, "names": (best[0][0], best[1][0]), "rows": [(lb, best[0][1][lb], best[1][1][lb]) for lb in show if best[0][1][lb] or best[1][1][lb]]})
+    return out
+
+
 def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
     """Boil an ESPN summary response down to what the details window shows."""
     comp = ((data.get("header") or {}).get("competitions") or [{}])[0]
@@ -878,6 +928,7 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
             lines.append((_play_label(p, sport, league), text))
     out["plays"] = lines
     out["box"] = box_score(data, (away.get("team") or {}).get("id", ""), (home.get("team") or {}).get("id", ""))
+    out["top_pages"] = top_pages(data, sport, (away.get("team") or {}).get("id", ""), (home.get("team") or {}).get("id", ""))
     out["leaders"] = []  # top performers per ESPN leader category: [(label, {abbreviation: "Curry 31"})]
     ids = {str((c.get("team") or {}).get("id", "")): abbr(c) for c in (away, home)}
     for blk in data.get("leaders") or []:
@@ -3759,7 +3810,12 @@ def run_gui():
                         nm_ = nm_[:-1]
                     return f"{nm_}\u2026 {v_}"
                 tops_ = [(lb_, fit_(l_), fit_(r_)) for lb_, l_, r_ in tops_]
-                if tops_:  # a page of each team's top performers
+                tpages_ = d_.get("top_pages") or []
+                for tp_ in tpages_:  # a page per category: the two players, then their numbers
+                    nl_, nr_ = tp_["names"] if not flip else tp_["names"][::-1]
+                    rows_ = [(lb_, *((h_, a_) if flip else (a_, h_))) for lb_, a_, h_ in tp_["rows"]]
+                    pages.append(([(tp_["title"], fit_(nl_ + " x").rsplit(" ", 1)[0], fit_(nr_ + " x").rsplit(" ", 1)[0])] + rows_)[:nrows])
+                if tops_ and not tpages_:  # no box score (soccer): ESPN's leaders on one page
                     pages.append(tops_)
                 cyc = {"canvas": canvas, "pages": pages, "bgc": session.get("card_bg") or BG, "rows": [], "shown": None, "t0": 0.0, "base": 0}
                 for k_ in range(len(pages[0])):
