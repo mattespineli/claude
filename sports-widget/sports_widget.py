@@ -3273,7 +3273,7 @@ def run_gui():
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
     TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
-                   "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD!": 6, "BLOCKED FG TD!": 6}
+                   "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TOUCHDOWN!": 6, "BLOCKED FIELD GOAL TOUCHDOWN!": 6}
 
     def test_score(r, k, side, head):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
@@ -3588,7 +3588,7 @@ def run_gui():
             if n >= 6 and "intercept" in low:  # the defence takes it back for a touchdown
                 return "PICK SIX!", True
             if n >= 6 and "blocked" in low and ("punt" in low or "field goal" in low):
-                return ("BLOCKED PUNT TD!" if "punt" in low else "BLOCKED FG TD!"), True
+                return ("BLOCKED PUNT TOUCHDOWN!" if "punt" in low else "BLOCKED FIELD GOAL TOUCHDOWN!"), True
             return {6: "TOUCHDOWN!", 7: "TOUCHDOWN!", 8: "TOUCHDOWN!", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
         if sport in ("hockey", "soccer"):
             return "GOAL!", True
@@ -3614,9 +3614,9 @@ def run_gui():
         low = text.lower()
         if sport == "football":
             if "blocked" in low and "field goal" in low:
-                return "BLOCKED FG", "#a78bfa", 4.0
+                return "BLOCKED FG!", "#a78bfa", 4.0
             if "blocked" in low and "punt" in low:
-                return "BLOCKED PUNT", "#a78bfa", 4.0
+                return "BLOCKED PUNT!", "#a78bfa", 4.0
             if "blocked" in low and ("extra point" in low or "kick" in low):
                 return "BLOCKED PAT", "#a78bfa", 3.5
             if "onside" in low:
@@ -3673,7 +3673,7 @@ def run_gui():
         rec = re.search(r"recovered by ([A-Z]{2,4})-", text, re.I)
         return (kick.group(1).upper() if kick else ""), (rec.group(1).upper() if rec else "")
 
-    KICK_PLAYS = ("BLOCKED FG", "BLOCKED PUNT", "BLOCKED PAT", "ONSIDE KICK RECOVERED")
+    KICK_PLAYS = ("BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT", "ONSIDE KICK RECOVERED")
 
     def kick_side(r, head, text, kicker):
         """Index of the team that made a special-teams play: the kicking team for an onside recovery, the other team for
@@ -3730,7 +3730,7 @@ def run_gui():
         if sport == "football" and fb_:
             off = next((i for i, t in enumerate(tm) if t.get("abbr", "").upper() == str(fb_["off"]).upper()), None)
             if off is not None:
-                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED FG", "BLOCKED PUNT", "BLOCKED PAT") else off
+                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT") else off
         if sport == "baseball":
             m = re.match(r"\s*(Top|Bot)", str(r.get("status") or r.get("detail") or ""))
             bat = next((i for i, t in enumerate(tm) if m and t.get("ha") == ("away" if m.group(1) == "Top" else "home")), None)
@@ -3996,14 +3996,14 @@ def run_gui():
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
              ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("4th down", "4TH DOWN", "fourth", None),
              ("Turnover on downs", "TURNOVER ON DOWNS!", "turnover", None),
-             ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
-             ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
+             ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG!", "turnover", "#a78bfa"),
+             ("Blocked punt", "BLOCKED PUNT!", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
              ("Run scores", "RUN SCORES", "run", None),
              ("Triple play", "TRIPLE PLAY!", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
-             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt TD", "BLOCKED PUNT TD!", "score", None), ("Blocked FG TD", "BLOCKED FG TD!", "score", None),
+             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked field goal touchdown", "BLOCKED FIELD GOAL TOUCHDOWN!", "score", None),
              ("Blocked PAT", "BLOCKED PAT", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None),
@@ -4071,20 +4071,36 @@ def run_gui():
         side_.grid(row=0, column=1, sticky="nw")
         opts_ = tk.Frame(head_, bg=BG)
         opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
+        sync_runs = [lambda: None]
         sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
-        bases_ = [False, False, False]
+        LEAD_ = ("Lead", "lead", (("Tied", "tied"), ("Close", "close"), ("Blowout", "blowout")))
+        QTR_ = lambda title, n: (title, "q", tuple((str(i), i) for i in range(1, n + 1)))
+        OPTS_ = {  # what each sport's dummy card can be set to: (title, key, ((label, value), ...))
+            "Football": [LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("10:00", "10:00"), ("4:10", "4:10"), ("1:30", "1:30"))),
+                         ("Down", "down", tuple((str(i), i) for i in range(1, 5))), ("To go", "dist", (("1", 1), ("4", 4), ("10", 10), ("20", 20))),
+                         ("Field", "field", (("Own 25", "own"), ("Midfield", "mid"), ("Red zone", "red"), ("Goal line", "goal"))),
+                         ("Ball", "poss", (("SF", "SF"), ("DAL", "DAL")))],
+            "Baseball": [("Men on", "bases", ("1st", "2nd", "3rd")), ("Outs", "outs", (("0", 0), ("1", 1), ("2", 2))),
+                         ("Balls", "balls", tuple((str(i), i) for i in range(4))), ("Strikes", "strikes", tuple((str(i), i) for i in range(3))),
+                         ("Half", "half", (("Top", "Top"), ("Bottom", "Bot"))), ("Inning", "inning", (("1st", 1), ("7th", 7), ("9th", 9))), LEAD_],
+            "Basketball": [LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("8:00", "8:00"), ("4:00", "4:00"), ("1:30", "1:30")))],
+            "Hockey": [LEAD_, QTR_("Period", 3), ("Clock", "clock", (("15:00", "15:00"), ("10:00", "10:00"), ("2:00", "2:00"))),
+                       ("Power play", "pp", (("On", True), ("Off", False)))],
+            "Soccer": [LEAD_, ("Minute", "min", (("20'", 20), ("67'", 67), ("85'", 85))), ("Red card", "red", (("On", True), ("Off", False)))]}
+        DEFAULTS_ = {"Football": {"lead": "close", "q": 3, "clock": "4:10", "down": 3, "dist": 4, "field": "mid", "poss": "SF"},
+                     "Baseball": {"bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close"},
+                     "Basketball": {"lead": "close", "q": 3, "clock": "4:00"},
+                     "Hockey": {"lead": "close", "q": 2, "clock": "10:00", "pp": True},
+                     "Soccer": {"lead": "close", "min": 67, "red": True}}
+        dstate_ = {k_: dict(v_, **({"bases": list(v_["bases"])} if "bases" in v_ else {})) for k_, v_ in DEFAULTS_.items()}
 
         def build_dummy(sport_):
             import copy
-            row_ = copy.deepcopy(demo_data()[dict(sports_)[sport_]])
+            row_ = copy.deepcopy(demo_data(dstate_[sport_])[dict(sports_)[sport_]])
             lg_ = {"Football": "nfl", "Baseball": "mlb", "Basketball": "nba", "Hockey": "nhl"}.get(sport_)
             for t_ in row_.get("teams") or []:
                 if lg_ and not t_.get("logo"):
                     t_["logo"] = f"https://a.espncdn.com/i/teamlogos/{lg_}/500/{t_['abbr'].lower()}.png"
-            gl_ = row_.get("graphic") or []
-            for g_ in ([gl_] if isinstance(gl_, dict) else gl_):
-                if g_["kind"] == "baseball":
-                    g_["bases"] = list(bases_)
             return row_
 
         def show_dummy(rebuild=True):
@@ -4099,31 +4115,38 @@ def run_gui():
         def draw_options():
             for w_ in opts_.winfo_children():
                 w_.destroy()
-            if sport_var.get() == "Baseball":  # men on base: toggles the diamond on the dummy card
-                tk.Label(opts_, text="Men on base", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
-                row_ = tk.Frame(opts_, bg=BG)
-                row_.pack(anchor="w")
+            sport_ = sport_var.get()
+            st_ = dstate_[sport_]
+            for r_, (title_, key_, choices_) in enumerate(OPTS_[sport_]):
+                tk.Label(opts_, text=title_, bg=BG, fg=DIM, font=("Segoe UI", 9), width=9, anchor="w").grid(row=r_, column=0, padx=(2, 4), pady=2, sticky="w")
+                line_ = tk.Frame(opts_, bg=BG)
+                line_.grid(row=r_, column=1, sticky="w")
+                multi_ = key_ == "bases"  # men on base: any combination; the rest are one choice each
                 pills_ = []
-
-                def flip(i_):
-                    bases_[i_] = not bases_[i_]
-                    for j_, (c_, shape_, txt_) in enumerate(pills_):
-                        on = bases_[j_]
-                        c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
-                        c_.itemconfigure(txt_, fill=FG if on else DIM)
-                    show_dummy()
-                for i_, lab_ in enumerate(("1st", "2nd", "3rd")):
-                    pw_ = text_width(FONTS["smallb"], lab_) + 20
-                    c_ = tk.Canvas(row_, width=pw_, height=24, bg=BG, highlightthickness=0, cursor="hand2")
+                for i_, ch_ in enumerate(choices_):
+                    lab_, val_ = (ch_, i_) if multi_ else ch_
+                    pw_ = text_width(FONTS["smallb"], lab_) + 18
+                    c_ = tk.Canvas(line_, width=pw_, height=24, bg=BG, highlightthickness=0, cursor="hand2")
                     shape_ = c_.create_polygon(rr_points(1, 2, pw_ - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
                     txt_ = c_.create_text(pw_ / 2, 12, text=lab_, font=FONTS["smallb"], fill=DIM)
-                    c_.bind("<ButtonRelease-1>", lambda e, i2=i_: flip(i2))
                     c_.pack(side="left", padx=2)
-                    pills_.append((c_, shape_, txt_))
-                for j_, (c_, shape_, txt_) in enumerate(pills_):
-                    on = bases_[j_]
-                    c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
-                    c_.itemconfigure(txt_, fill=FG if on else DIM)
+                    pills_.append((val_, c_, shape_, txt_))
+
+                    def click(e, v_=val_, k_=key_, ps_=pills_, m_=multi_):
+                        if m_:
+                            st_[k_][v_] = not st_[k_][v_]
+                        else:
+                            st_[k_] = v_
+                        paint(k_, ps_, m_)
+                        show_dummy()
+                    c_.bind("<ButtonRelease-1>", click)
+
+                def paint(k_, ps_, m_):
+                    for v_, c_, shape_, txt_ in ps_:
+                        on = st_[k_][v_] if m_ else st_[k_] == v_
+                        c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
+                        c_.itemconfigure(txt_, fill=FG if on else DIM)
+                paint(key_, pills_, multi_)
 
         sport_var = tk.StringVar(value=ui_state.get("test_sport", "Football"))
 
@@ -4131,6 +4154,7 @@ def run_gui():
             ui_state["test_sport"] = v_
             save_state(ui_state)
             draw_options()
+            sync_runs[0]()
             show_dummy()
         tk.Label(side_, text="Dummy card", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
         styled_option(side_, sport_var, [n_ for n_, _ in sports_], command=on_sport, width=12).pack(anchor="w")
@@ -4162,6 +4186,7 @@ def run_gui():
                 c_.pack(side="left", padx=2)
                 pills[val] = (c_, shape_, txt_)
             pick(session.get(key, default))
+            return fr
         # Then: any number of follow-ups, played one after the other in the order they were picked
         then = tk.Frame(f, bg=BG)
         then.grid(row=1, column=0, columnspan=3, pady=(0, 6), sticky="w")
@@ -4188,7 +4213,9 @@ def run_gui():
         for v_ in list(session["test_follow"]):  # picks from earlier in the session
             session["test_follow"].remove(v_)
             toggle_then(v_)
-        choice_row(2, "Runs", "test_runs", ((0, "0"), (1, "1"), (2, "2"), (3, "3"), (4, "4")), 0)  # for single, double, triple
+        runs_row = choice_row(2, "Runs", "test_runs", ((0, "0"), (1, "1"), (2, "2"), (3, "3"), (4, "4")), 0)  # for single, double, triple
+        sync_runs[0] = lambda: runs_row.grid() if sport_var.get() == "Baseball" else runs_row.grid_remove()  # only baseball has runs
+        sync_runs[0]()
         err = tk.Label(f, text="", bg=BG, fg=COLORS["err"], font=("Segoe UI", 9), anchor="w", justify="left", wraplength=420)
         err.grid(row=3 + (len(TESTS) + 2) // 3, column=0, columnspan=3, padx=4, pady=(6, 0), sticky="w")
         marks = []
@@ -4341,7 +4368,12 @@ def run_gui():
             parts.append((i_, col))
             y += h
         col = blend(ce["color"], "#ffffff", 0.2)
-        i_, h = ctext(cx, y, ce["head"], FONTS["ban"], blend(bgc, col, a), width=w, anchor="n", justify="center")
+        bfont = FONTS["ban"]
+        for size_ in (14, 13, 12, 11, 10, 9):  # the longest word (with its "!") has to fit on one line, so a "!" never wraps alone
+            bfont = ("Segoe UI", size_, "bold")
+            if max(text_width(bfont, w_) for w_ in ce["head"].split()) <= w - 4:
+                break
+        i_, h = ctext(cx, y, ce["head"], bfont, blend(bgc, col, a), width=w, anchor="n", justify="center")
         parts.append((i_, col))
         y += h
         if ce["detail"]:
@@ -5747,8 +5779,15 @@ TEAM_COLORS = {"SF": {"color": "aa0000", "alternateColor": "b3995d"}, "DAL": {"c
                "ARS": {"color": "ef0107", "alternateColor": "ffffff"}, "CHE": {"color": "034694", "alternateColor": "ffffff"}}
 
 
-def demo_data():
-    """Fake live games for every sport, built through the real graphic/text code paths."""
+def demo_data(o=None):
+    """Fake live games for every sport, built through the real graphic/text code paths.
+    `o` (the Settings dummy card's options) changes situations: lead, bases/outs/count/inning, down/distance/field/possession/clock..."""
+    o = o or {}
+    ordn = lambda n: {1: "1st", 2: "2nd", 3: "3rd"}.get(n, f"{n}th")
+    leads = {"football": {"tied": (21, 21), "close": (24, 21), "blowout": (35, 7)}, "baseball": {"tied": (3, 3), "close": (3, 2), "blowout": (9, 1)},
+             "basketball": {"tied": (78, 78), "close": (78, 74), "blowout": (98, 70)}, "hockey": {"tied": (2, 2), "close": (2, 1), "blowout": (5, 1)},
+             "soccer": {"tied": (1, 1), "close": (2, 1), "blowout": (4, 0)}}
+    sc = lambda sport, dflt: leads[sport][o["lead"]] if o.get("lead") else dflt
     st = lambda n, v: {"name": n, "displayValue": str(v)}
     recs = {"SF": "4-1", "DAL": "3-2", "SFG": "85-77", "LAD": "98-64", "GS": "48-34", "BOS": "64-18", "NJ": "3-1-0",
             "ARS": "6-1-2", "CHE": "5-2-2"}
@@ -5770,33 +5809,48 @@ def demo_data():
                 "tv": {"nfl": "FOX", "mlb": "TBS", "nba": "ESPN \u00b7 ABC", "nhl": "TNT"}.get(league, "") if state in ("in", "pre") else "",
                 "teams": comp_teams(comp, (comp.get("competitors") or [None])[0]) if state != "none" else [],
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
-    nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
-           "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4,
+    fa, fb = sc("football", (21, 17))
+    offense, defense = ("SF", "DAL") if o.get("poss", "SF") == "SF" else ("DAL", "SF")
+    fside, fyd = {"own": (offense, 25), "mid": (defense, 50), "red": (defense, 15), "goal": (defense, 3)}.get(o.get("field"), (defense, 38))
+    nfl = {"competitors": [team("25", "away", "SF", fa), team("6", "home", "DAL", fb)],
+           "situation": {"shortDownDistanceText": f"{ordn(o.get('down', 3))} & {o.get('dist', 4)}", "possession": "25" if offense == "SF" else "6",
+                         "possessionText": f"{fside} {fyd}", "distance": o.get("dist", 4), "isRedZone": fside == defense and fyd <= 20,
                          "homeTimeouts": 2, "awayTimeouts": 3,
                          "lastPlay": {"text": "J. Purdy pass complete to G. Kittle for 12 yards to the DAL 38"}}}
-    mlb = {"status": {"type": {"shortDetail": "Top 7th"}},
-           "competitors": [team("1", "away", "SFG", 3), team("2", "home", "LAD", 2)],
-           "situation": {"awayChallengesRemaining": 1, "homeChallengesRemaining": 2, "balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
+    ba, bb = sc("baseball", (3, 2))
+    bs = o.get("bases", (True, False, True))
+    inning_txt = f"{o.get('half', 'Top')} {ordn(o.get('inning', 7))}"
+    mlb = {"status": {"type": {"shortDetail": inning_txt}},
+           "competitors": [team("1", "away", "SFG", ba), team("2", "home", "LAD", bb)],
+           "situation": {"awayChallengesRemaining": 1, "homeChallengesRemaining": 2, "balls": o.get("balls", 1), "strikes": o.get("strikes", 2),
+                         "outs": o.get("outs", 2), "onFirst": bs[0], "onSecond": bs[1], "onThird": bs[2],
                          "lastPlay": {"text": "Strike 2 swinging"}, "batter": {"athlete": {"shortName": "M. Chapman"}}, "pitcher": {"athlete": {"shortName": "T. Glasnow"}}}}
-    nba = {"status": {"period": 3, "clock": 312.0, "displayClock": "5:12"},
+    na, nb = sc("basketball", (78, 74))
+    nclk = o.get("clock", "5:12")
+    nba = {"status": {"period": o.get("q", 3), "clock": int(nclk.split(":")[0]) * 60.0 + int(nclk.split(":")[1]), "displayClock": nclk},
            "situation": {"lastPlay": {"text": "S. Curry makes 26-foot three point jumper (A. Wiggins assists)"}},
-           "competitors": [team("9", "away", "GS", 78, [st("fouls", 9), st("rebounds", 31)]),
-                           team("2", "home", "BOS", 74, [st("fouls", 12), st("rebounds", 28)])]}
-    nhl = {"status": {"period": 2, "clock": 407.0, "displayClock": "6:47"}, "situation": {"powerPlay": True, "powerPlayTeam": "NJ",
+           "competitors": [team("9", "away", "GS", na, [st("fouls", 9), st("rebounds", 31)]),
+                           team("2", "home", "BOS", nb, [st("fouls", 12), st("rebounds", 28)])]}
+    ha_, hb_ = sc("hockey", (2, 1))
+    hclk = o.get("clock", "6:47")
+    nhl = {"status": {"period": o.get("q", 2), "clock": int(hclk.split(":")[0]) * 60.0 + int(hclk.split(":")[1]), "displayClock": hclk},
+           "situation": {"powerPlay": o.get("pp", True), "powerPlayTeam": "NJ",
                                                                   "lastPlay": {"text": "Shot on goal by J. Hughes, saved by J. Swayman"}},
-           "competitors": [team("1", "away", "NJ", 2, [st("shotsOnGoal", 24)]), team("2", "home", "BOS", 1, [st("shotsOnGoal", 17)])]}
-    soc = {"status": {"displayClock": "67'"},
+           "competitors": [team("1", "away", "NJ", ha_, [st("shotsOnGoal", 24)]), team("2", "home", "BOS", hb_, [st("shotsOnGoal", 17)])]}
+    sa, sb = sc("soccer", (1, 1))
+    smin = o.get("min", 67)
+    soc = {"status": {"displayClock": f"{smin}'"},
            "details": [{"scoringPlay": True, "clock": {"displayValue": "23'"}, "team": {"id": "1"}},
                        {"yellowCard": True, "clock": {"displayValue": "41'"}, "team": {"id": "2"}},
                        {"scoringPlay": True, "clock": {"displayValue": "55'"}, "team": {"id": "2"}},
-                       {"redCard": True, "clock": {"displayValue": "62'"}, "team": {"id": "2"}}],
-           "competitors": [team("1", "home", "ARS", 1, [st("possessionPct", 61), st("totalShots", 12)]),
-                           team("2", "away", "CHE", 1, [st("possessionPct", 39), st("totalShots", 6)])]}
-    return [row("San Francisco 49ers (4-1)", "football", "nfl", "@ Dallas Cowboys (3-2)", "21-17  Q3 5:12", nfl, tint="#aa0000", win=("SF", 62, "DAL", 38, "#b3995d", "#869397")),
-            row("San Francisco Giants (85-77)", "baseball", "mlb", "@ Los Angeles Dodgers (98-64)", "3-2  Top 7th", mlb, tint="#fd5a1e", win=("SFG", 58, "LAD", 42, "#fd5a1e", "#005a9c")),
-            row("(4) Golden State Warriors (48-34)", "basketball", "nba", "@ (1) Boston Celtics (64-18)", "78-74  Q3 5:12", nba, tint="#1d428a", win=("GS", 59, "BOS", 41, "#1d428a", "#007a33")),
-            row("New Jersey Devils (3-1-0)", "hockey", "nhl", "@ Boston Bruins (2-2-0)", "2-1  P2 6:47", nhl, tint="#ce1126"),
-            row("Arsenal (6-1-2)", "soccer", "eng.1", "vs Chelsea (5-2-2)", "1-1  67'", soc, tint="#ef0107"),
+                       *([{"redCard": True, "clock": {"displayValue": "62'"}, "team": {"id": "2"}}] if o.get("red", True) else [])],
+           "competitors": [team("1", "home", "ARS", sa, [st("possessionPct", 61), st("totalShots", 12)]),
+                           team("2", "away", "CHE", sb, [st("possessionPct", 39), st("totalShots", 6)])]}
+    return [row("San Francisco 49ers (4-1)", "football", "nfl", "@ Dallas Cowboys (3-2)", f"{fa}-{fb}  Q{o.get('q', 3)} {o.get('clock', '5:12')}", nfl, tint="#aa0000", win=("SF", 62, "DAL", 38, "#b3995d", "#869397")),
+            row("San Francisco Giants (85-77)", "baseball", "mlb", "@ Los Angeles Dodgers (98-64)", f"{ba}-{bb}  {inning_txt}", mlb, tint="#fd5a1e", win=("SFG", 58, "LAD", 42, "#fd5a1e", "#005a9c")),
+            row("(4) Golden State Warriors (48-34)", "basketball", "nba", "@ (1) Boston Celtics (64-18)", f"{na}-{nb}  Q{o.get('q', 3)} {nclk}", nba, tint="#1d428a", win=("GS", 59, "BOS", 41, "#1d428a", "#007a33")),
+            row("New Jersey Devils (3-1-0)", "hockey", "nhl", "@ Boston Bruins (2-2-0)", f"{ha_}-{hb_}  P{o.get('q', 2)} {hclk}", nhl, tint="#ce1126"),
+            row("Arsenal (6-1-2)", "soccer", "eng.1", "vs Chelsea (5-2-2)", f"{sa}-{sb}  {smin}'", soc, tint="#ef0107"),
             row("#12 San Diego State Aztecs Football (7-2)", "football", "college-football", "vs Boise State (8-1)",
                 "W 31-24  Final", {}, tint="#c41230", state="post",
                 next_line="Next: @ #7 Boise State (8-1) \u00b7 Sat Oct 10 6:00 PM"),
