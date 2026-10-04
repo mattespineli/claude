@@ -2329,14 +2329,12 @@ def run_gui():
             return 44
         if kind == "football":
             px = lambda yd: W * (yd + 10) / 120  # yards from the offense's goal line, with an end zone at each end
-            c.create_line(3, 17, W - 3, 17, fill=TRACK, width=6, capstyle="round")
+            c.create_rectangle(0, 14, W, 20, fill=TRACK, outline="")
             if g["red"]:
-                c.create_line(px(80), 17, px(100), 17, fill="#7f3b3b", width=6)
+                c.create_rectangle(px(80), 14, px(100), 20, fill="#7f3b3b", outline="")
             ez = px(0)  # end zones in the team colors: the offense's own on the left, the one it attacks on the right
-            c.create_oval(0, 14, 6, 20, fill=g.get("color", "#52526a"), outline="")
-            c.create_rectangle(3, 14, ez, 20, fill=g.get("color", "#52526a"), outline="")
-            c.create_oval(W - 6, 14, W, 20, fill=g.get("def_color", "#52526a"), outline="")
-            c.create_rectangle(px(100), 14, W - 3, 20, fill=g.get("def_color", "#52526a"), outline="")
+            c.create_rectangle(0, 14, ez, 20, fill=g.get("color", "#52526a"), outline="")
+            c.create_rectangle(px(100), 14, W, 20, fill=g.get("def_color", "#52526a"), outline="")
             for yd in range(0, 101, 10):  # goal lines and a line every 10 yards
                 c.create_line(px(yd), 14, px(yd), 20, fill=FG if yd in (0, 100) else "#7a7a88")
             if g["first"] is not None:
