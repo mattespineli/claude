@@ -4690,10 +4690,10 @@ def run_gui():
                     canvas.itemconfigure(i_, fill=blend(bgc, col, a))
                 if lay.get("shake"):  # the headline trembles as it lands, then settles
                     hi_, bx_, by_, fs_, ww_ = lay["shake"]
-                    k_ = a * max(0.0, 1 - max(0.0, t - INFO_OUT) / 1.4)  # 1 as it lands, down to 0 as it settles
+                    k_ = a * ease(1 - max(0.0, t - INFO_OUT) / 1.6)  # 1 as it lands, easing down to 0 as it settles
                     canvas.coords(hi_, bx_ + 3.0 * k_ * math.sin(t * 75), by_ + 3.0 * k_ * math.cos(t * 91))
-                    sz_ = max(fs_, round(fs_ * (1 + 0.3 * ease(k_))))
-                    canvas.itemconfigure(hi_, font=("Segoe UI", sz_, "bold"))  # it swells, then shrinks back
+                    px_ = round(fs_ * root.winfo_fpixels("1p") * (1 + 0.3 * k_))  # in pixels, so the size changes in one-pixel steps
+                    canvas.itemconfigure(hi_, font=("Segoe UI", -px_, "bold"))  # it swells, then shrinks back
                 ia = info_alpha(ce, t)
                 for i_, opt, base in lay["fade"]:
                     if opt == "pill":
