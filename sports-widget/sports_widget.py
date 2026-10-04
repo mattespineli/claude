@@ -3638,13 +3638,17 @@ def run_gui():
             return 1 - i
         return idx(rec.group(1)) if rec else None
 
-    def play_sound(kind):
-        """A short chime (Windows beeps; the system bell elsewhere), unless sounds are muted in Settings."""
-        if not ui_state.get("sound", True):
+    SOUND_TONES = {"score": [(660, 80), (880, 130)], "turnover": [(440, 100), (330, 170)],
+                   "grand": [(523, 90), (659, 90), (784, 90), (1047, 260)], "final": [(392, 280)],
+                   "swing": [(587, 90), (494, 130)], "fourth": [(330, 110), (330, 110), (392, 180)]}
+    SOUNDBOARD = [("4th down", "fourth"), ("Final", "final"), ("Grand slam", "grand"), ("Momentum swing", "swing"),
+                  ("Score", "score"), ("Turnover", "turnover")]  # (label, sound): what the Settings soundboard plays
+
+    def play_sound(kind, force=False):
+        """A short chime (Windows beeps; the system bell elsewhere), unless sounds are muted in Settings (the soundboard forces it)."""
+        if not force and not ui_state.get("sound", True):
             return
-        tones = {"score": [(660, 80), (880, 130)], "turnover": [(440, 100), (330, 170)],
-                 "grand": [(523, 90), (659, 90), (784, 90), (1047, 260)], "final": [(392, 280)],
-                 "swing": [(587, 90), (494, 130)], "fourth": [(330, 110), (330, 110), (392, 180)]}.get(kind)
+        tones = SOUND_TONES.get(kind)
         if not tones:
             return
 
@@ -5102,7 +5106,7 @@ def run_gui():
         def toggle_tests():
             shown[0] = not shown[0]
             if shown[0]:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
-                tests.grid(row=0, column=2, rowspan=13, padx=(0, 16), pady=16, sticky="n")
+                tests.grid(row=0, column=2, rowspan=15, padx=(0, 16), pady=16, sticky="n")
                 win.update_idletasks()
                 l, _t, r, _b = screen_bounds()
                 if win.winfo_x() + win.winfo_reqwidth() > r:
@@ -5130,7 +5134,24 @@ def run_gui():
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
         styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", close).grid(row=12, column=1, padx=16, pady=(10, 16), sticky="e")
+        tk.Label(win, text="Soundboard", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
+        board = tk.Frame(win, bg=BG)  # one button per sound, below the options; plays even while muted
+        for i, (label, kind) in enumerate(SOUNDBOARD):
+            styled_button(board, label, lambda k_=kind: play_sound(k_, force=True)).grid(row=i // 3, column=i % 3, padx=4, pady=3, sticky="w")
+        board_shown = [False]
+
+        def toggle_board():
+            board_shown[0] = not board_shown[0]
+            if board_shown[0]:
+                board.grid(row=13, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="w")
+            else:
+                board.grid_remove()
+            board_btn.itemconfigure(2, text="Hide" if board_shown[0] else "Test...")
+            ui_state["settings_sounds"] = board_shown[0]
+            save_state(ui_state)
+        board_btn = styled_button(win, "Test...", toggle_board)
+        board_btn.grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", close).grid(row=14, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         sp = ui_state.get("settings_pos")
         if isinstance(sp, list) and len(sp) == 2:  # where it was last time (kept on screen)
@@ -5140,6 +5161,8 @@ def run_gui():
         win.geometry(f"+{sx}+{sy}")
         if ui_state.get("settings_tests"):  # the test buttons were showing last time
             toggle_tests()
+        if ui_state.get("settings_sounds"):
+            toggle_board()
         pos_save = {"id": None}
 
         def on_move(e):
