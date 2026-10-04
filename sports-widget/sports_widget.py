@@ -3236,8 +3236,8 @@ def run_gui():
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
-    TEST_POINTS = {"TOUCHDOWN": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
-                   "RUN SCORES": 1, "PICK SIX": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD": 6}
+    TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
+                   "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD!": 6, "BLOCKED FG TD!": 6}
 
     def test_score(r, k, side, head):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
@@ -3523,7 +3523,7 @@ def run_gui():
             if "grand slam" in low or (n == 4 and prev[2]):
                 return "GRAND SLAM!", True
             if "homer" in low or "home run" in low:
-                return "HOME RUN", True
+                return "HOME RUN!", True
             hit = next((h_ for h_, w_ in (("TRIPLE", "tripled"), ("DOUBLE", "doubled"), ("SINGLE", "singled")) if re.search(rf"\b{w_}\b(?! off)", low)), None)
             if hit:  # runs scored on a hit: 1-RUN SINGLE, 2-RUN DOUBLE
                 return f"{n}-RUN {hit}", True
@@ -3532,10 +3532,10 @@ def run_gui():
             if n == 2 and "safety" not in low and ("two-point" in low or "conversion" in low):
                 return "2-PT CONVERSION", True
             if n >= 6 and "intercept" in low:  # the defence takes it back for a touchdown
-                return "PICK SIX", True
+                return "PICK SIX!", True
             if n >= 6 and "blocked" in low and ("punt" in low or "field goal" in low):
-                return ("BLOCKED PUNT TD" if "punt" in low else "BLOCKED FG TD"), True
-            return {6: "TOUCHDOWN", 7: "TOUCHDOWN", 8: "TOUCHDOWN", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
+                return ("BLOCKED PUNT TD!" if "punt" in low else "BLOCKED FG TD!"), True
+            return {6: "TOUCHDOWN!", 7: "TOUCHDOWN!", 8: "TOUCHDOWN!", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
         if sport in ("hockey", "soccer"):
             return "GOAL!", True
         if sport == "basketball":  # every basket would be too much: threes and lead changes only
@@ -3586,7 +3586,7 @@ def run_gui():
                 return "KICKOFF", "#9aa0a6", 2.5
         elif sport == "baseball":
             if "triple play" in low:
-                return "TRIPLE PLAY", "#fbbf24", 4.0
+                return "TRIPLE PLAY!", "#fbbf24", 4.0
             if "double play" in low:
                 return "DOUBLE PLAY", "#34d399", 3.5
             if re.search(r"\btripled\b", low):
@@ -3677,7 +3677,7 @@ def run_gui():
             m = re.match(r"\s*(Top|Bot)", str(r.get("status") or r.get("detail") or ""))
             bat = next((i for i, t in enumerate(tm) if m and t.get("ha") == ("away" if m.group(1) == "Top" else "home")), None)
             if bat is not None:
-                fielding = ("STRIKEOUT", "OUT", "DOUBLE PLAY", "TRIPLE PLAY", "CAUGHT STEALING", "PICKED OFF")
+                fielding = ("STRIKEOUT", "OUT", "DOUBLE PLAY", "TRIPLE PLAY!", "CAUGHT STEALING", "PICKED OFF")
                 return 1 - bat if head in fielding else bat
         return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), None)  # None: no team to attach it to
 
@@ -3864,9 +3864,9 @@ def run_gui():
         return False
 
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
-    TESTS = [("Touchdown", "TOUCHDOWN", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
-             ("Home run", "HOME RUN", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
-             ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
+    TESTS = [("Touchdown", "TOUCHDOWN!", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
+             ("Home run", "HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
+             ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX!", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
@@ -3876,10 +3876,10 @@ def run_gui():
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
              ("Run scores", "RUN SCORES", "run", None),
-             ("Triple play", "TRIPLE PLAY", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
+             ("Triple play", "TRIPLE PLAY!", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
-             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt TD", "BLOCKED PUNT TD", "score", None),
+             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt TD", "BLOCKED PUNT TD!", "score", None), ("Blocked FG TD", "BLOCKED FG TD!", "score", None),
              ("Blocked PAT", "BLOCKED PAT", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None),
