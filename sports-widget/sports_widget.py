@@ -931,7 +931,7 @@ STAT_PICKS = {
 
 def pick_stats(sport, full, n=4):
     """[(label, away, home)] for the sport's key stats found in `full` ([(key, label, away, home)]);
-    the first few stats ESPN lists when too few of them are there."""
+    the first few stats ESPN lists when too few of them are there. n=None: every one of them."""
     norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
     by = {}
     for key, label, a_, h_ in full:
@@ -943,6 +943,16 @@ def pick_stats(sport, full, n=4):
         if v:
             out.append((label, *[x if not pct or "%" in x else x + "%" for x in v]))
     return out[:n] if len(out) >= 2 else [(label, a_, h_) for _k, label, a_, h_ in full[:n]]
+
+
+def stat_pages(stats, rows):
+    """Split a list of stats into pages of `rows`; the last page is filled from the end, so every page is full."""
+    if len(stats) <= rows:
+        return [stats]
+    pages = [stats[i:i + rows] for i in range(0, len(stats) - rows + 1, rows)]
+    if len(pages) * rows < len(stats):
+        pages.append(stats[-rows:])
+    return pages
 
 
 def period_labels(sport, league, n):
@@ -3574,6 +3584,40 @@ def run_gui():
         else:
             session["rolling"] = False
 
+    stat_cycles = []  # cards showing more stats than fit: the rows take turns, fading out and in
+    STAT_SECS, STAT_OUT, STAT_IN = 7.0, 0.35, 0.5
+
+    def stat_apply(cyc, now=None):
+        """Show the stats page that belongs to this moment, faded as far as the page change is along."""
+        now = time.time() if now is None else now
+        n = len(cyc["pages"])
+        slot = int(now // STAT_SECS)
+        t = now - slot * STAT_SECS
+        page = cyc["pages"][slot % n]
+        a = min(ease(t / STAT_IN), ease((STAT_SECS - t) / STAT_OUT))
+        c_ = cyc["canvas"]
+        for k_, (li, mi, ri) in enumerate(cyc["rows"]):
+            if k_ < len(page):
+                label, vl, vr = page[k_]
+            else:
+                label, vl, vr = "", "", ""
+            if cyc["shown"] != slot % n:
+                c_.itemconfigure(li, text=vl)
+                c_.itemconfigure(mi, text=label[:12])
+                c_.itemconfigure(ri, text=vr)
+            c_.itemconfigure(li, fill=blend(cyc["bgc"], FG, a))
+            c_.itemconfigure(mi, fill=blend(cyc["bgc"], DIM, a))
+            c_.itemconfigure(ri, fill=blend(cyc["bgc"], FG, a))
+        cyc["shown"] = slot % n
+
+    def stat_tick():
+        for cyc in list(stat_cycles):
+            try:
+                stat_apply(cyc)
+            except tk.TclError:
+                stat_cycles.remove(cyc)  # its canvas was redrawn
+        root.after(40 if stat_cycles else 400, stat_tick)
+
     def clock_tick():
         """Run the game clocks on live cards once a second between refreshes."""
         now = time.time()
@@ -3676,12 +3720,21 @@ def run_gui():
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
                 room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
-                for label, a_, h_ in pick_stats(r["game"]["sport"], d_.get("all_stats", []), max(4, min(6, -(-int(room) // 14)))):
-                    vl, vr = (h_, a_) if flip else (a_, h_)
-                    ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
-                    ctext(mx, my, label[:12], FONTS["small"], DIM, anchor="n", tags=tags)
-                    _, h = ctext(mx + mw / 2, my, vr, FONTS["small"], FG, anchor="ne", tags=tags)
+                nrows = max(4, min(6, -(-int(room) // 14)))
+                pool = pick_stats(r["game"]["sport"], d_.get("all_stats", []), None)
+                pages = [[(label, *((h_, a_) if flip else (a_, h_))) for label, a_, h_ in pg] for pg in stat_pages(pool, nrows)]
+                cyc = {"canvas": canvas, "pages": pages, "bgc": None, "rows": [], "shown": None}
+                for k_ in range(len(pages[0])):
+                    vl, label, vr = pages[0][k_][1], pages[0][k_][0], pages[0][k_][2]
+                    li, _ = ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
+                    mi, _ = ctext(mx, my, label[:12], FONTS["small"], DIM, anchor="n", tags=tags)
+                    ri, h = ctext(mx + mw / 2, my, vr, FONTS["small"], FG, anchor="ne", tags=tags)
+                    cyc["rows"].append((li, mi, ri))
                     my += h
+                if len(pages) > 1 and not (ce and ce.get("banner")):
+                    cyc["bgc"] = session.get("card_bg") or BG
+                    stat_cycles.append(cyc)
+                    stat_apply(cyc)
         lines = info.split("\n") if info else []
         bb = [g_ for g_ in gl if g_["kind"] == "baseball"]
         fb = next((g_ for g_ in gl if g_["kind"] == "football"), None)
@@ -5378,6 +5431,7 @@ def run_gui():
         session["hits"].clear()
         session["roll_cells"].clear()
         session["clock_items"].clear()
+        stat_cycles.clear()
         session["pulse_items"].clear()
         session["layers"].clear()
         session["gcount"].clear()
@@ -6489,6 +6543,7 @@ def run_gui():
         load_open_college()
     spin()
     clock_tick()
+    stat_tick()
     try:
         round_corners(root)
     except Exception:
