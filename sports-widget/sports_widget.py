@@ -2240,7 +2240,8 @@ def run_gui():
                 c.create_line(3, 20, split - 2, 20, fill=g.get("a_color", "#60a5fa"), width=6, capstyle="round")
             if W - 3 > split + 2:
                 c.create_line(split + 2, 20, W - 3, 20, fill=g.get("b_color", "#f59e0b"), width=6, capstyle="round")
-            fmt = lambda v: f"{v:g}"
+            unit = "%" if g["label"] == "Win probability" else ""
+            fmt = lambda v: f"{v:g}{unit}"
             c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=FONTS["small"])
             c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=FONTS["small"])
             c.create_text(W, 6, text=f'{fmt(g["b"])} {g["b_name"]}', anchor="e", fill=FG, font=FONTS["small"])
