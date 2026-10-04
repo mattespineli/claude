@@ -4258,6 +4258,15 @@ def run_gui():
                 continue
             old = session["play_prev"].get(k)  # nobody scored: a big play?
             ch = challenge_of(ptext) if old is not None and ptext and ptext != old else None
+            if (not ch and old is not None and ptext and ptext != old and re.search(r"\bchallenge", ptext, re.I)
+                    and k not in session["celebs"]):  # a challenge was just called, no ruling yet: red for football (the red flag), else sky blue
+                who_ = re.search(r"challenge[d]? (?:by|from) ([A-Za-z]{2,4})\b", ptext) or re.search(r"\b([A-Z]{2,4}) (?:coach'?s? |team |manager )challenge", ptext)
+                tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
+                cside = tm_.index(who_.group(1).upper()) if who_ and who_.group(1).upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
+                make_event(r, k, cside, "CALL CHALLENGED", "#ef4444" if sport == "football" else "#38bdf8", 3.5, mode, ptext)
+                if swing:
+                    chain_event(k, *swing)
+                continue
             if ch and k not in session["celebs"]:  # a challenge was ruled on: its result, then what happens to the call
                 over, who = ch
                 tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
@@ -4361,7 +4370,7 @@ def run_gui():
              ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked field goal touchdown", "BLOCKED FIELD GOAL TOUCHDOWN!", "score", None),
              ("Blocked PAT", "BLOCKED PAT!", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
-             ("Successful challenge", "SUCCESSFUL CHALLENGE!", "play", "#34d399"), ("Failed challenge", "FAILED CHALLENGE", "play", "#f87171"),
+             ("Call challenged", "CALL CHALLENGED", "play", "#ef4444"), ("Successful challenge", "SUCCESSFUL CHALLENGE!", "play", "#34d399"), ("Failed challenge", "FAILED CHALLENGE", "play", "#f87171"),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None),
              ("Red zone", "", "redzone", None)]
 
@@ -4416,7 +4425,7 @@ def run_gui():
         import random
         mine = session.get("mine", 0)  # the dummy card's "Trigger for" choice: the team every test plays for
         side = mine if len(r.get("teams") or []) == 2 else None
-        make_event(r, k, side, head, color if head in ("SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE") else None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
+        make_event(r, k, side, head, color if head in ("CALL CHALLENGED", "SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE") else None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
