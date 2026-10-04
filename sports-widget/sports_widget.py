@@ -937,11 +937,18 @@ def series_info(comp):
     head = str((comp.get("notes") or [{}])[0].get("headline") or "").strip()
     text = str(ser.get("summary") or "").strip()
     wins = [(c.get("id"), int(c.get("wins") or 0)) for c in ser.get("competitors") or []]
-    if ser.get("completed") and len(wins) == 2 and "win" not in text.lower():  # ESPN's summary doesn't always name the winner
+    if len(wins) == 2 and "win" not in text.lower():  # ESPN's summary doesn't always name the winner
         (wid, w_), (_lid, l_) = sorted(wins, key=lambda t: -t[1])
+        try:
+            need = int(ser.get("totalCompetitions") or 0) // 2 + 1  # wins that take a best-of-N series
+        except (TypeError, ValueError):
+            need = 0
+        done = bool(ser.get("completed")) or (need and w_ >= need)
+        if not done:
+            wins = []
         abbr = next((c.get("team", {}).get("abbreviation") for c in comp.get("competitors", [])
                      if str(c.get("id", c.get("team", {}).get("id"))) == str(wid)), "")
-        if abbr:
+        if wins and abbr:
             text = f"{abbr} wins series {w_}-{l_}"
     return {"head": head, "text": text} if head or text else None
 
@@ -1204,7 +1211,11 @@ def team_status(entry):
         comp_ = event["competitions"][0]
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
-    return {"series": series_info(event["competitions"][0]) if state == "post" else None,
+    ser = series_info(event["competitions"][0]) if state == "post" else None
+    if state == "post" and not ser:  # schedule data often lacks the series; the scoreboard's copy of the game has it
+        sb_ev = scoreboard_event(entry["sport"], entry["league"], event)
+        ser = series_info(sb_ev["competitions"][0]) if sb_ev else None
+    return {"series": ser,
             "teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
@@ -4123,7 +4134,7 @@ if __name__ == "__main__":
                     print("   ", e.get("date"), "|", e.get("shortName") or e.get("name"), "| state:", stt.get("state"),
                           "completed:", stt.get("completed"), "-> read as", _state_of(e))
                 r = team_status(entry)
-                print("   shows:", r and (r["name"], r["line"], r["detail"], r["next"]))
+                print("   shows:", r and (r["name"], r["line"], r["detail"], r["next"], r.get("series")))
     elif "--debug-seeds" in sys.argv:  # where does ESPN put playoff seeds right now?
         today = datetime.now().astimezone().date()
         for name, sport, league in PLAYOFF_LEAGUES:
@@ -4145,7 +4156,7 @@ if __name__ == "__main__":
                 print("     series:", json.dumps(comp.get("series"), default=str)[:300])
     elif "--debug-playoffs" in sys.argv:
         for r in playoff_games(debug=True):
-            print(f'  {r["name"]} | {r["line"]} | {r["detail"]}')
+            print(f'  {r["name"]} | {r["line"]} | {r["detail"]} | series: {r.get("series")}')
     elif "--find" in sys.argv:  # --find "san diego state" [--add]
         name = sys.argv[sys.argv.index("--find") + 1]
         hits = find_teams(name)
