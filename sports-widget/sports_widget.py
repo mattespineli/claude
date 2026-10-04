@@ -878,6 +878,26 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
             lines.append((_play_label(p, sport, league), text))
     out["plays"] = lines
     out["box"] = box_score(data, (away.get("team") or {}).get("id", ""), (home.get("team") or {}).get("id", ""))
+    out["leaders"] = []  # top performers per ESPN leader category: [(label, {abbreviation: "Curry 31"})]
+    ids = {str((c.get("team") or {}).get("id", "")): abbr(c) for c in (away, home)}
+    for blk in data.get("leaders") or []:
+        tab = ids.get(str((blk.get("team") or {}).get("id", "")))
+        for cat in blk.get("leaders") or []:
+            lead = next(iter(cat.get("leaders") or []), None)
+            if not tab or not lead:
+                continue
+            ath = lead.get("athlete") or {}
+            nm = ath.get("lastName") or (ath.get("shortName") or ath.get("displayName") or "").split(" ")[-1]
+            dv = str(lead.get("displayValue") or "")
+            segs = [x.strip() for x in dv.split(",")]
+            val = dv if re.fullmatch(r"[\d.]+", dv) else re.sub(r"\D+$", "", next((x for x in segs if re.search(r"\bYDS\b", x)), segs[0]))
+            label = cat.get("shortDisplayName") or cat.get("abbreviation") or cat.get("displayName") or ""
+            row = next((r_ for r_ in out["leaders"] if r_[0] == label), None)
+            if row is None:
+                row = (label, {})
+                out["leaders"].append(row)
+            if nm and val:
+                row[1][tab] = f"{nm} {val}"
     out["scoring"] = [((_play_label(p, sport, league)), p.get("text") or p.get("shortText", "")) for p in (data.get("scoringPlays") or [])][-8:]
     teams = (data.get("boxscore") or {}).get("teams") or []
     if len(teams) == 2:
@@ -3728,6 +3748,19 @@ def run_gui():
                 nrows = max(4, min(6, -(-int(room) // 14)))
                 pool = pick_stats(r["game"]["sport"], d_.get("all_stats", []), None)
                 pages = [[(label, *((h_, a_) if flip else (a_, h_))) for label, a_, h_ in pg] for pg in stat_pages(pool, nrows)]
+                tops_ = [(lb_, by_.get(teams[0]["abbr"], ""), by_.get(teams[1]["abbr"], "")) for lb_, by_ in d_.get("leaders") or []
+                         if len(teams) == 2 and (by_.get(teams[0]["abbr"]) or by_.get(teams[1]["abbr"]))][:nrows]
+                def fit_(t_):  # a long name gives way (ending in "…") so the player clears the category label in the middle
+                    lim_ = mw / 2 - 16
+                    if not t_ or text_width(FONTS["small"], t_) <= lim_:
+                        return t_
+                    nm_, v_ = t_.rsplit(" ", 1)
+                    while len(nm_) > 1 and text_width(FONTS["small"], f"{nm_}\u2026 {v_}") > lim_:
+                        nm_ = nm_[:-1]
+                    return f"{nm_}\u2026 {v_}"
+                tops_ = [(lb_, fit_(l_), fit_(r_)) for lb_, l_, r_ in tops_]
+                if tops_:  # a page of each team's top performers
+                    pages.append(tops_)
                 cyc = {"canvas": canvas, "pages": pages, "bgc": session.get("card_bg") or BG, "rows": [], "shown": None, "t0": 0.0, "base": 0}
                 for k_ in range(len(pages[0])):
                     vl, label, vr = pages[0][k_][1], pages[0][k_][0], pages[0][k_][2]
