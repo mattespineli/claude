@@ -3591,8 +3591,9 @@ def run_gui():
         """Show the stats page that belongs to this moment, faded as far as the page change is along."""
         now = time.time() if now is None else now
         n = len(cyc["pages"])
-        slot = int(now // STAT_SECS)
-        t = now - slot * STAT_SECS
+        slot = int((now - cyc["t0"]) // STAT_SECS)
+        t = (now - cyc["t0"]) - slot * STAT_SECS
+        slot += cyc["base"]
         page = cyc["pages"][slot % n]
         a = min(ease(t / STAT_IN), ease((STAT_SECS - t) / STAT_OUT))
         c_ = cyc["canvas"]
@@ -3608,6 +3609,8 @@ def run_gui():
             c_.itemconfigure(li, fill=blend(cyc["bgc"], FG, a))
             c_.itemconfigure(mi, fill=blend(cyc["bgc"], DIM, a))
             c_.itemconfigure(ri, fill=blend(cyc["bgc"], FG, a))
+        for k_, d_ in enumerate(cyc.get("dots", ())):
+            c_.itemconfigure(d_, fill=FG if k_ == slot % n else blend(cyc["bgc"], DIM, 0.45))
         cyc["shown"] = slot % n
 
     def stat_tick():
@@ -3723,7 +3726,7 @@ def run_gui():
                 nrows = max(4, min(6, -(-int(room) // 14)))
                 pool = pick_stats(r["game"]["sport"], d_.get("all_stats", []), None)
                 pages = [[(label, *((h_, a_) if flip else (a_, h_))) for label, a_, h_ in pg] for pg in stat_pages(pool, nrows)]
-                cyc = {"canvas": canvas, "pages": pages, "bgc": None, "rows": [], "shown": None}
+                cyc = {"canvas": canvas, "pages": pages, "bgc": session.get("card_bg") or BG, "rows": [], "shown": None, "t0": 0.0, "base": 0}
                 for k_ in range(len(pages[0])):
                     vl, label, vr = pages[0][k_][1], pages[0][k_][0], pages[0][k_][2]
                     li, _ = ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
@@ -3731,8 +3734,12 @@ def run_gui():
                     ri, h = ctext(mx + mw / 2, my, vr, FONTS["small"], FG, anchor="ne", tags=tags)
                     cyc["rows"].append((li, mi, ri))
                     my += h
+                if len(pages) > 1:  # one dot per page under the stats; the current page's is lit
+                    x0_ = mx - 6 * (len(pages) - 1)
+                    cyc["dots"] = [canvas.create_oval(x0_ + 12 * k_ - 3.5, my + 2, x0_ + 12 * k_ + 3.5, my + 9, fill=DIM, outline="",
+                                                      tags=(new_hit(("statpage", cyc, k_)),) + tuple(tags)) for k_ in range(len(pages))]
+                    my += 12
                 if len(pages) > 1 and not (ce and ce.get("banner")):
-                    cyc["bgc"] = session.get("card_bg") or BG
                     stat_cycles.append(cyc)
                     stat_apply(cyc)
         lines = info.split("\n") if info else []
@@ -6294,6 +6301,9 @@ def run_gui():
                 draw_all()
                 session["sig"] = compute_sig()
                 fit()
+        elif h[0] == "statpage":  # a page dot: show that page now, and carry on cycling from it
+            h[1]["t0"], h[1]["base"] = time.time(), h[2]
+            stat_apply(h[1])
         elif h[0] == "boxside":  # box score: show the other team
             if session["box_side"].get(h[1], 0) != h[2]:
                 session["box_side"][h[1]] = h[2]
@@ -6304,7 +6314,7 @@ def run_gui():
 
     def on_motion(e):
         h = hit_at(e)
-        canvas.configure(cursor="hand2" if h and (h[0] in ("group", "stview") or h[1].get("game")) else "")
+        canvas.configure(cursor="hand2" if h and (h[0] in ("group", "stview", "statpage") or h[1].get("game")) else "")
     canvas.bind("<Motion>", on_motion)
 
     def restart():
