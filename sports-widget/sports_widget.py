@@ -3414,13 +3414,13 @@ def run_gui():
         rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
         u = max(0.0, min(1.0, (ce["secs"] - t) / 0.9))
         out = u * u * (3 - 2 * u)  # the last ring fades out together with the banner text
-        for n in range(9):  # three sets of three ripples; the very last ripple stays put until the banner goes
+        for n in range(9):  # three sets of three ripples; the last set holds until the banner goes
             delay = (n // 3) * 1.4 + (n % 3) * 0.25
             if t < delay:
                 continue
             pp = min(1.0, (t - delay) / RING_SECS)
-            hold = n == 8
-            r_ = rad + 4 + (rmax - rad - 4) * (0.8 if hold else 1.0) * (1 - (1 - pp) ** 2)  # the held ring stops inside the card
+            hold = n >= 6  # the last set stays spread out inside the card until the banner fades
+            r_ = rad + 4 + (rmax - rad - 4) * ((0.4, 0.6, 0.8)[n - 6] if hold else 1.0) * (1 - (1 - pp) ** 2)
             if not hold:
                 if pp >= 1:
                     continue
