@@ -1485,7 +1485,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
-SCORE_ANIM_CHOICES = [("Pulse", "pulse"), ("Flash", "flash"), ("Off", "off")]
+SCORE_ANIM_CHOICES = [("Ripple", "pulse"), ("Flash", "flash"), ("Off", "off")]
 LAYOUT_CHOICES = [("Scoreboard", "scoreboard"), ("List", "list")]  # "default" in an older state.json means List
 DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
@@ -3024,11 +3024,7 @@ def run_gui():
             my += 4 + h
         banner = bool(ce and ce.get("banner"))
         if banner:  # the banner takes the middle for a few seconds (crossfading), without changing the card's height
-            keep = 1 - banner_alpha(ce, ct)
-            if keep < 0.03:
-                canvas.delete(*canvas.find_all()[n0:])
-            else:
-                fade_items(canvas.find_all()[n0:], bgc, keep)
+            fade_items(canvas.find_all()[n0:], bgc, 1 - banner_alpha(ce, ct))  # never deleted: the frames fade it back in
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
@@ -3416,11 +3412,20 @@ def run_gui():
             return
         x0, y0, x1, y1 = bounds
         rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
-        for delay in (0.0, 0.25, 0.5):
-            pp = (t - delay) / RING_SECS
-            if not 0 <= pp <= 1:
+        u = max(0.0, min(1.0, (ce["secs"] - t) / 0.9))
+        out = u * u * (3 - 2 * u)  # the last ring fades out together with the banner text
+        for j in range(3):  # three ripples, one after the other; the third stays put until the banner goes
+            delay = j * 0.9
+            if t < delay:
                 continue
-            r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pp) ** 2)
+            pp = min(1.0, (t - delay) / RING_SECS)
+            r_ = rad + 4 + (rmax - rad - 4) * (1.0 if j < 2 else 0.8) * (1 - (1 - pp) ** 2)  # the held ring stops inside the card
+            if j < 2:
+                if pp >= 1:
+                    continue
+                intensity = 0.9 * (1 - pp) ** 1.5
+            else:
+                intensity = (0.85 - 0.3 * pp) * out
             pts = [(cx + r_ * math.cos(a_ * math.pi / 45), cy + r_ * math.sin(a_ * math.pi / 45)) for a_ in range(90)]
             inside = [x0 <= px_ <= x1 and y0 <= py_ <= y1 for px_, py_ in pts]
             if not any(inside):
@@ -3428,7 +3433,7 @@ def run_gui():
             start = inside.index(False) if not all(inside) else 0  # begin outside the card so runs don't wrap around
             order = [(start + i_) % 90 for i_ in range(90)]
             run = []
-            col, wd = blend(bgc, ce["color"], 0.9 * (1 - pp) ** 1.5), 3 if pp < 0.5 else 2
+            col, wd = blend(bgc, ce["color"], intensity), 3 if pp < 0.5 else 2
             for i_ in order + [order[0]] if all(inside) else order:
                 if inside[i_]:
                     run.append(pts[i_])
@@ -4301,7 +4306,7 @@ def run_gui():
         styled_option(win, layout_choice, [l for l, _ in LAYOUT_CHOICES], command=on_layout, width=12).grid(
             row=6, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Score animation", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=7, column=0, padx=16, pady=(6, 4), sticky="w")
-        anim_choice = tk.StringVar(value=next((l for l, v in SCORE_ANIM_CHOICES if v == ui_state.get("score_anim", "pulse")), "Pulse"))
+        anim_choice = tk.StringVar(value=next((l for l, v in SCORE_ANIM_CHOICES if v == ui_state.get("score_anim", "pulse")), "Ripple"))
 
         def on_anim(label):
             ui_state["score_anim"] = dict(SCORE_ANIM_CHOICES)[label]
