@@ -761,7 +761,7 @@ def _flat_stats(team_entry):
 
 # Box score columns worth a narrow window, per ESPN stat category (the first ones ESPN sends otherwise)
 BOX_COLS = {
-    "passing": ["C/ATT", "YDS", "TD", "INT"], "rushing": ["CAR", "YDS", "TD", "LONG"], "receiving": ["REC", "YDS", "TD", "LONG"],
+    "passing": ["C/ATT", "YDS", "TD", "INT", "RTG"], "rushing": ["CAR", "YDS", "TD", "LONG"], "receiving": ["REC", "YDS", "TD", "LONG"],
     "defensive": ["TOT", "SACKS", "TFL", "PD"], "interceptions": ["INT", "YDS", "TD"], "fumbles": ["FUM", "LOST", "REC"],
     "kicking": ["FG", "PCT", "LONG", "XP", "PTS"], "punting": ["NO", "YDS", "AVG", "LONG"],
     "kickreturns": ["NO", "YDS", "AVG", "LONG"], "puntreturns": ["NO", "YDS", "AVG", "LONG"],
@@ -774,7 +774,7 @@ FULL_COLS = {"C/ATT": "Comp/Att", "YDS": "Yards", "CAR": "Carries", "REC": "Catc
              "TFL": "TFL", "PD": "Pass Def", "INT": "Int", "FUM": "Fumbles", "LOST": "Lost", "PCT": "Pct", "NO": "Number", "AVG": "Average",
              "AB": "At Bats", "R": "Runs", "H": "Hits", "BB": "Walks", "K": "Strikeouts", "IP": "Innings", "ER": "Earned", "G": "Goals",
              "A": "Assists", "S": "Shots", "TOI": "Ice Time", "SA": "Shots Against", "SV": "Saves", "GA": "Goals Against", "SV%": "Save %",
-             "MIN": "Minutes", "PTS": "Points", "REB": "Rebounds", "AST": "Assists", "STL": "Steals", "BLK": "Blocks"}
+             "RTG": "Rating", "MIN": "Minutes", "PTS": "Points", "REB": "Rebounds", "AST": "Assists", "STL": "Steals", "BLK": "Blocks"}
 BOX_SHOW = ("passing", "rushing", "receiving", "defensive", "kicking", "batting", "pitching", "forwards", "defenses", "goalies", "")
 
 
