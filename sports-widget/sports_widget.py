@@ -3610,7 +3610,8 @@ def run_gui():
             c_.itemconfigure(mi, fill=blend(cyc["bgc"], DIM, a))
             c_.itemconfigure(ri, fill=blend(cyc["bgc"], FG, a))
         for k_, d_ in enumerate(cyc.get("dots", ())):
-            c_.itemconfigure(d_, fill=FG if k_ == slot % n else blend(cyc["bgc"], DIM, 0.45))
+            off_ = blend(cyc["bgc"], DIM, 0.45)
+            c_.itemconfigure(d_, fill=blend(off_, FG, a) if k_ == slot % n else off_)  # the lit dot fades with the stats
         cyc["shown"] = slot % n
 
     def stat_tick():
@@ -3736,9 +3737,9 @@ def run_gui():
                     my += h
                 if len(pages) > 1:  # one dot per page under the stats; the current page's is lit
                     x0_ = mx - 6 * (len(pages) - 1)
-                    cyc["dots"] = [canvas.create_oval(x0_ + 12 * k_ - 3.5, my + 2, x0_ + 12 * k_ + 3.5, my + 9, fill=DIM, outline="",
+                    cyc["dots"] = [canvas.create_oval(x0_ + 12 * k_ - 3.5, my + 6, x0_ + 12 * k_ + 3.5, my + 13, fill=DIM, outline="",
                                                       tags=(new_hit(("statpage", cyc, k_)),) + tuple(tags)) for k_ in range(len(pages))]
-                    my += 12
+                    my += 16
                 if len(pages) > 1 and not (ce and ce.get("banner")):
                     stat_cycles.append(cyc)
                     stat_apply(cyc)
