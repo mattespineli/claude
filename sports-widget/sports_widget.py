@@ -2754,28 +2754,6 @@ def run_gui():
             hi = COLORS["in"] if r["state"] == "in" else FG
             c = [hi if lead >= 0 else DIM, hi if lead <= 0 else DIM]
         rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
-        colb = top
-        counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
-        for i, t in enumerate(teams):
-            cx = ix + COL / 2 if i == 0 else ix + ww - COL / 2
-            yy = top
-            img = logo_img(t["logo"], 44) if t.get("logo") else None
-            if img:
-                canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
-            yy += 46
-            if sc:
-                draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i))
-                yy += 30
-            _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
-            yy += h
-            if counts[i] is not None:  # remaining timeouts / challenges: filled dots, unlabelled
-                total = max(tos.get("total", 3), counts[i])
-                x0 = cx - 5 * (total - 1)
-                for k in range(total):
-                    canvas.create_oval(x0 + 10 * k - 3, yy + 4, x0 + 10 * k + 3, yy + 10, fill=FG if k < counts[i] else bgc,
-                                       outline=FG if k < counts[i] else DIM, tags=tags)
-                yy += 12
-            colb = max(colb, yy)
         my = top + 2
         live = r["state"] == "in"
         if live:
@@ -2841,6 +2819,32 @@ def run_gui():
             text = lp["text"] if len(lp["text"]) <= cap_ else lp["text"][:cap_ - 1].rstrip() + "\u2026"
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
             my += 4 + h
+        mh = my - top  # the middle section sets the height; the teams scale up to match it
+        counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
+        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0)  # natural height of a team column
+        lg = max(44, min(64, 44 + int(max(mh - nat, 0) // 4) * 4))  # a bigger logo, in steps so few sizes are cached
+        gap = max(0, min(10, (mh - nat - (lg - 44)) / 3))  # what is left over is spread between the rows
+        colb = top
+        for i, t in enumerate(teams):
+            cx = ix + COL / 2 if i == 0 else ix + ww - COL / 2
+            yy = top
+            img = logo_img(t["logo"], lg) if t.get("logo") else None
+            if img:
+                canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
+            yy += lg + 2 + gap
+            if sc:
+                draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i))
+                yy += 30 + gap
+            _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            yy += h
+            if counts[i] is not None:  # remaining timeouts / challenges: filled dots, unlabelled
+                total = max(tos.get("total", 3), counts[i])
+                x0 = cx - 5 * (total - 1)
+                for k in range(total):
+                    canvas.create_oval(x0 + 10 * k - 3, yy + gap + 4, x0 + 10 * k + 3, yy + gap + 10, fill=FG if k < counts[i] else bgc,
+                                       outline=FG if k < counts[i] else DIM, tags=tags)
+                yy += 12 + gap
+            colb = max(colb, yy)
         yy = max(colb, my) + 2
         if gl:
             yy += graphics(ix, yy, gl, bgc, ww)
