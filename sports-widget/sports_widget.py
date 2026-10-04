@@ -721,7 +721,7 @@ def fetch_summary_cached(sport, league, event_id, max_age=20):
 def win_bar(game):
     """Win-probability data for a live game's card ({a, b, names, colors}) or None."""
     try:
-        d = game_detail_data(fetch_summary_cached(game["sport"], game["league"], game["id"]))
+        d = game_detail_data(fetch_summary_cached(game["sport"], game["league"], game["id"]), sport=game["sport"], league=game["league"])
     except Exception:
         return None
     if d.get("home_win") is None:
@@ -736,10 +736,18 @@ def fetch_summary(sport, league, event_id):
     return get_json(SUMMARY.format(sport=sport, league=league, id=event_id))
 
 
-def _play_label(p):
+def _play_label(p, sport="", league=""):
     per = p.get("period") or {}
     clock = (p.get("clock") or {}).get("displayValue", "")
-    prefix = per.get("displayValue") or (f'P{per["number"]}' if per.get("number") else "")
+    num = per.get("number")
+    if per.get("displayValue"):
+        prefix = per["displayValue"]
+    elif not num:
+        prefix = ""
+    else:  # no label from ESPN: Q for football, Q or H for basketball, P only for hockey
+        reg = 2 if league == "mens-college-basketball" else 4
+        pre = "Q" if sport == "football" or (sport == "basketball" and reg == 4) else "H" if sport == "basketball" else "P"
+        prefix = ("OT" if num == reg + 1 else f"{num - reg}OT") if sport in ("football", "basketball") and num > reg else f"{pre}{num}"
     return " ".join(x for x in (prefix, clock) if x)
 
 
@@ -825,7 +833,7 @@ def box_score(data, away_id="", home_id=""):
     return out if any(out) else None
 
 
-def game_detail_data(data, max_plays=14, max_stats=14):
+def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
     """Boil an ESPN summary response down to what the details window shows."""
     comp = ((data.get("header") or {}).get("competitions") or [{}])[0]
     cs = comp.get("competitors", [])
@@ -864,10 +872,10 @@ def game_detail_data(data, max_plays=14, max_stats=14):
     for p in plays[-max_plays:][::-1]:
         text = p.get("text") or p.get("shortText")
         if text:
-            lines.append((_play_label(p), text))
+            lines.append((_play_label(p, sport, league), text))
     out["plays"] = lines
     out["box"] = box_score(data, (away.get("team") or {}).get("id", ""), (home.get("team") or {}).get("id", ""))
-    out["scoring"] = [((_play_label(p)), p.get("text") or p.get("shortText", "")) for p in (data.get("scoringPlays") or [])][-8:]
+    out["scoring"] = [((_play_label(p, sport, league)), p.get("text") or p.get("shortText", "")) for p in (data.get("scoringPlays") or [])][-8:]
     teams = (data.get("boxscore") or {}).get("teams") or []
     if len(teams) == 2:
         by_id = {str((t.get("team") or {}).get("id")): t for t in teams}
@@ -3096,7 +3104,7 @@ def run_gui():
 
     def fetch_details(g):
         try:
-            session["details"][gkey(g)] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=5))
+            session["details"][gkey(g)] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=5), sport=g["sport"], league=g["league"])
         except Exception as ex:
             session["details"][gkey(g)] = {"error": str(ex)[:60]}
 
@@ -3452,7 +3460,7 @@ def run_gui():
 
             def work():
                 try:
-                    session["stats"][k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=600))
+                    session["stats"][k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=600), sport=g["sport"], league=g["league"])
                 except Exception:
                     session["stats"][k] = {"stats": []}
                 root.after(0, stats_loaded)
