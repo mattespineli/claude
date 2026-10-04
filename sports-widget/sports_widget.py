@@ -2472,7 +2472,8 @@ def run_gui():
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
                "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {},
-               "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False}
+               "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
+               "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -2502,6 +2503,66 @@ def run_gui():
                 return fn(*[v + (self.ox if k % 2 == 0 else self.oy) for k, v in enumerate(flat)], **kw)
             return call
 
+    # ---- eased movement of bars and markers when a value changes (win probability, ball, first-down marker) ----
+    TWEEN_SECS = 0.7
+
+    def tkey(kind, label=""):
+        """A key for one animated element of the card being drawn (the n-th of its kind, so a card's bar and its details' bar differ)."""
+        base = (session["cur_key"], kind, label)
+        n = session["gcount"].get(base, 0)
+        session["gcount"][base] = n + 1
+        return base + (n,)
+
+    def tween_value(key, target):
+        """The value to draw now for `key`: eased from where it was to `target` when the target has changed."""
+        now = _time.perf_counter()
+        shown = session["shown"].get(key)
+        tw = session["tweens"].get(key)
+        if shown is None:
+            session["shown"][key] = target
+            return target
+        if shown != target:
+            cur = target
+            if tw:
+                p = min(1.0, (now - tw["t0"]) / tw["dur"])
+                cur = tw["v0"] + (tw["v1"] - tw["v0"]) * p * p * (3 - 2 * p)
+            else:
+                cur = shown
+            tw = session["tweens"][key] = {"v0": cur, "v1": target, "t0": now, "dur": TWEEN_SECS, "apply": None}
+            session["shown"][key] = target
+            if not session["tween_on"]:
+                session["tween_on"] = True
+                root.after(25, tween_tick)
+        if tw:
+            p = (now - tw["t0"]) / tw["dur"]
+            if p >= 1:
+                session["tweens"].pop(key, None)
+                return target
+            return tw["v0"] + (tw["v1"] - tw["v0"]) * p * p * (3 - 2 * p)
+        return target
+
+    def tween_apply(key, fn):
+        """Say how to move the items just drawn for `key`, for the frames between full redraws."""
+        tw = session["tweens"].get(key)
+        if tw:
+            tw["apply"] = fn
+
+    def tween_tick():
+        now = _time.perf_counter()
+        for key, tw in list(session["tweens"].items()):
+            p = min(1.0, (now - tw["t0"]) / tw["dur"])
+            if tw["apply"]:
+                try:
+                    tw["apply"](tw["v0"] + (tw["v1"] - tw["v0"]) * p * p * (3 - 2 * p))
+                except tk.TclError:
+                    pass
+            if p >= 1:
+                session["tweens"].pop(key, None)
+        if session["tweens"]:
+            root.after(25, tween_tick)
+        else:
+            session["tween_on"] = False
+
     def graphic_one(ox, oy, g, bg, W):
         c = Off(ox, oy)
         kind = g["kind"]
@@ -2516,11 +2577,20 @@ def run_gui():
                                   width=6, capstyle="round")
             return 14
         if kind == "versus":
-            split = W * g["a"] / (g["a"] + g["b"])
-            if split - 2 > 3:
-                c.create_line(3, 20, split - 2, 20, fill=g.get("a_color", "#60a5fa"), width=6, capstyle="round")
-            if W - 3 > split + 2:
-                c.create_line(split + 2, 20, W - 3, 20, fill=g.get("b_color", "#f59e0b"), width=6, capstyle="round")
+            vk = tkey("versus", g["label"])
+            la = c.create_line(3, 20, 3, 20, fill=g.get("a_color", "#60a5fa"), width=6, capstyle="round")
+            lb = c.create_line(3, 20, 3, 20, fill=g.get("b_color", "#f59e0b"), width=6, capstyle="round")
+
+            def put_bar(share):  # the two halves meet at `share` of the width; easing moves that point left and right
+                split = W * share
+                for it, x0, x1 in ((la, 3, split - 2), (lb, split + 2, W - 3)):
+                    if x1 - x0 > 0:
+                        canvas.coords(it, c.ox + x0, c.oy + 20, c.ox + x1, c.oy + 20)
+                        canvas.itemconfigure(it, state="normal")
+                    else:
+                        canvas.itemconfigure(it, state="hidden")
+            put_bar(tween_value(vk, g["a"] / (g["a"] + g["b"])))
+            tween_apply(vk, put_bar)
             unit = "%" if "win probability" in g["label"].lower() else ""
             fmt = lambda v: f"{v:g}{unit}"
             c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=FONTS["small"])
@@ -2589,10 +2659,15 @@ def run_gui():
                 pid = c.create_rectangle(-2, 11, W + 2, 23, outline="#ef4444", fill="", width=2)
                 session["pulse_items"].append((pid, "#ef4444", bg))
                 start_pulse()
-            if g["first"] is not None:
-                c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
-            bx = px(g["x"])
-            c.create_oval(bx - 5, 12, bx + 5, 22, fill=g.get("color", "#34d399"), outline=FG)
+            if g["first"] is not None:  # the first-down marker and the ball ease along the field when they move
+                fk = tkey("first")
+                fx = px(tween_value(fk, g["first"]))
+                fl = c.create_line(fx, 11, fx, 23, fill="#fbbf24", width=2)
+                tween_apply(fk, lambda v: canvas.coords(fl, c.ox + px(v), c.oy + 11, c.ox + px(v), c.oy + 23))
+            bk = tkey("ball")
+            bx = px(tween_value(bk, g["x"]))
+            ball = c.create_oval(bx - 5, 12, bx + 5, 22, fill=g.get("color", "#34d399"), outline=FG)
+            tween_apply(bk, lambda v: canvas.coords(ball, c.ox + px(v) - 5, c.oy + 12, c.ox + px(v) + 5, c.oy + 22))
             c.create_text(0, 6, text=f"{g['off']} ▶", anchor="w", fill=FG, font=FONTS["smallb"])
             c.create_text(W, 6, text=g["def"], anchor="e", fill=DIM, font=FONTS["smallb"])
             return 24
@@ -3536,6 +3611,7 @@ def run_gui():
         bgc = blend(BG, tint, 0.22) if tint else BG
         ce, ct = celeb_of(r)  # this card's team just scored
         session["cur_celeb"] = (ce, ct)
+        session["cur_key"] = card_key(r)
         base_bgc = bgc
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
@@ -3885,6 +3961,7 @@ def run_gui():
         session["clock_items"].clear()
         session["pulse_items"].clear()
         session["layers"].clear()
+        session["gcount"].clear()
         session["actx"] = None
         cw = max(canvas.winfo_width(), MIN_BODY_W)
         y = draw_nodes(build_nodes(), 0, 2, cw, final)
