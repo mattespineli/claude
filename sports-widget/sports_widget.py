@@ -3618,7 +3618,7 @@ def run_gui():
             if "blocked" in low and "punt" in low:
                 return "BLOCKED PUNT!", "#a78bfa", 4.0
             if "blocked" in low and ("extra point" in low or "kick" in low):
-                return "BLOCKED PAT", "#a78bfa", 3.5
+                return "BLOCKED PAT!", "#a78bfa", 3.5
             if "onside" in low:
                 k_, rec = onside_teams(text)
                 if k_ and rec and k_ == rec:
@@ -3673,7 +3673,7 @@ def run_gui():
         rec = re.search(r"recovered by ([A-Z]{2,4})-", text, re.I)
         return (kick.group(1).upper() if kick else ""), (rec.group(1).upper() if rec else "")
 
-    KICK_PLAYS = ("BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT", "ONSIDE KICK RECOVERED")
+    KICK_PLAYS = ("BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT!", "ONSIDE KICK RECOVERED")
 
     def kick_side(r, head, text, kicker):
         """Index of the team that made a special-teams play: the kicking team for an onside recovery, the other team for
@@ -3730,7 +3730,7 @@ def run_gui():
         if sport == "football" and fb_:
             off = next((i for i, t in enumerate(tm) if t.get("abbr", "").upper() == str(fb_["off"]).upper()), None)
             if off is not None:
-                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT") else off
+                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT!") else off
         if sport == "baseball":
             m = re.match(r"\s*(Top|Bot)", str(r.get("status") or r.get("detail") or ""))
             bat = next((i for i, t in enumerate(tm) if m and t.get("ha") == ("away" if m.group(1) == "Top" else "home")), None)
@@ -4004,7 +4004,7 @@ def run_gui():
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
              ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked field goal touchdown", "BLOCKED FIELD GOAL TOUCHDOWN!", "score", None),
-             ("Blocked PAT", "BLOCKED PAT", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
+             ("Blocked PAT", "BLOCKED PAT!", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None),
              ("Red zone", "", "redzone", None)]
