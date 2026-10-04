@@ -79,14 +79,21 @@ def _record(c):
 STANDINGS = "https://site.api.espn.com/apis/v2/sports/{sport}/{league}/standings?level=3"  # level 3 = by division
 STANDINGS_LEAGUES = [("NFL", "football", "nfl"), ("NBA", "basketball", "nba"), ("NHL", "hockey", "nhl"),
                      ("MLB", "baseball", "mlb"), ("WNBA", "basketball", "wnba")]
-# College sources shown on the Standings tab: conference standings (ESPN conference group 9 = Pac-12) and AP polls.
-COLLEGE_STANDINGS = [
-    {"key": "PAC12-FB", "title": "Pac-12 Football", "kind": "conf", "sport": "football", "league": "college-football", "group": "9"},
-    {"key": "PAC12-BB", "title": "Pac-12 Men's Basketball", "kind": "conf", "sport": "basketball", "league": "mens-college-basketball", "group": "9"},
-    {"key": "TOP25-FB", "title": "Top 25 Football", "kind": "poll", "sport": "football", "league": "college-football"},
-    {"key": "TOP25-BB", "title": "Top 25 Men's Basketball", "kind": "poll", "sport": "basketball", "league": "mens-college-basketball"},
-]
-STANDINGS_KEYS = [a for a, _, _ in STANDINGS_LEAGUES] + [c["key"] for c in COLLEGE_STANDINGS]
+# College sections on the Standings tab: a Top 25 tab plus one tab per conference.
+# Each conference is (tab label, name to match in ESPN's conference list, fallback ESPN group id).
+COLLEGE_SECTIONS = {
+    "CFB": {"title": "College Football", "sport": "football", "league": "college-football", "confs": [
+        ("ACC", "acc", "1"), ("Big 12", "big 12", "4"), ("Big Ten", "big ten", "5"), ("Pac-12", "pac-12", "9"),
+        ("SEC", "sec", "8"), ("American", "american", "151"), ("C-USA", "conference usa", "12"),
+        ("MAC", "mid-american", "15"), ("Mountain West", "mountain west", "17"), ("Sun Belt", "sun belt", "37")]},
+    "CBB": {"title": "College Basketball", "sport": "basketball", "league": "mens-college-basketball", "confs": [
+        ("ACC", "acc", "2"), ("Big 12", "big 12", "8"), ("Big East", "big east", "4"), ("Big Ten", "big ten", "7"),
+        ("Pac-12", "pac-12", "21"), ("SEC", "sec", "23"), ("American", "american", "62"), ("A-10", "atlantic 10", "3"),
+        ("Mountain West", "mountain west", "44"), ("WCC", "west coast", "29")]},
+}
+STANDINGS_KEYS = [a for a, _, _ in STANDINGS_LEAGUES] + list(COLLEGE_SECTIONS)
+CONFERENCES = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard/conferences"
+_conf_ids = {}
 RANKINGS = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/rankings"
 _seed_cache = {}
 _standings_raw = {}
@@ -147,6 +154,25 @@ def rankings_json(sport, league, max_age=600):
         data = json.load(r)
     _standings_raw[key] = (now, data)
     return data
+
+
+def conference_group(cfg, label, pattern, fallback):
+    """ESPN's group id for a conference: looked up in ESPN's conference list (cached), else the built-in fallback."""
+    key = (cfg["sport"], cfg["league"])
+    if key not in _conf_ids:
+        ids = []
+        try:
+            req = urllib.request.Request(CONFERENCES.format(**cfg), headers={"User-Agent": "sports-widget/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as r:
+                ids = json.load(r).get("conferences") or []
+        except Exception:
+            pass
+        _conf_ids[key] = ids
+    for c in _conf_ids[key]:
+        names = [str(c.get("shortName", "")).lower(), str(c.get("name", "")).lower()]
+        if label.lower() in names or any(n == pattern or n.startswith(pattern + " ") for n in names):
+            return str(c.get("groupId") or fallback)
+    return fallback
 
 
 def parse_poll(data):
@@ -1822,7 +1848,7 @@ def run_gui():
     PAD, GAP = 10, 6
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
-               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}}
+               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {}}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -2097,6 +2123,8 @@ def run_gui():
                 px = x + 6
                 for key, label in n["options"]:
                     pw = font.measure(label) + 20
+                    if px + pw > x + w - 4 and px > x + 6:  # wrap onto the next row
+                        px, y = x + 6, y + 26
                     on = key == n["sel"]
                     tag = new_hit(("stview", n["league"], key))
                     canvas.create_polygon(rr_points(px, y + 3, px + pw, y + 23, 8), smooth=True,
@@ -2188,27 +2216,31 @@ def run_gui():
                         fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
                         children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav})
             nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
-        for src in COLLEGE_STANDINGS:
-            data = session["standings"].get(src["key"])
-            favs_c = {(e["league"], str(e["team"]).lower()) for e in entries}
+        for key, cfg in COLLEGE_SECTIONS.items():
+            store = session["college"].get(key, {})
+            options = [("top25", "Top 25")] + [(f"conf:{lbl}", lbl) for lbl, _, _ in cfg["confs"]]
+            sel = ui_state.get(f"stview:{key}", "top25")
+            if sel not in dict(options):
+                sel = "top25"
+            children = [{"t": "tabs", "league": key, "options": options, "sel": sel}]
+            data = store.get(sel)
             if data is None:
-                children = [{"t": "text", "text": "Loading..."}]
+                children.append({"t": "text", "text": "Loading..."})
             elif data == "error":
-                children = [{"t": "text", "text": "Standings unavailable"}]
-            elif src["kind"] == "poll":
-                children = [{"t": "sub", "text": "AP Top 25", "headers": ["Record", "Pts"]}]
+                children.append({"t": "text", "text": "Standings unavailable"})
+            elif sel == "top25":
+                children.append({"t": "sub", "text": "AP Top 25", "headers": ["Record", "Pts"]})
                 for r in data:
-                    fav = (src["league"], r["id"]) in favs_c or (src["league"], r["abbr"].lower()) in favs_c
+                    fav = (cfg["league"], r["id"]) in favs or (cfg["league"], r["abbr"].lower()) in favs
                     children.append({"t": "srow", "rank": r["rank"], "name": r["name"], "vals": [r["record"], r["points"]], "fav": fav})
             else:
-                children = []
                 for g in data:
-                    children.append({"t": "sub", "text": g["name"] or src["title"], "headers": ["Conf", "Ovr"]})
+                    children.append({"t": "sub", "text": g["name"] or dict(options)[sel], "headers": ["Conf", "Ovr"]})
                     for rank, r in enumerate(g["rows"], start=1):
                         conf, cols = college_cells(r["stats"])
-                        fav = (src["league"], r["id"]) in favs_c or (src["league"], r["abbr"].lower()) in favs_c
+                        fav = (cfg["league"], r["id"]) in favs or (cfg["league"], r["abbr"].lower()) in favs
                         children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [conf] + cols, "fav": fav})
-            nodes.append(group_node(f"st:{src['key']}", src["title"], FG, 0, True, False, children))
+            nodes.append(group_node(f"st:{key}", cfg["title"], FG, 0, True, False, children))
         return nodes
 
     def build_nodes():
@@ -2266,7 +2298,7 @@ def run_gui():
     def compute_sig():
         return json.dumps([last.get("args"), ui_state, sorted(session["expanded"]),
                            {k: session["details"].get(k) for k in session["expanded"]}, session.get("live"),
-                           session["standings"] if ui_state.get("tab", "games") == "standings" else None],
+                           [session["standings"], session["college"]] if ui_state.get("tab", "games") == "standings" else None],
                           default=str, sort_keys=True)
 
     # ---- animations: expand / collapse of games and groups -------------------------
@@ -2345,6 +2377,8 @@ def run_gui():
                       if k != key and ui_state.get(k, k == f"st:{STANDINGS_LEAGUES[0][0]}")]
             if not others:
                 set_open(n, True)
+                if key[3:] in COLLEGE_SECTIONS:
+                    load_college(key[3:], ui_state.get(f"stview:{key[3:]}", "top25"))
                 start_anim(key, True)
                 return
             for extra in others[1:]:
@@ -2353,10 +2387,14 @@ def run_gui():
             def open_new():
                 set_open({"key": others[0], "persist": True}, False)
                 set_open(n, True)
+                if key[3:] in COLLEGE_SECTIONS:
+                    load_college(key[3:], ui_state.get(f"stview:{key[3:]}", "top25"))
                 start_anim(key, True)
             start_anim(others[0], False, on_done=open_new)  # collapse the open league, then expand this one
         else:
             set_open(n, True)
+            if key.startswith("st:") and key[3:] in COLLEGE_SECTIONS:
+                load_college(key[3:], ui_state.get(f"stview:{key[3:]}", "top25"))
             start_anim(key, True)
 
     def toggle_expand(g):
@@ -2434,18 +2472,33 @@ def run_gui():
                     session["standings"].setdefault(abbr, "error")
                     if session["standings"][abbr] is None:
                         session["standings"][abbr] = "error"
-            for src in COLLEGE_STANDINGS:
-                try:
-                    if src["kind"] == "conf":
-                        groups = parse_standings(standings_json(src["sport"], src["league"], group=src["group"]))
-                        session["standings"][src["key"]] = groups if any(g["rows"] for g in groups) else "error"
-                    else:
-                        rows = parse_poll(rankings_json(src["sport"], src["league"]))
-                        session["standings"][src["key"]] = rows or "error"
-                except Exception:
-                    session["standings"][src["key"]] = "error"
             root.after(0, standings_loaded)
         threading.Thread(target=work, daemon=True).start()
+
+    def load_college(key, sel):
+        """Fetch one college tab (Top 25 or a conference) in the background."""
+        cfg = COLLEGE_SECTIONS[key]
+        store = session["college"].setdefault(key, {})
+
+        def work():
+            try:
+                if sel == "top25":
+                    rows = parse_poll(rankings_json(cfg["sport"], cfg["league"]))
+                    store[sel] = rows or "error"
+                else:
+                    label, pattern, fallback = next(c for c in cfg["confs"] if f"conf:{c[0]}" == sel)
+                    gid = conference_group(cfg, label, pattern, fallback)
+                    groups = parse_standings(standings_json(cfg["sport"], cfg["league"], group=gid))
+                    store[sel] = groups if any(g["rows"] for g in groups) else "error"
+            except Exception:
+                store[sel] = "error"
+            root.after(0, standings_loaded)
+        threading.Thread(target=work, daemon=True).start()
+
+    def load_open_college():
+        for key in COLLEGE_SECTIONS:
+            if ui_state.get(f"st:{key}", False):
+                load_college(key, ui_state.get(f"stview:{key}", "top25"))
 
     def standings_loaded():
         if ui_state.get("tab", "games") == "standings":
@@ -2465,6 +2518,7 @@ def run_gui():
         view_tween["next"] = True  # ease the window to the new content height
         if key == "standings":
             load_standings()
+            load_open_college()
         draw_all()
         session["sig"] = compute_sig()
         fit()
@@ -2472,6 +2526,7 @@ def run_gui():
     def refresh():
         if ui_state.get("tab", "games") == "standings":
             load_standings()
+            load_open_college()
         def work():
             res, pres, po, lg = fetch_all(entries), fetch_pinned(list(pins)), playoff_games(), league_games()
             shown = {r["_key"] for r in res + pres if r.get("_key")}
@@ -2673,6 +2728,8 @@ def run_gui():
             if ui_state.get(f"stview:{h[1]}") != h[2]:
                 ui_state[f"stview:{h[1]}"] = h[2]
                 save_state(ui_state)
+                if h[1] in COLLEGE_SECTIONS:
+                    load_college(h[1], h[2])
                 session["sig"] = None
                 view_tween["next"] = True  # ease the window to the new height
                 draw_all()
@@ -2764,6 +2821,7 @@ def run_gui():
     style_tabs()
     if ui_state.get("tab", "games") == "standings":
         load_standings()
+        load_open_college()
     spin()
     try:
         round_corners(root)
