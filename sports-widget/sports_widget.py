@@ -3022,9 +3022,8 @@ def run_gui():
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
             my += 4 + h
         banner = bool(ce and ce.get("banner"))
-        if banner:  # the banner takes the middle for a few seconds
+        if banner:  # the banner takes the middle for a few seconds, without changing the card's height
             canvas.delete(*canvas.find_all()[n0:])
-            my = top + 2
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
@@ -3324,12 +3323,21 @@ def run_gui():
              ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("Momentum swing", "MOMENTUM SWING", "swing", None),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None)]
 
+    win_ref = [None]
+
     def fire_test(label):
         """Play one animation on the first live card (else the first card with two teams)."""
-        rows = [r for grp in last["args"] for r in grp] if last else []
-        r = next((r for r in rows if r["state"] == "in" and r.get("teams")), None) or next((r for r in rows if r.get("teams")), None)
+        top_, bot_ = canvas.canvasy(0), canvas.canvasy(canvas.winfo_height())
+        shown = []  # game cards in view, top to bottom
+        for tag, payload in session["hits"].items():
+            if payload[0] == "game" and payload[1].get("teams"):
+                bb_ = canvas.bbox(tag)
+                if bb_ and bb_[3] > top_ and bb_[1] < bot_:
+                    shown.append((bb_[1], payload[1]))
+        shown.sort(key=lambda t_: t_[0])
+        r = next((r for _y, r in shown if r["state"] == "in"), None) or (shown[0][1] if shown else None)
         if not r:
-            styled_message("Test animations", "There is no game card to play it on yet.")
+            styled_message("Test animations", "No game card is in view to play it on. Switch to the Games tab and scroll to a game.", win_ref[0])
             return
         k = card_key(r)
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
@@ -3351,12 +3359,13 @@ def run_gui():
 
     def test_dialog():
         win = tk.Toplevel(root)
+        win_ref[0] = win
         win.title("Test animations")
         win.configure(bg=BG)
         win.attributes("-topmost", True)
         win.resizable(False, False)
         dark_titlebar(win)
-        tk.Label(win, text="Plays on the first live game card", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
+        tk.Label(win, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
             row=0, column=0, columnspan=3, padx=16, pady=(14, 6), sticky="w")
         for i, (label, *_rest) in enumerate(TESTS):
             styled_button(win, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 3, column=i % 3, padx=6, pady=4, sticky="ew")
@@ -4249,7 +4258,7 @@ def run_gui():
         styled_option(win, sound_choice, ["On", "Muted"], command=on_sound, width=12).grid(
             row=9, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=10, column=0, padx=16, pady=(6, 4), sticky="w")
-        styled_button(win, "Test...", test_dialog).grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Test...", lambda: (win.destroy(), test_dialog())).grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
