@@ -729,16 +729,21 @@ def _possession_id(sit):
 # Key team stats for a finished game's Scoreboard card: (label, candidate ESPN stat names, is a percentage).
 STAT_PICKS = {
     "baseball": [("Hits", ("bathits", "bath"), False), ("Home runs", ("bathomeruns", "bathr"), False),
-                 ("Strikeouts", ("batstrikeouts", "batk", "batso"), False), ("Errors", ("flderrors", "flde"), False)],
+                 ("Strikeouts", ("batstrikeouts", "batk", "batso"), False), ("Errors", ("flderrors", "flde"), False),
+                 ("Walks", ("batwalks", "batbb", "batbaseonballs"), False), ("Batting avg", ("batavg",), False)],
     "football": [("Total yds", ("totalYards",), False), ("Pass yds", ("netPassingYards", "passingYards"), False),
-                 ("Rush yds", ("rushingYards",), False), ("Turnovers", ("turnovers",), False), ("1st downs", ("firstDowns",), False)],
+                 ("Rush yds", ("rushingYards",), False), ("Turnovers", ("turnovers",), False), ("1st downs", ("firstDowns",), False),
+                 ("3rd down", ("thirdDownEff",), False), ("Possession", ("possessionTime",), False)],
     "basketball": [("FG%", ("fieldGoalPct",), True), ("3P%", ("threePointFieldGoalPct",), True),
                    ("Rebounds", ("totalRebounds", "rebounds"), False), ("Assists", ("assists",), False),
-                   ("Turnovers", ("turnovers", "totalTurnovers"), False)],
+                   ("Turnovers", ("turnovers", "totalTurnovers"), False), ("Steals", ("steals",), False),
+                   ("Blocks", ("blocks",), False)],
     "hockey": [("Shots", ("shotsTotal", "shots", "shotsOnGoal"), False), ("Hits", ("hits",), False),
-               ("Penalty min", ("penaltyMinutes", "penaltyMins"), False), ("Power play", ("powerPlay",), False)],
+               ("Penalty min", ("penaltyMinutes", "penaltyMins"), False), ("Power play", ("powerPlay",), False),
+               ("Blocks", ("blockedShots",), False), ("Takeaways", ("takeaways",), False)],
     "soccer": [("Possession", ("possessionPct", "possession"), True), ("Shots", ("totalShots", "shots"), False),
-               ("On target", ("shotsOnTarget",), False), ("Corners", ("wonCorners", "corners"), False)],
+               ("On target", ("shotsOnTarget",), False), ("Corners", ("wonCorners", "corners"), False),
+               ("Fouls", ("foulsCommitted", "fouls"), False), ("Saves", ("saves",), False)],
 }
 
 
@@ -2775,7 +2780,8 @@ def run_gui():
             d_ = ensure_stats(r["game"])
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
-                for label, a_, h_ in pick_stats(r["game"]["sport"], d_.get("all_stats", []), 4):
+                room = 46 + (30 if sc else 0) + 14 - (my - top)  # as many stats as it takes to fill the teams' height
+                for label, a_, h_ in pick_stats(r["game"]["sport"], d_.get("all_stats", []), max(4, min(6, -(-int(room) // 14)))):
                     vl, vr = (h_, a_) if flip else (a_, h_)
                     ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
                     ctext(mx, my, label[:12], FONTS["small"], DIM, anchor="n", tags=tags)
@@ -2943,8 +2949,9 @@ def run_gui():
             _, h = ctext(ix, yy, info, FONTS["line"], DIM, width=ww, tags=tags)
             yy += h
         if r.get("next"):
-            _, h = ctext(ix, yy + 3, r["next"], FONTS["small"], DIM, width=ww, tags=tags)
-            yy += 3 + h
+            canvas.create_line(ix, yy + 5, ix + ww, yy + 5, fill=blend(bgc, FG, 0.12))  # a subtle divider above the next game
+            _, h = ctext(ix, yy + 9, r["next"], FONTS["small"], DIM, width=ww, tags=tags)
+            yy += 9 + h
         g = r.get("game")
         ctx = None
         if g and gkey(g) in session["expanded"]:
