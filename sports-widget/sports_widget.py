@@ -57,7 +57,7 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|svg1".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full4".encode()).hexdigest()[:16] + ".png")
 
 
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
@@ -263,81 +263,6 @@ def _smooth_logo(src, size):
         return _fetch_logo(src, size)
 
 
-# Team SVGs from the leagues' own sites, rendered at the exact size (resvg: pip install resvg-py). Anything missing
-# (no resvg, no SVG for the team, a logo too dark for the card) falls back to ESPN's PNG.
-NBA_IDS = {"ATL": 1610612737, "BOS": 1610612738, "CLE": 1610612739, "NO": 1610612740, "CHI": 1610612741, "DAL": 1610612742,
-           "DEN": 1610612743, "GS": 1610612744, "HOU": 1610612745, "LAC": 1610612746, "LAL": 1610612747, "MIA": 1610612748,
-           "MIL": 1610612749, "MIN": 1610612750, "BKN": 1610612751, "NY": 1610612752, "ORL": 1610612753, "IND": 1610612754,
-           "PHI": 1610612755, "PHX": 1610612756, "POR": 1610612757, "SAC": 1610612758, "SA": 1610612759, "OKC": 1610612760,
-           "TOR": 1610612761, "UTAH": 1610612762, "MEM": 1610612763, "WSH": 1610612764, "DET": 1610612765, "CHA": 1610612766}
-MLB_IDS = {"LAA": 108, "ARI": 109, "BAL": 110, "BOS": 111, "CHC": 112, "CIN": 113, "CLE": 114, "COL": 115, "DET": 116,
-           "HOU": 117, "KC": 118, "LAD": 119, "WSH": 120, "NYM": 121, "OAK": 133, "ATH": 133, "PIT": 134, "SD": 135,
-           "SEA": 136, "SF": 137, "STL": 138, "TB": 139, "TEX": 140, "TOR": 141, "MIN": 142, "PHI": 143, "ATL": 144,
-           "CHW": 145, "MIA": 146, "NYY": 147, "MIL": 158}
-NFL_ABBR = {"WSH": "WAS"}
-
-
-def svg_urls(url):
-    """Candidate SVG URLs for an ESPN team-logo URL (best first), or []."""
-    m = re.search(r"/teamlogos/([a-z-]+)/\d+(?:-dark)?/([^/.]+)\.png", url)
-    if not m:
-        return []
-    league, abbr = m.group(1), m.group(2).upper()
-    if league == "nfl":
-        return [f"https://static.www.nfl.com/league/api/clubs/logos/{NFL_ABBR.get(abbr, abbr)}.svg"]
-    if league == "nba" and abbr in NBA_IDS:
-        return [f"https://cdn.nba.com/logos/nba/{NBA_IDS[abbr]}/global/L/logo.svg"]
-    if league == "mlb" and abbr in MLB_IDS:
-        return [f"https://www.mlbstatic.com/team-logos/{MLB_IDS[abbr]}.svg"]
-    if league == "ncaa":  # ncaa.com names its files by school name: try the forms ESPN's names suggest
-        t = LOGO_HINTS.get(url) or {}
-        out = []
-        for name in (t.get("shortDisplayName"), t.get("location"), t.get("displayName")):
-            slug = re.sub(r"[^a-z0-9]+", "-", re.sub(r"\bState\b", "St", name or "").lower().replace("&", "and")).strip("-")
-            u = f"https://www.ncaa.com/sites/default/files/images/logos/schools/bgl/{slug}.svg"
-            if slug and u not in out:
-                out.append(u)
-        return out
-    return []
-
-
-def _svg_logo(url, size):
-    """PNG bytes of the team's SVG rendered at size x size (centred, transparent), or None."""
-    try:
-        import resvg_py
-    except ImportError:
-        return None
-    for u in svg_urls(url):
-        try:
-            req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0 sports-widget/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                svg = r.read().decode("utf-8", "replace")
-            if "<svg" not in svg:
-                continue
-            kw = {"svg_string": svg, "skip_system_fonts": True}
-            dec = _png_rgba(bytes(resvg_py.svg_to_bytes(width=size, **kw)))
-            if dec and dec[1] > size:
-                dec = _png_rgba(bytes(resvg_py.svg_to_bytes(height=size, **kw)))
-            if not dec:
-                continue
-            w, h, px = dec
-            lum = n = 0
-            for i in range(0, len(px), 4):
-                if px[i + 3] > 200:
-                    lum += (px[i] * 299 + px[i + 1] * 587 + px[i + 2] * 114) / 255000
-                    n += 1
-            if n < 4 or lum / n < 0.22:
-                continue  # empty, or mostly dark: it would vanish on the card (ESPN's -dark PNG handles those)
-            out = bytearray(size * size * 4)
-            ox, oy = (size - w) // 2, (size - h) // 2
-            for y in range(min(h, size)):
-                out[((oy + y) * size + ox) * 4:((oy + y) * size + ox + w) * 4] = px[y * w * 4:(y + 1) * w * 4]
-            return _png_bytes(size, size, out)
-        except Exception:
-            continue
-    return None
-
-
 def logo_file(url, size):
     """Local PNG of a team logo scaled to size x size px (ESPN's image resizer), downloaded once; None on failure.
 
@@ -348,8 +273,8 @@ def logo_file(url, size):
     if os.path.exists(path):
         return path
     src = re.sub(r"^https?://[^/]+", "", url)
-    body = _svg_logo(url, size)
-    for cand in ([] if body else ([src.replace("/500/", "/500-dark/")] if "/500/" in src else []) + [src]):
+    body = None
+    for cand in ([src.replace("/500/", "/500-dark/")] if "/500/" in src else []) + [src]:
         try:
             body = _full_logo(cand, size)
         except Exception:
@@ -1172,15 +1097,9 @@ def team_colors(c, fallback):
     return _lighten(cands[0]) if cands else fallback
 
 
-LOGO_HINTS = {}  # ESPN logo URL -> its team object (name, location, abbreviation), for finding the team's SVG
-
-
 def _logo(team):
     """Logo URL ESPN gives for a team object, or None."""
-    url = team.get("logo") or next((l.get("href") for l in team.get("logos") or [] if l.get("href")), None)
-    if url:
-        LOGO_HINTS.setdefault(url, team)
-    return url
+    return team.get("logo") or next((l.get("href") for l in team.get("logos") or [] if l.get("href")), None)
 
 
 def comp_logos(comp):
