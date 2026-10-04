@@ -3818,6 +3818,8 @@ def run_gui():
     def chain_field(k, r, side, head, mode, occ=None, n=0):
         """After a baseball run's banner has completely faded, a diamond of its own plays the runners round the bases."""
         runners = field_runners(head, occ, n)
+        if not runners:
+            return
         end = max(d_ + (len(p_) - 1) * FIELD_LEG for d_, p_ in runners)
         chain_event(k, (r, k, side, "", None, end + 1.7, mode, ""), {"field": (head, occ, n), "out": 0.6})
 
@@ -4365,9 +4367,8 @@ def run_gui():
         order = [3, 2, 1]
         if occ:
             order = [b_ for b_ in order if occ[b_ - 1]]
-        scorers = order[:max(0, n - 1 if homer else n)]
-        if not occ and not homer and head == "RUN SCORES":
-            scorers = [3]
+        pool = order + [b_ for b_ in (3, 2, 1) if b_ not in order]  # a run can score with nobody on (a wild pitch, a walk-off...)
+        scorers = pool[:max(0, n - 1 if homer else n)]
         runners = [(0.35 * i, list(range(b_, 4)) + [0]) for i, b_ in enumerate(scorers)]
         delay = 0.35 * len(scorers)
         if homer:
