@@ -4261,6 +4261,8 @@ def run_gui():
         """Start a celebration (animation + optional sound) on card k. `field`: a baseball run's (head, men on, runs), drawn as
         a little diamond instead of text; `out`: how long its fade-out takes."""
         now = _time.perf_counter()
+        if secs < 6 and banner and not field:  # one set of ripples: hold the text about 2.7 s at full strength so it can be read
+            secs = max(secs, 5.0)
         secs = max(secs, ripple_end(secs) + 0.4) + 0.85  # long enough for the ripples to clear before the fade-out, plus the info's fades
         teams = r.get("teams") or []
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
