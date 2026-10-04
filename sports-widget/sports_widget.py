@@ -2648,7 +2648,7 @@ def run_gui():
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
-               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
+               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "bases_prev": {}, "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
                "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
@@ -3815,13 +3815,13 @@ def run_gui():
             return
         queue.append((args, dict(kw, chained_in=True)))
 
-    def chain_field(k, r, side, head, mode, occ=None, n=0):
+    def chain_field(k, r, side, head, mode, occ=None, n=0, after=None):
         """After a baseball run's banner has completely faded, a diamond of its own plays the runners round the bases."""
-        runners = field_runners(head, occ, n)
+        runners = field_runners(head, occ, n, after)
         if not runners:
             return
         end = max(d_ + (len(p_) - 1) * FIELD_LEG for d_, p_ in runners)
-        chain_event(k, (r, k, side, "", None, end + 1.7, mode, ""), {"field": (head, occ, n), "out": 0.6})
+        chain_event(k, (r, k, side, "", None, end + 1.7, mode, ""), {"field": (head, occ, n, after), "out": 0.6})
 
     def detect_scores(groups):
         """Compare live games with the last refresh and start an animation for each card where something happened:
@@ -3831,7 +3831,7 @@ def run_gui():
         if ui_state.get("anim_scope", "all") == "mine":
             groups = groups[:2]  # My Teams and tracked games only
         now, seen, plays, wins, live_keys = _time.perf_counter(), {}, {}, {}, set()
-        downs, possessions = {}, {}
+        downs, possessions, bases = {}, {}, {}
         for r in (r for grp in groups for r in grp):
             if not r.get("score"):
                 continue
@@ -3866,6 +3866,9 @@ def run_gui():
             ptext = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
             ptid = next((g_.get("team", "") for g_ in gl if g_["kind"] == "lastplay"), "")
             plays[k] = ptext
+            bb_ = next((tuple(g_["bases"]) for g_ in gl if g_["kind"] == "baseball"), None)
+            if bb_ is not None:
+                bases[k] = bb_  # the men on base now: the next hit starts from them
             wv = (r.get("win") or {}).get("a")
             if wv is not None:
                 wins[k] = wv
@@ -3905,7 +3908,7 @@ def run_gui():
                 make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
                            banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
                 if sport == "baseball" and banner and is_field_play(head):
-                    chain_field(k, r, side, head, mode, None, int(d[side]))
+                    chain_field(k, r, side, head, mode, session["bases_prev"].get(k), int(d[side]), bases.get(k))
                 if banner and tag and head != tag:  # the lead changing hands follows the score that did it
                     tm_ = [t_.get("abbr", "") for t_ in r.get("teams") or []]
                     line = f"{tm_[0]} {cur[0]:g} \u2013 {tm_[1]} {cur[1]:g}" if len(tm_) == 2 else ""
@@ -3935,7 +3938,7 @@ def run_gui():
                 make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS!") + KICK_PLAYS else None)
                 if sport == "baseball" and big[0] in ("SINGLE", "DOUBLE", "TRIPLE"):
-                    chain_field(k, r, side, big[0], mode)
+                    chain_field(k, r, side, big[0], mode, session["bases_prev"].get(k), 0, bases.get(k))
                 if big[0] == "FUMBLE":  # then who recovered it
                     rec = recovery_side(r, ptext)
                     if rec is not None:
@@ -3950,6 +3953,7 @@ def run_gui():
         session["win_prev"] = wins
         session["down_prev"] = downs
         session["poss_prev"] = possessions
+        session["bases_prev"] = bases
         session["was_live"] &= live_keys | {card_key(r) for grp in groups for r in grp if r["state"] == "post"}
 
     def start_pulse():
@@ -4359,22 +4363,31 @@ def run_gui():
         """Baseball headlines that get the base-running diamond after their banner."""
         return bool(re.search(r"HOME RUN|GRAND SLAM|^\d+-RUN |RUN SCORES|RUNS SCORE|(SINGLE|DOUBLE|TRIPLE)$", head)) and "PLAY" not in head
 
-    def field_runners(head, occ, n):
+    def field_runners(head, occ, n, after=None):
         """Who runs: [(delay s, [spots: 0 home, 1 first, 2 second, 3 third])]. occ: the men on base before the play (None when
-        unknown), n: the runs that score. Runners on base score first, from the farthest base; the batter goes last."""
+        unknown), n: the runs that score. The runner farthest round scores first; on a hit the others move up by as many bases
+        as the batter takes, and the batter goes last."""
         hit = next((n_ for h_, n_ in (("SINGLE", 1), ("DOUBLE", 2), ("TRIPLE", 3)) if head.endswith(h_)), None)
         homer = "HOME RUN" in head or head.startswith("GRAND SLAM")
-        order = [3, 2, 1]
-        if occ:
-            order = [b_ for b_ in order if occ[b_ - 1]]
-        pool = order + [b_ for b_ in (3, 2, 1) if b_ not in order]  # a run can score with nobody on (a wild pitch, a walk-off...)
-        scorers = pool[:max(0, n - 1 if homer else n)]
+        on = [b_ for b_ in (3, 2, 1) if occ and occ[b_ - 1]]  # who is on, farthest first
+        need = max(0, n - 1 if homer else n)
+        pool = on + [b_ for b_ in (3, 2, 1) if b_ not in on]  # a run can score with nobody on (a wild pitch, a walk-off...)
+        scorers = pool[:need]
         runners = [(0.35 * i, list(range(b_, 4)) + [0]) for i, b_ in enumerate(scorers)]
         delay = 0.35 * len(scorers)
-        if homer:
-            runners.append((delay, [0, 1, 2, 3, 0]))
+        if hit and after is not None:  # a real game: the men still on and the batter end up exactly where ESPN now has them
+            movers = [b_ for b_ in on if b_ not in scorers] + [0]  # farthest round first, the batter last
+            finals = [b_ for b_ in (3, 2, 1) if after[b_ - 1]]
+            for start, final in zip(movers, finals):
+                if final > start:
+                    runners.append((delay, list(range(start, final + 1))))
         elif hit:
+            for b_ in on:
+                if b_ not in scorers and min(b_ + hit, 3) > b_:
+                    runners.append((delay, list(range(b_, min(b_ + hit, 3) + 1))))  # the men still on move up
             runners.append((delay, list(range(hit + 1))))
+        elif homer:
+            runners.append((delay, [0, 1, 2, 3, 0]))
         return runners
 
     def draw_field(lay, ce, t):
@@ -4384,8 +4397,8 @@ def run_gui():
         bg = lay["bgc"]
         cy = top + S
         spot = ((cx, cy + S), (cx + S, cy), (cx, cy - S), (cx - S, cy))
-        fhead, focc, fn = ce["field"]
-        runners = field_runners(fhead, focc, fn)
+        fhead, focc, fn, fafter = ce["field"]
+        runners = field_runners(fhead, focc, fn, fafter)
         total = sum(1 for _d, p_ in runners if p_[-1] == 0)
         u = t - 0.5  # the diamond has faded in
         LEG = FIELD_LEG
