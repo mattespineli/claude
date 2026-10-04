@@ -191,6 +191,33 @@ def _play_label(p):
     return " ".join(x for x in (prefix, clock) if x)
 
 
+_GROUP_SHORT = {"batting": "Bat", "pitching": "Pit", "fielding": "Fld"}
+
+
+def _flat_stats(team_entry):
+    """{key: (label, value)} for one team in a boxscore.
+
+    Most sports send a flat list of stats; baseball nests them in groups (batting / pitching / ...),
+    so those are flattened with a short group prefix.
+    """
+    out = {}
+    groups = team_entry.get("statistics") or []
+    nested = any(isinstance(g, dict) and g.get("stats") for g in groups)
+    for g in groups:
+        items = g.get("stats") if nested else [g]
+        prefix = ""
+        if nested:
+            gname = str(g.get("name") or g.get("type") or "")
+            prefix = _GROUP_SHORT.get(gname.lower(), gname[:3]) + " "
+        for st in items or []:
+            val = st.get("displayValue", st.get("value"))
+            if val in (None, ""):
+                continue
+            label = st.get("abbreviation") or st.get("shortDisplayName") or st.get("label") or st.get("displayName") or st.get("name")
+            out[f"{prefix}{st.get('name') or label}"] = (f"{prefix}{label}", str(val))
+    return out
+
+
 def game_detail_data(data, max_plays=14, max_stats=14):
     """Boil an ESPN summary response down to what the details window shows."""
     comp = ((data.get("header") or {}).get("competitions") or [{}])[0]
@@ -225,9 +252,8 @@ def game_detail_data(data, max_plays=14, max_stats=14):
         by_id = {str((t.get("team") or {}).get("id")): t for t in teams}
         a = by_id.get(str((away.get("team") or {}).get("id")), teams[0])
         h = by_id.get(str((home.get("team") or {}).get("id")), teams[1])
-        hv = {st.get("name"): st.get("displayValue") for st in h.get("statistics", [])}
-        out["stats"] = [(st.get("label") or st.get("name"), st.get("displayValue", ""), hv.get(st.get("name"), ""))
-                        for st in a.get("statistics", [])][:max_stats]
+        ha, hh = _flat_stats(a), _flat_stats(h)
+        out["stats"] = [(label, val, hh.get(key, ("", ""))[1]) for key, (label, val) in ha.items()][:max_stats]
     else:
         out["stats"] = []
     return out
@@ -1475,14 +1501,14 @@ def run_gui():
         if d["stats"]:
             _, h = ctext(x, y + 4, "Team stats", FONTS["smallb"], DIM)
             y += 4 + h
-            mid = x + w / 2
-            ctext(mid - 60, y, d["away_abbr"], FONTS["smallb"], DIM, anchor="ne")
-            _, h = ctext(mid + 60, y, d["home_abbr"], FONTS["smallb"], DIM, anchor="nw")
+            mid = x + w / 2  # away value at the left edge, home value at the right edge, label centred between
+            ctext(x, y, d["away_abbr"], FONTS["smallb"], DIM, anchor="nw")
+            _, h = ctext(x + w, y, d["home_abbr"], FONTS["smallb"], DIM, anchor="ne")
             y += h
             for label, a_, h_ in d["stats"]:
-                ctext(mid - 60, y, a_, FONTS["small"], FG, anchor="ne")
+                ctext(x, y, a_, FONTS["small"], FG, anchor="nw")
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
-                _, h = ctext(mid + 60, y, h_, FONTS["small"], FG, anchor="nw")
+                _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 y += h
         if not (d["plays"] or d["scoring"] or d["stats"] or d.get("home_win") is not None):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
