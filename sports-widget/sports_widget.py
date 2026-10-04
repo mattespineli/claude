@@ -2855,9 +2855,12 @@ def run_gui():
     ROLL_STEP, ROLL_MIN, ROLL_MAX = 0.09, 0.45, 1.1  # seconds per digit passed, shortest and longest roll
 
     def roll_seq(a, b):
-        """Digits one wheel shows going from a to b: counting up to a higher digit, down to a lower one."""
+        """Digits one wheel shows going from a to b: counting up to a higher digit, down to a lower one;
+        9 -> 0 is one step up (a carry, like an odometer) and 0 -> 9 one step down."""
         if a == b:
             return [b]
+        if (a, b) in (("9", "0"), ("0", "9")):
+            return [a, b]
         if a.isdigit() and b.isdigit():
             step = 1 if int(b) > int(a) else -1
             return [str(d) for d in range(int(a), int(b) + step, step)]
@@ -2968,7 +2971,7 @@ def run_gui():
             cx, cy = x - cw / 2, y + hgt / 2
             anchor = canvas.create_rectangle(cx, cy, cx, cy, outline="", state="hidden")  # moves with the card
             items = [canvas.create_text(cx, cy, text="", font=FONTS["score"], fill=color) for _ in range(2)]
-            down = len(seq) > 1 and seq[0].isdigit() and seq[-1].isdigit() and int(seq[-1]) < int(seq[0])
+            down = len(seq) > 1 and seq[0].isdigit() and seq[1].isdigit() and int(seq[1]) == (int(seq[0]) - 1) % 10
             session["roll_cells"].append({"roll": roll, "seq": seq, "anchor": anchor, "items": items, "dir": -1 if down else 1,
                                           "color": color, "bg": bgc, "h": hgt})
             x -= cw
