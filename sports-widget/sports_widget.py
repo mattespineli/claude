@@ -3924,11 +3924,11 @@ def run_gui():
     chord = {}
 
     def chord_wav():
-        """One pleasant sound for everything: a C major chord (C5 E5 G5, with the root an octave down), soft attack, slow decay."""
+        """One pleasant sound for everything: a C major chord (C4 E4 G4, with the root an octave down), soft attack, slow decay."""
         if "wav" not in chord:
             import io, struct, wave
             rate, secs = 22050, 0.9
-            freqs = [(261.63, 0.5), (523.25, 1.0), (659.25, 0.85), (783.99, 0.75)]
+            freqs = [(130.81, 0.5), (261.63, 1.0), (329.63, 0.85), (392.00, 0.75)]
             frames = bytearray()
             for n in range(int(rate * secs)):
                 t = n / rate
@@ -6112,11 +6112,10 @@ def run_gui():
         bg_entry.bind("<FocusOut>", on_bg_entry)
         presets = tk.Frame(win, bg=BG)  # the default, then the colours of the teams you follow
         presets.grid(row=13, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
-        team_cols = []
-        for r_ in (last.get("args") or ([],))[0]:
-            if r_.get("tint") and r_["tint"] not in [c_ for _n, c_ in team_cols]:
-                team_cols.append((re.sub(r"\s*\(.*$", "", r_["name"]), r_["tint"]))
-        for name_, col_ in [("Default", DEFAULT_BG)] + team_cols[:9]:
+        bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8))
+        bg_tip.pack(side="right", padx=(8, 0))
+
+        def add_preset(name_, col_):
             shown_ = usable_bg(col_)
             c_ = tk.Canvas(presets, width=26, height=26, bg=BG, highlightthickness=0, cursor="hand2")
             c_.create_oval(3, 3, 23, 23, fill=shown_, outline=DIM, width=1)
@@ -6124,8 +6123,29 @@ def run_gui():
             c_.bind("<Enter>", lambda e, n_=name_: bg_tip.config(text=n_))
             c_.bind("<Leave>", lambda e: bg_tip.config(text="Presets: default and your teams"))
             c_.pack(side="left", padx=2)
-        bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8))
-        bg_tip.pack(side="left", padx=(8, 0))
+        add_preset("Default", DEFAULT_BG)
+
+        def load_team_colors():
+            """The primary and alternate colours of every team you follow, read from ESPN (cached) off the UI thread."""
+            found = []
+            for e_ in entries:
+                try:
+                    t_ = fetch_schedule(e_).get("team", {})
+                except Exception:
+                    continue
+                for c_ in (t_.get("color"), t_.get("alternateColor")):
+                    h_ = "#" + str(c_).lstrip("#").lower() if c_ else None
+                    if h_ and _valid_hex(h_) and h_ not in [x_[1] for x_ in found]:
+                        found.append((e_.get("label") or t_.get("displayName") or "", h_))
+
+            def show():
+                try:
+                    for name_, col_ in found[:12]:
+                        add_preset(name_, col_)
+                except tk.TclError:
+                    pass  # the window was closed meanwhile
+            root.after(0, show)
+        threading.Thread(target=load_team_colors, daemon=True).start()
         styled_button(win, "Close", close).grid(row=14, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         sp = ui_state.get("settings_pos")
