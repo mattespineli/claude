@@ -857,6 +857,7 @@ def _situation_graphic(sport, comp):
         def_c = next((c for c in comp.get("competitors", []) if c is not off_c), {})
         return {"kind": "football", "x": max(0, min(100, x)), "first": first, "off": off, "def": defn,
                 "color": team_colors(off_c, "#34d399"), "def_color": team_colors(def_c, "#52526a"),
+                "last": str((sit.get("lastPlay") or {}).get("text") or "").strip(),
                 "red": bool(sit.get("isRedZone")) or x >= 80}
     return None
 
@@ -2833,6 +2834,10 @@ def run_gui():
                 canvas.create_polygon(ax - 5 * d_, ay - 6, ax + 5 * d_, ay, ax - 5 * d_, ay + 6, fill="#fbbf24" if has else bgc,
                                       outline="#fbbf24" if has else DIM, width=1, tags=tags)
             my += h
+        if fb and fb.get("last") and live:  # what just happened, in the free space under the possession row
+            text = fb["last"] if len(fb["last"]) <= 84 else fb["last"][:83].rstrip() + "\u2026"
+            _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
+            my += 4 + h
         yy = max(colb, my) + 2
         if gl:
             yy += graphics(ix, yy, gl, bgc, ww)
@@ -3967,7 +3972,8 @@ def demo_data():
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
            "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4,
-                         "homeTimeouts": 2, "awayTimeouts": 3}}
+                         "homeTimeouts": 2, "awayTimeouts": 3,
+                         "lastPlay": {"text": "J. Purdy pass complete to G. Kittle for 12 yards to the DAL 38"}}}
     mlb = {"status": {"type": {"shortDetail": "Top 7th"}},
            "competitors": [team("1", "away", "SFG", 3), team("2", "home", "LAD", 2)],
            "situation": {"awayChallengesRemaining": 1, "homeChallengesRemaining": 2, "balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
