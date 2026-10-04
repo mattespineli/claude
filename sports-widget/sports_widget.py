@@ -2654,7 +2654,7 @@ def run_gui():
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
-               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "bases_prev": {}, "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
+               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "bases_prev": {}, "run_hold": {}, "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
                "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
@@ -3317,6 +3317,36 @@ def run_gui():
         y = draw_card(session["dummy"], 0, 2, int(canvas.cget("width")), False)
         canvas.configure(height=int(y + 4))
 
+    def field_scored(ce, t):
+        """Runners home so far in a base-running event at t seconds (the count the diamond shows)."""
+        fhead, focc, fn, fafter = ce["field"]
+        u = t - 0.5
+        return sum(1 for d_, p_ in field_runners(fhead, focc, fn, fafter) if p_[-1] == 0 and (u - d_) / FIELD_LEG >= len(p_) - 1)
+
+    def run_view(r):
+        """The card as a baseball run's animation shows it: the old score until the runners start, +1 as each reaches home."""
+        k = card_key(r)
+        hold = session["run_hold"].get(k)
+        if not hold:
+            return r
+        ce = session["celebs"].get(k)
+        now = _time.perf_counter()
+        live = ce is not None and now - ce["t0"] < ce["secs"]
+        side = hold["side"]
+        if not live and not session["celeb_next"].get(k):  # over: the real score
+            del session["run_hold"][k]
+            session["roll_last"][(k, side)] = str(r["score"][side])
+            session["rolls"].pop((k, side), None)
+            return r
+        if live and ce.get("field"):
+            hold["started"] = True
+            add = min(hold["n"], field_scored(ce, now - ce["t0"]))
+        else:
+            add = hold["n"] if hold["started"] else 0
+        sc = list(r["score"])
+        sc[side] = f"{hold['base'] + add:g}"
+        return dict(r, score=sc, _real=r)
+
     def test_view(r):
         """The card as a running scoring test shows it (its points added); the real card once the test is over."""
         k = card_key(r)
@@ -3831,12 +3861,14 @@ def run_gui():
             return
         queue.append((args, dict(kw, chained_in=True)))
 
-    def chain_field(k, r, side, head, mode, occ=None, n=0, after=None):
+    def chain_field(k, r, side, head, mode, occ=None, n=0, after=None, base=None):
         """After a baseball run's banner has completely faded, a diamond of its own plays the runners round the bases."""
         runners = field_runners(head, occ, n, after)
         if not runners:
             return
         end = max(d_ + (len(p_) - 1) * FIELD_LEG for d_, p_ in runners)
+        if base is not None and n and side is not None:  # the score holds its old value, then counts up as each runner reaches home
+            session["run_hold"][k] = {"side": side, "base": base, "n": n, "started": False}
         chain_event(k, (r, k, side, "", None, end + 1.7, mode, ""), {"field": (head, occ, n, after), "out": 0.6})
 
     def detect_scores(groups):
@@ -3924,7 +3956,7 @@ def run_gui():
                 make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
                            banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
                 if sport == "baseball" and banner and is_field_play(head):
-                    chain_field(k, r, side, head, mode, session["bases_prev"].get(k), int(d[side]), bases.get(k))
+                    chain_field(k, r, side, head, mode, session["bases_prev"].get(k), int(d[side]), bases.get(k), prev[side])
                 if banner and tag and head != tag:  # the lead changing hands follows the score that did it
                     tm_ = [t_.get("abbr", "") for t_ in r.get("teams") or []]
                     line = f"{tm_[0]} {cur[0]:g} \u2013 {tm_[1]} {cur[1]:g}" if len(tm_) == 2 else ""
@@ -4095,7 +4127,12 @@ def run_gui():
             chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, "Test animation"),
                         {"sound": "swing"} if follow == "MOMENTUM SWING" else {})
         session["test_scores"].pop(k, None)
-        if scoring and side is not None and r.get("score"):
+        if runs and occ is not None and side is not None and is_field_play(head) and r.get("score"):
+            try:
+                session["run_hold"][k] = {"side": side, "base": float(r["score"][side]), "n": runs, "started": False}
+            except (ValueError, TypeError, IndexError):
+                pass
+        elif scoring and side is not None and r.get("score"):
             lead = next((f_ for f_ in follows if f_ in ("TAKES THE LEAD", "TIES IT UP")), None)
             test_score(r, k, side, lead or head, runs if runs is not None and not lead else None)
 
@@ -4469,6 +4506,9 @@ def run_gui():
                 canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=blend(bg, fill, a * (1 - k / 6) * 0.7), outline="", tags=lay["tag"])
             x, y = at(path, p)
             canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, fill, a), tags=lay["tag"])
+        if ce.get("shown_count") != scored:  # the card's score follows the runners: redraw it when another one gets home
+            ce["shown_count"] = scored
+            session["celeb_dirty"] = True
         if total >= 2 and scored:  # runs count up in the middle: bigger with every run, eased, and shaking when it changes
             sizes = (5, 10, 14, 19, 25)  # pt for 0 (where it grows in from), 1, 2, 3 and 4+ runs
             now_s, was_s = sizes[min(scored, 4)], sizes[min(scored, 4) - 1]
@@ -4590,7 +4630,7 @@ def run_gui():
             lay["banner"] += parts
 
     def draw_card(r, x, y, w, final):
-        r = test_view(r)
+        r = run_view(test_view(r))
         session["xfade"] = r.get("_xfade")
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
