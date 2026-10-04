@@ -3180,7 +3180,7 @@ def run_gui():
         runs, 4th downs, kicks; the team that takes over after a turnover on downs."""
         tm = r.get("teams") or []
         if len(tm) != 2:
-            return 0
+            return None
         sport = (r.get("game") or {}).get("sport", "")
         gl = r.get("graphic") or []
         gl = [gl] if isinstance(gl, dict) else gl
@@ -3195,7 +3195,7 @@ def run_gui():
             if bat is not None:
                 fielding = ("STRIKEOUT", "OUT", "DOUBLE PLAY", "TRIPLE PLAY", "CAUGHT STEALING", "PICKED OFF")
                 return 1 - bat if head in fielding else bat
-        return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), 0)
+        return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), None)  # None: no team to attach it to
 
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None):
         """Start a celebration (animation + optional sound) on card k."""
@@ -3203,7 +3203,7 @@ def run_gui():
         teams = r.get("teams") or []
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
         session["celebs"][k] = {
-            "t0": now, "side": side if t else 0, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#34d399",
+            "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
             "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
             "grand": grand, "run": run, "tag": tag, "secs": secs}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
@@ -3538,7 +3538,7 @@ def run_gui():
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and ce["mode"] == "flash" and ct < FLASH_SECS
+        flashing = bool(ce) and ce["mode"] == "flash" and ct < FLASH_SECS and ce["side"] is not None
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
         cx0, cw_ = x + 2, w - 4
