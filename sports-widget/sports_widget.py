@@ -2589,8 +2589,13 @@ def run_gui():
             la = c.create_line(3, 20, 3, 20, fill=g.get("a_color", "#60a5fa"), width=6, capstyle="round")
             lb = c.create_line(3, 20, 3, 20, fill=g.get("b_color", "#f59e0b"), width=6, capstyle="round")
 
+            win_bar_ = "win probability" in g["label"].lower()
+            mid = c.create_line(0, 14, 0, 26, fill="#ffffff", width=2) if win_bar_ else None  # where the two sides meet
+
             def put_bar(share):  # the two halves meet at `share` of the width; easing moves that point left and right
                 split = W * share
+                if mid:
+                    canvas.coords(mid, c.ox + split, c.oy + 14, c.ox + split, c.oy + 26)
                 for it, x0, x1 in ((la, 3, split - 2), (lb, split + 2, W - 3)):
                     if x1 - x0 > 0:
                         canvas.coords(it, c.ox + x0, c.oy + 20, c.ox + x1, c.oy + 20)
