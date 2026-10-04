@@ -4037,8 +4037,8 @@ def run_gui():
         mode = "pulse" if mode in ("off", "flash") else mode
         scoring = kind in ("score", "run", "grand")
         import random
-        mine = session.get("mine", 0)  # the dummy card's "my team": good things happen to it, bad ones (a penalty) to the other team
-        side = (1 - mine if head == "PENALTY" else mine) if len(r.get("teams") or []) == 2 else None
+        mine = session.get("mine", 0)  # the dummy card's "Trigger for" choice: the team every test plays for
+        side = mine if len(r.get("teams") or []) == 2 else None
         make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
@@ -4046,7 +4046,7 @@ def run_gui():
         session["celeb_next"].pop(k, None)
         follows = list(MAIN.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
         for follow in follows:
-            fside = mine if side is not None else None  # follow-ups are good news: my team takes the lead, recovers the fumble...
+            fside = mine if side is not None else None  # follow-ups play for the same team
             chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, "Test animation"),
                         {"sound": "swing"} if follow == "MOMENTUM SWING" else {})
         session["test_scores"].pop(k, None)
