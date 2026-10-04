@@ -1411,7 +1411,7 @@ def run_gui():
     BG, FG, DIM = "#1e1e24", "#f2f2f2", "#9aa0a6"
     COLORS = {"in": "#34d399", "pre": DIM, "post": FG, "none": DIM, "err": "#f87171"}
     PANEL, HOVER = "#2a2a33", "#3a3a46"
-    CARD, TRACK, LIVE_RED = "#26262e", "#3a3a44", "#ef4444"  # card surface, empty-bar track, LIVE badge
+    TRACK, LIVE_RED = "#3a3a44", "#ef4444"  # empty-bar track, LIVE badge
     UI_FONT = ("Segoe UI", 9)
 
     def style_menu(m):
@@ -2156,15 +2156,14 @@ def run_gui():
 
     def draw_card(r, x, y, w, final):
         tint = r.get("tint")
-        bgc = CARD
+        bgc = blend(BG, tint, 0.22) if tint else BG
         cx0, cw_ = x + 2, w - 4
         tags = ()
         if r.get("game") or r.get("url"):
             tags = (new_hit(("game", r)),)
-        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc)
+        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc) if tint else None
         hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
-        accent = canvas.create_line(cx0 + 6, y + 10, cx0 + 6, y + 11, fill=tint, width=3, capstyle="round") if tint else None
-        ix, ww = cx0 + PAD + 4, cw_ - 2 * PAD - 4
+        ix, ww = cx0 + PAD, cw_ - 2 * PAD
         yy = y + GAP
         sc = r.get("score")
         text_w = ww
@@ -2224,11 +2223,10 @@ def run_gui():
             if key in session["anims"]:
                 cover = canvas.create_rectangle(cx0 - 1, yy + GAP, cx0 + cw_ + 1, yy + GAP + 3, fill=BG, outline="")
                 ctx = {"key": key, "kind": "card", "H": H, "y0": y0, "cover": cover, "x0": cx0 - 1, "x1": cx0 + cw_ + 1,
-                       "bg": bgid, "hit": hit, "accent": accent, "geo": (cx0, y, cx0 + cw_), "dy": 0}
+                       "bg": bgid, "hit": hit, "geo": (cx0, y, cx0 + cw_), "dy": 0}
         bottom = yy + GAP
-        canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
-        if accent:
-            canvas.coords(accent, cx0 + 6, y + 10, cx0 + 6, bottom - 10)
+        if bgid:
+            canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
         if hit:
             canvas.coords(hit, cx0 + 3, y + 3, cx0 + cw_ - 3, bottom - 3)
         if ctx:
@@ -2472,8 +2470,6 @@ def run_gui():
             cx0, ytop, cx1 = ctx["geo"]
             if ctx["bg"]:
                 canvas.coords(ctx["bg"], *rr_points(cx0, ytop, cx1, ctx["bottom"] + dy, 10))
-            if ctx["accent"]:
-                canvas.coords(ctx["accent"], cx0 + 6, ytop + 10, cx0 + 6, ctx["bottom"] + dy - 10)
             if ctx["hit"]:
                 canvas.coords(ctx["hit"], cx0 + 3, ytop + 3, cx1 - 3, ctx["bottom"] + dy - 3)
         else:
