@@ -4371,7 +4371,7 @@ def run_gui():
              ("Triple play", "TRIPLE PLAY!", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
-             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked field goal touchdown", "BLOCKED FG TOUCHDOWN!", "score", None),
+             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt touchdown", "BLOCKED PUNT TOUCHDOWN!", "score", None), ("Blocked FG touchdown", "BLOCKED FG TOUCHDOWN!", "score", None),
              ("Blocked PAT", "BLOCKED PAT!", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
              ("Call challenged", "CALL CHALLENGED", "play", "#ef4444"), ("Successful challenge", "SUCCESSFUL CHALLENGE!", "play", "#34d399"), ("Failed challenge", "FAILED CHALLENGE", "play", "#f87171"),
@@ -4645,7 +4645,7 @@ def run_gui():
         # which animations each sport can show (Final and Clutch border suit every sport)
         by_sport = {"Football": ("Touchdown", "Field goal", "Interception", "Pick six", "Fumble", "Sack", "Penalty", "Kickoff", "4th down",
                                  "Turnover on downs", "Safety", "Blocked FG", "Blocked punt", "Onside recovery", "Extra point", "2-pt conversion",
-                                 "Blocked punt touchdown", "Blocked field goal touchdown", "Blocked PAT", "Onside kick", "Punt", "Red zone"),
+                                 "Blocked punt touchdown", "Blocked FG touchdown", "Blocked PAT", "Onside kick", "Punt", "Red zone"),
                     "Baseball": ("Home run", "Inside-the-park HR", "Grand slam", "Strikeout", "Double play", "Out", "Single", "Double", "Triple",
                                  "Run scores", "Triple play", "Caught stealing", "Picked off"),
                     "Basketball": ("Three-pointer", "Two-pointer", "Slam dunk", "Block", "Steal"), "Hockey": ("Goal", "Penalty"), "Soccer": ("Goal",)}
