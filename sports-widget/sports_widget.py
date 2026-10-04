@@ -1411,6 +1411,7 @@ def run_gui():
     BG, FG, DIM = "#1e1e24", "#f2f2f2", "#9aa0a6"
     COLORS = {"in": "#34d399", "pre": DIM, "post": FG, "none": DIM, "err": "#f87171"}
     PANEL, HOVER = "#2a2a33", "#3a3a46"
+    CARD, TRACK, LIVE_RED = "#26262e", "#3a3a44", "#ef4444"  # card surface, empty-bar track, LIVE badge
     UI_FONT = ("Segoe UI", 9)
 
     def style_menu(m):
@@ -1923,22 +1924,21 @@ def run_gui():
         c = Off(ox, oy)
         kind = g["kind"]
         if kind == "periods":
-            n, gap = len(g["fills"]), 3
+            n, gap = len(g["fills"]), 4
             seg = (W - gap * (n - 1)) / n
             for i, f in enumerate(g["fills"]):
                 x = i * (seg + gap)
-                c.create_rectangle(x, 14, x + seg, 20, fill="#33333d", outline="")
+                c.create_line(x + 3, 7, x + seg - 3, 7, fill=TRACK, width=6, capstyle="round")
                 if f > 0:
-                    c.create_rectangle(x, 14, x + seg * f, 20, fill="#34d399" if f < 1 else "#4a4a55", outline="")
-            tid = c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=FONTS["smallb"])
-            if session.get("card_clock"):
-                session["clock_items"].append((tid, g["label"], session["card_clock"]))
-                canvas.itemconfigure(tid, text=tick_clock(g["label"], session["card_clock"]))
-            return 24
+                    c.create_line(x + 3, 7, x + 3 + (seg - 6) * f, 7, fill="#34d399" if f < 1 else "#6b6b78",
+                                  width=6, capstyle="round")
+            return 14
         if kind == "versus":
             split = W * g["a"] / (g["a"] + g["b"])
-            c.create_rectangle(0, 16, split, 24, fill=g.get("a_color", "#60a5fa"), outline="")
-            c.create_rectangle(split, 16, W, 24, fill=g.get("b_color", "#f59e0b"), outline="")
+            if split - 2 > 3:
+                c.create_line(3, 20, split - 2, 20, fill=g.get("a_color", "#60a5fa"), width=6, capstyle="round")
+            if W - 3 > split + 2:
+                c.create_line(split + 2, 20, W - 3, 20, fill=g.get("b_color", "#f59e0b"), width=6, capstyle="round")
             fmt = lambda v: f"{v:g}"
             c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=FONTS["small"])
             c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=FONTS["small"])
@@ -1978,9 +1978,9 @@ def run_gui():
             return 44
         if kind == "football":
             px = lambda yd: W * yd / 100
-            c.create_rectangle(0, 14, W, 20, fill="#33333d", outline="")
+            c.create_line(3, 17, W - 3, 17, fill=TRACK, width=6, capstyle="round")
             if g["red"]:
-                c.create_rectangle(px(80), 14, W, 20, fill="#7f3b3b", outline="")
+                c.create_line(px(80), 17, W - 3, 17, fill="#7f3b3b", width=6, capstyle="round")
             if g["first"] is not None:
                 c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
             bx = px(g["x"])
@@ -2156,14 +2156,15 @@ def run_gui():
 
     def draw_card(r, x, y, w, final):
         tint = r.get("tint")
-        bgc = blend(BG, tint, 0.22) if tint else BG
+        bgc = CARD
         cx0, cw_ = x + 2, w - 4
         tags = ()
         if r.get("game") or r.get("url"):
             tags = (new_hit(("game", r)),)
-        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc) if tint else None
+        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc)
         hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
-        ix, ww = cx0 + PAD, cw_ - 2 * PAD
+        accent = canvas.create_line(cx0 + 6, y + 10, cx0 + 6, y + 11, fill=tint, width=3, capstyle="round") if tint else None
+        ix, ww = cx0 + PAD + 4, cw_ - 2 * PAD - 4
         yy = y + GAP
         sc = r.get("score")
         text_w = ww
@@ -2175,8 +2176,8 @@ def run_gui():
                 lead = 0
             live = r["state"] == "in"
             hi = COLORS["in"] if live else FG
-            c1 = hi if lead >= 0 or live else DIM
-            c2 = hi if lead <= 0 or live else DIM
+            c1 = hi if lead >= 0 else DIM
+            c2 = hi if lead <= 0 else DIM
             rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
             x2 = draw_score(xr, yy - 3, sc[1], c2, bgc, (rk, 1))
             idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
@@ -2189,14 +2190,19 @@ def run_gui():
             yy += h
         if sc:
             yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
-        sid, h = ctext(ix, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
-                       COLORS.get(r["state"], FG), width=ww, tags=tags)
+        sx = ix
+        if r["state"] == "in":  # red LIVE pill in front of the clock
+            bw = 34
+            canvas.create_polygon(rr_points(ix, yy + 2, ix + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
+            canvas.create_text(ix + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+            sx = ix + bw + 6
+        sid, h = ctext(sx, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
+                       COLORS.get(r["state"], FG), width=ww - (sx - ix), tags=tags)
         clock = r.get("clock") if r["state"] == "in" else None
-        session["card_clock"] = clock  # the period bar label shows the clock too
         if clock:
             session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
             canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
-        yy += h
+        yy += max(h, 18 if r["state"] == "in" else 0)
         if r.get("graphic"):
             yy += graphics(ix, yy, r["graphic"], bgc, ww)
         g_ = r.get("game")
@@ -2218,10 +2224,11 @@ def run_gui():
             if key in session["anims"]:
                 cover = canvas.create_rectangle(cx0 - 1, yy + GAP, cx0 + cw_ + 1, yy + GAP + 3, fill=BG, outline="")
                 ctx = {"key": key, "kind": "card", "H": H, "y0": y0, "cover": cover, "x0": cx0 - 1, "x1": cx0 + cw_ + 1,
-                       "bg": bgid, "hit": hit, "geo": (cx0, y, cx0 + cw_), "dy": 0}
+                       "bg": bgid, "hit": hit, "accent": accent, "geo": (cx0, y, cx0 + cw_), "dy": 0}
         bottom = yy + GAP
-        if bgid:
-            canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
+        canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
+        if accent:
+            canvas.coords(accent, cx0 + 6, y + 10, cx0 + 6, bottom - 10)
         if hit:
             canvas.coords(hit, cx0 + 3, y + 3, cx0 + cw_ - 3, bottom - 3)
         if ctx:
@@ -2253,8 +2260,9 @@ def run_gui():
         for n in nodes:
             t = n["t"]
             if t == "section":
-                _, h = ctext(x + 2, y + 8, n["text"], FONTS["sec"], DIM)
-                y += 8 + h + 4
+                tid, h = ctext(x + 4, y + 10, n["text"].upper(), FONTS["sec"], DIM)
+                canvas.create_line(canvas.bbox(tid)[2] + 8, y + 10 + h / 2, x + w - 4, y + 10 + h / 2, fill="#33333d")
+                y += 10 + h + 6
             elif t == "text":
                 _, h = ctext(x + 2, y + 4, n["text"], FONTS["line"], DIM)
                 y += 4 + h + 4
@@ -2464,6 +2472,8 @@ def run_gui():
             cx0, ytop, cx1 = ctx["geo"]
             if ctx["bg"]:
                 canvas.coords(ctx["bg"], *rr_points(cx0, ytop, cx1, ctx["bottom"] + dy, 10))
+            if ctx["accent"]:
+                canvas.coords(ctx["accent"], cx0 + 6, ytop + 10, cx0 + 6, ctx["bottom"] + dy - 10)
             if ctx["hit"]:
                 canvas.coords(ctx["hit"], cx0 + 3, ytop + 3, cx1 - 3, ctx["bottom"] + dy - 3)
         else:
