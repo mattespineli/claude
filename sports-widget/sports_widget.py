@@ -3361,21 +3361,14 @@ def run_gui():
         if not scoring:
             session["celebs"][k]["abbr"] = r["teams"][0]["abbr"] if kind in ("swing", "final") else ""
 
-    def test_dialog():
-        win = tk.Toplevel(root)
-        win_ref[0] = win
-        win.title("Test animations")
-        win.configure(bg=BG)
-        win.attributes("-topmost", True)
-        win.resizable(False, False)
-        dark_titlebar(win)
-        tk.Label(win, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
-            row=0, column=0, columnspan=3, padx=16, pady=(14, 6), sticky="w")
+    def test_buttons(parent):
+        """A frame of buttons that play each animation, for the Settings window to show beside its options."""
+        f = tk.Frame(parent, bg=BG)
+        tk.Label(f, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
+            row=0, column=0, columnspan=2, pady=(0, 6), sticky="w")
         for i, (label, *_rest) in enumerate(TESTS):
-            styled_button(win, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 3, column=i % 3, padx=6, pady=4, sticky="ew")
-        styled_button(win, "Close", win.destroy).grid(row=2 + len(TESTS) // 3, column=2, padx=6, pady=(10, 14), sticky="e")
-        win.update_idletasks()
-        win.geometry(f"+{root.winfo_x() + root.winfo_width() + 10}+{root.winfo_y() + 30}")
+            styled_button(f, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 2, column=i % 2, padx=4, pady=3, sticky="w")
+        return f
 
     def celeb_tick():
         now = _time.perf_counter()
@@ -4279,7 +4272,21 @@ def run_gui():
         styled_option(win, sound_choice, ["On", "Muted"], command=on_sound, width=12).grid(
             row=9, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=10, column=0, padx=16, pady=(6, 4), sticky="w")
-        styled_button(win, "Test...", lambda: (win.destroy(), test_dialog())).grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
+        win_ref[0] = win
+        tests = test_buttons(win)
+        shown = [False]
+
+        def toggle_tests():
+            shown[0] = not shown[0]
+            if shown[0]:  # the window grows sideways, and moves beside the widget so the cards stay visible
+                tests.grid(row=0, column=2, rowspan=13, padx=(0, 16), pady=16, sticky="n")
+                win.update_idletasks()
+                win.geometry(f"+{root.winfo_x() + root.winfo_width() + 10}+{root.winfo_y() + 30}")
+            else:
+                tests.grid_remove()
+            test_btn.itemconfigure(2, text="Hide" if shown[0] else "Test...")
+        test_btn = styled_button(win, "Test...", toggle_tests)
+        test_btn.grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
