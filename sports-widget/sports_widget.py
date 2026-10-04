@@ -931,6 +931,22 @@ def comp_logos(comp):
     return [_logo(c.get("team", {})) for c in pair]
 
 
+def tv_channels(comp, limit=3):
+    """'ESPN · Peacock': the TV and streaming channels showing a game (national TV first, then streaming), or ''."""
+    found = []  # (not national, is streaming, name)
+    market = lambda b: str(((b.get("market") or {}).get("type") if isinstance(b.get("market"), dict) else b.get("market")) or "").lower()
+    for b in comp.get("broadcasts") or []:
+        names = b.get("names") or [(b.get("media") or {}).get("shortName")]
+        found += [(market(b) != "national", False, n) for n in names if n]
+    for b in comp.get("geoBroadcasts") or []:
+        kind = str((b.get("type") or {}).get("shortName", "TV")).lower()
+        name = (b.get("media") or {}).get("shortName")
+        if name and kind != "radio":
+            found.append((market(b) != "national", kind in ("web", "streaming", "stream", "online"), name))
+    names = list(dict.fromkeys(n for _loc, _stream, n in sorted(found, key=lambda t: t[:2])))
+    return " \u00b7 ".join(names[:limit])
+
+
 def series_info(comp):
     """{"head": 'East 1st Round - Game 3', "text": 'BOS leads series 2-1' / 'BOS wins series 4-2'} for a playoff game, else None."""
     ser = comp.get("series") or {}
@@ -1267,7 +1283,7 @@ def team_status(entry):
         text = series_from_schedule(events, event, entry["team"])
         if text:
             ser = {"head": (ser or {}).get("head", ""), "text": text}
-    return {"series": ser,
+    return {"tv": tv_channels(event["competitions"][0]) if state == "in" else "", "series": ser,
             "teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
@@ -1393,7 +1409,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             parts = score_parts(e)
-            row = {"logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
+            row = {"tv": tv_channels(comp) if state == "in" else "", "logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
                    "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -1465,7 +1481,7 @@ def league_games():
             comp = e["competitions"][0]
             parts = score_parts(e)
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail, "logos": comp_logos(comp),
-                        "teams": comp_teams(comp),
+                        "teams": comp_teams(comp), "tv": tv_channels(comp) if state == "in" else "",
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
@@ -1648,7 +1664,8 @@ def pinned_status(pin):
             s = summarize_game(e, pin["sport"], pin["league"])
             if s:
                 parts = score_parts(e)
-                return {"logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0]),
+                return {"tv": tv_channels(e["competitions"][0]) if s[0] == "in" else "",
+                        "logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0]),
                         "series": series_info(e["competitions"][0]) if s[0] == "post" else None,
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
@@ -2863,6 +2880,9 @@ def run_gui():
             session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
             canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
         my += h + 4
+        if live and r.get("tv"):  # the channel(s) showing it
+            _, h = ctext(mx, my - 3, r["tv"], FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
+            my += h - 1
         if r["state"] == "post" and r.get("game"):  # a finished game: its team stats fill the middle
             d_ = ensure_stats(r["game"])
             if isinstance(d_, dict) and d_.get("all_stats"):
@@ -3027,6 +3047,9 @@ def run_gui():
                 session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
                 canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
             yy += max(h, 18 if r["state"] == "in" else 0)
+            if r.get("tv") and r["state"] == "in":
+                _, h = ctext(tx, yy, "on " + r["tv"], FONTS["small"], DIM, width=lw - (tx - ix), tags=tags)
+                yy += h
             if urls:
                 yy = max(yy, y_head + len(urls) * (lg_size + 2))  # the logo spans name, opponent and status lines
             if bb:
@@ -4082,6 +4105,7 @@ def demo_data():
             else {"at": time.time(), "secs": int(cm.group(3)) * 60 - 30, "up": True, "minute": int(cm.group(3))})
         return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/", "clock": clock,
                 "score": score, "status": status, "win": wbar, "next": next_line,
+                "tv": {"nfl": "FOX", "mlb": "TBS", "nba": "ESPN \u00b7 ABC", "nhl": "TNT"}.get(league, "") if state == "in" else "",
                 "teams": comp_teams(comp, (comp.get("competitors") or [None])[0]) if state != "none" else [],
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
