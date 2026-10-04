@@ -1275,7 +1275,7 @@ def run_gui():
     PAD, GAP = 10, 6
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
-               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False}
+               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -1305,11 +1305,10 @@ def run_gui():
                 return fn(*[v + (self.ox if k % 2 == 0 else self.oy) for k, v in enumerate(flat)], **kw)
             return call
 
-    def graphic_one(ox, oy, g, bg):
+    def graphic_one(ox, oy, g, bg, W):
         c = Off(ox, oy)
         kind = g["kind"]
         if kind == "periods":
-            W = 240
             n, gap = len(g["fills"]), 3
             seg = (W - gap * (n - 1)) / n
             for i, f in enumerate(g["fills"]):
@@ -1320,7 +1319,6 @@ def run_gui():
             c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=FONTS["smallb"])
             return 24
         if kind == "versus":
-            W = 240
             split = W * g["a"] / (g["a"] + g["b"])
             c.create_rectangle(0, 16, split, 24, fill=g.get("a_color", "#60a5fa"), outline="")
             c.create_rectangle(split, 16, W, 24, fill=g.get("b_color", "#f59e0b"), outline="")
@@ -1330,7 +1328,6 @@ def run_gui():
             c.create_text(W, 6, text=f'{fmt(g["b"])} {g["b_name"]}', anchor="e", fill=FG, font=FONTS["small"])
             return 30
         if kind == "timeline":
-            W = 240
             span = 90 if g["minute"] <= 90 else 120
             px = lambda m: 6 + (W - 12) * min(m, span) / span
             c.create_line(6, 22, W - 6, 22, fill="#33333d", width=4, capstyle="round")
@@ -1363,7 +1360,6 @@ def run_gui():
                                   outline=color if on else DIM, width=1)
             return 44
         if kind == "football":
-            W = 240
             px = lambda yd: W * yd / 100
             c.create_rectangle(0, 14, W, 20, fill="#33333d", outline="")
             if g["red"]:
@@ -1377,10 +1373,11 @@ def run_gui():
             return 24
         return 0
 
-    def graphics(ox, oy, gs, bg):
+    def graphics(ox, oy, gs, bg, W=240):
+        """Stack the graphics for a game; bars stretch to the card's inner width W."""
         h = 0
         for g in ([gs] if isinstance(gs, dict) else gs):
-            h += 2 + graphic_one(ox, oy + h + 2, g, bg)
+            h += 2 + graphic_one(ox, oy + h + 2, g, bg, int(W))
         return h
 
     def draw_details(x, y, w, bgc, d):
@@ -1398,7 +1395,7 @@ def run_gui():
             hw = round(d["home_win"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
             y += graphics(x, y, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
-                                 "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc)
+                                 "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc, w)
         for title, items in (("Scoring", d["scoring"]), ("Recent plays", d["plays"][:8])):
             if items:
                 _, h = ctext(x, y + 4, title, FONTS["smallb"], DIM)
@@ -1467,26 +1464,29 @@ def run_gui():
                      COLORS.get(r["state"], FG), width=ww, tags=tags)
         yy += h
         if r.get("graphic"):
-            yy += graphics(ix, yy, r["graphic"], bgc)
+            yy += graphics(ix, yy, r["graphic"], bgc, ww)
         if r.get("info"):
             _, h = ctext(ix, yy, r["info"], FONTS["line"], DIM, width=ww, tags=tags)
             yy += h
         g = r.get("game")
+        ctx = None
         if g and gkey(g) in session["expanded"]:
             key = "game:" + gkey(g)
             y0 = yy
             H = draw_details(ix, y0, ww, bgc, session["details"].get(gkey(g)))
-            spec = session["anims"].get(key)
-            vis = visible(spec, H, final) if spec else H
-            if vis < H - 0.5:
-                canvas.create_rectangle(cx0 - 1, y0 + vis + GAP, cx0 + cw_ + 1, y0 + H + GAP + 3, fill=BG, outline="")
-            yy = y0 + vis
-            session["vis"][key] = vis
+            yy = y0 + H  # always drawn at full height; an animation only moves things afterwards
+            if key in session["anims"]:
+                cover = canvas.create_rectangle(cx0 - 1, yy + GAP, cx0 + cw_ + 1, yy + GAP + 3, fill=BG, outline="")
+                ctx = {"key": key, "kind": "card", "H": H, "y0": y0, "cover": cover, "x0": cx0 - 1, "x1": cx0 + cw_ + 1,
+                       "bg": bgid, "hit": hit, "geo": (cx0, y, cx0 + cw_), "dy": 0}
         bottom = yy + GAP
         if bgid:
             canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
         if hit:
             canvas.coords(hit, cx0 + 3, y + 3, cx0 + cw_ - 3, bottom - 3)
+        if ctx:
+            ctx["bottom"] = bottom
+            session["actx"] = ctx
         return bottom + GAP
 
     def draw_group(n, x, y, w, final):
@@ -1503,11 +1503,10 @@ def run_gui():
             y0 = y
             y = draw_nodes(n["children"], x, y, w, final)
             H = y - y0
-            vis = visible(spec, H, final) if spec else H
-            if vis < H - 0.5:
-                canvas.create_rectangle(x - 1, y0 + vis, x + w + 1, y0 + H + 3, fill=BG, outline="")
-                y = y0 + vis
-            session["vis"][key] = vis
+            if spec:
+                cover = canvas.create_rectangle(x - 1, y, x + w + 1, y + 3, fill=BG, outline="")
+                session["actx"] = {"key": key, "kind": "group", "H": H, "y0": y0, "cover": cover, "x0": x - 1,
+                                   "x1": x + w + 1, "dy": 0}
         return y
 
     def draw_nodes(nodes, x, y, w, final):
@@ -1581,11 +1580,19 @@ def run_gui():
             return 0
         canvas.delete("all")
         session["hits"].clear()
+        session["actx"] = None
         cw = max(canvas.winfo_width(), MIN_BODY_W)
         y = draw_nodes(build_nodes(), 0, 2, cw, final)
         total = int(y + 4)
         canvas.configure(scrollregion=(0, 0, cw, total))
         session["total"] = total
+        ctx = session["actx"]
+        if ctx:  # tag everything drawn after the animated block so a frame can move it with one call
+            ids = canvas.find_all()
+            for i in ids[ids.index(ctx["cover"]) + 1:]:
+                canvas.addtag_withtag("abelow", i)
+            ctx["cw"] = cw
+            apply_frame()
         return total
 
     def compute_sig():
@@ -1594,28 +1601,58 @@ def run_gui():
                           default=str, sort_keys=True)
 
     # ---- animations: expand / collapse of games and groups -------------------------
+    def apply_frame():
+        """Cheap per-frame update of the animating block: cover, everything below it, and the card background."""
+        ctx = session["actx"]
+        spec = session["anims"].get(ctx["key"]) if ctx else None
+        if not ctx or not spec:
+            return
+        H = ctx["H"]
+        vis = visible(spec, H)
+        session["vis"][ctx["key"]] = vis
+        dy = vis - H
+        canvas.move("abelow", 0, dy - ctx["dy"])
+        ctx["dy"] = dy
+        y0 = ctx["y0"]
+        if ctx["kind"] == "card":
+            gap = GAP
+            canvas.coords(ctx["cover"], ctx["x0"], y0 + vis + gap, ctx["x1"], y0 + H + gap + 3)
+            cx0, ytop, cx1 = ctx["geo"]
+            if ctx["bg"]:
+                canvas.coords(ctx["bg"], *rr_points(cx0, ytop, cx1, ctx["bottom"] + dy, 10))
+            if ctx["hit"]:
+                canvas.coords(ctx["hit"], cx0 + 3, ytop + 3, cx1 - 3, ctx["bottom"] + dy - 3)
+        else:
+            canvas.coords(ctx["cover"], ctx["x0"], y0 + vis, ctx["x1"], y0 + H + 3)
+        canvas.configure(scrollregion=(0, 0, ctx["cw"], session["total"] + int(dy)))
+
+    def finish_anim(key):
+        cb = session["anims"].pop(key).get("on_done")
+        if cb:
+            cb()
+
     def anim_step():
         now = _time.perf_counter()
+        apply_frame()
         finished = [k for k, sp in session["anims"].items() if now - sp["t0"] >= sp["dur"]]
-        draw_all()
         if finished:
             for k in finished:
-                cb = session["anims"].pop(k).get("on_done")
-                if cb:
-                    cb()
+                finish_anim(k)
             session["sig"] = compute_sig()
             draw_all()
         if session["anims"]:
-            root.after(6, anim_step)
+            root.after(4, anim_step)
         else:
             session["looping"] = False
             fit()
 
     def start_anim(key, opening, from_px=None, on_done=None, dur=0.22):
+        for other in [k for k in session["anims"] if k != key]:
+            finish_anim(other)  # one animation at a time: jump the previous one to its end
         session["anims"][key] = {"t0": _time.perf_counter(), "dur": dur, "opening": opening, "from": from_px,
                                  "on_done": on_done}
-        if not user_sized["on"]:  # size the window for the end state once, so frames only move content
-            total = draw_all(final=True)
+        total = draw_all()  # drawn at full height; apply_frame() positions it for t = 0
+        if opening and not user_sized["on"]:  # size the window for the end state once
             canvas.configure(height=max(canvas.winfo_height(), min(total, int(root.winfo_screenheight() * 0.7))))
         if not session["looping"]:
             session["looping"] = True
