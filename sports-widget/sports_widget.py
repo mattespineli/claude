@@ -1517,7 +1517,7 @@ def situation_graphic(sport, comp, league=""):
                 except (TypeError, ValueError):
                     return None
         return None
-    for words, total in ((("timeout",), {"nba": 7, "wnba": 5}.get(league, 4) if sport == "basketball" else 3), (("challenge",), 2)):
+    for words, total in ((("timeout",), {"nba": 7, "wnba": 5}.get(league, 4) if sport == "basketball" else 1 if sport == "hockey" else 3), (("challenge",), 2)):
         h_, a_ = side("home", words), side("away", words)
         if h_ is not None or a_ is not None:
             out.append({"kind": "timeouts", "home": h_, "away": a_, "total": total})
@@ -3504,7 +3504,7 @@ def run_gui():
                     del cache[k_]
 
     pill_imgs = {}
-    pill_of = {}  # canvas image id -> (w, h, colour) of the pills drawn, so a fading card can re-tint them
+    pill_of = {}  # (canvas, image id) -> (w, h, colour) of the pills drawn, so a fading card can re-tint them (ids repeat across canvases)
 
     def pill_image(w, h, color, bg):
         """A rounded pill as an anti-aliased image, its edge pixels blended into `bg` (Tk draws partial
@@ -3544,7 +3544,7 @@ def run_gui():
         i_ = canvas.create_image(x1, y1, image=pill_image(w, h, color, session.get("card_bg") or BG), anchor="nw", tags=tags)
         if len(pill_of) > 4000:
             pill_of.clear()
-        pill_of[i_] = (w, h, color)
+        pill_of[(str(canvas), i_)] = (w, h, color)
         return [i_]
 
     def tv_badges(x, y, text, tags=(), center=False, limit=3):
@@ -3656,7 +3656,7 @@ def run_gui():
             new = mine + (pts if pts is not None else int(runs.group(1)) if runs else TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
         session["test_scores"][k] = {"side": side, "text": f"{new:g}", "ce": session["celebs"].get(k)}
 
-    tv = {"view": None}  # the Settings dummy card's (canvas, session), while Settings is open
+    tv = {"view": None, "show": None}  # the Settings dummy card's (canvas, session), and what redraws it, while Settings is open
 
     def redraw():
         if session.get("view"):
@@ -3806,15 +3806,18 @@ def run_gui():
                 pass
         root.after(1000 - int(now * 1000) % 1000 + 5, clock_tick)  # just after each whole second
 
-    def ensure_stats(g, ht=False):
-        """Team stats of a finished game, or of a game at halftime (for the Scoreboard layout), fetched in the background on first use."""
-        k = gkey(g) + ("|ht" if ht else "")
+    def ensure_stats(g, brk=""):
+        """Team stats of a finished game, or of a game at a break (for the Scoreboard layout), fetched in the background on
+        first use. brk is the break's status text: each break (halftime, the end of a quarter, an inning) fetches its own."""
+        k = gkey(g) + ("|ht|" + brk if brk else "")
         if k not in session["stats"] and not session["anims"]:
+            for k_ in [k_ for k_ in session["stats"] if brk and k_.startswith(gkey(g) + "|ht|")]:
+                del session["stats"][k_]  # an earlier break's stats are stale now
             session["stats"][k] = None
 
             def work():
                 try:
-                    session["stats"][k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=600), sport=g["sport"], league=g["league"])
+                    session["stats"][k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=60 if brk else 600), sport=g["sport"], league=g["league"])
                 except Exception:
                     session["stats"][k] = {"stats": []}
                 root.after(0, stats_loaded)
@@ -3890,10 +3893,10 @@ def run_gui():
         quiet_ = not (lp and lp.get("text")) and not (info or "").strip()  # nothing else is shown in the middle
         inning_break = (r.get("game") or {}).get("sport") == "baseball" and bool(re.search(r"\b(mid|middle|end)\s+(of\s+)?(the\s+)?\d", stxt_, re.I))
         at_half = r["state"] == "in" and (inning_break or (r.get("game") or {}).get("sport") != "baseball" and bool(
-            re.search(r"\b(half-?time|end of|intermission)\b", stxt_, re.I)
+            re.search(r"\b(half-?time|end of|intermission)\b", stxt_, re.I) or re.search(r"\bHT\b", stxt_)  # soccer's halftime is "HT"
             or quiet_ and re.search(r"\b(break|delay(?:ed)?|suspended)\b", stxt_, re.I)))  # halftime, quarter / period / inning ends always; other breaks and delays when nothing else is shown
         if (r["state"] == "post" or at_half) and r.get("game"):  # a finished game, or one at halftime: its team stats fill the middle
-            d_ = ensure_stats(r["game"], at_half)
+            d_ = ensure_stats(r["game"], " ".join(stxt_.split()) if at_half else "")
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
                 room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
@@ -4096,6 +4099,8 @@ def run_gui():
         if sport in ("hockey", "soccer"):
             return "GOAL!", True
         if sport == "basketball":  # shots only (no free throws); detect_scores plays them only as the lead-in to a Then animation
+            if "free throw" in low:
+                return "", False
             head = "SLAM DUNK!" if "dunk" in low else "THREE-POINTER" if n == 3 else "TWO-POINTER" if n == 2 else ""
             return head, bool(head)
         return "SCORE", True
@@ -4103,15 +4108,23 @@ def run_gui():
     def challenge_of(text):
         """A challenge ruled on in ESPN's play text: (True if the call was overturned, the challenging team's abbreviation), or None."""
         low = text.lower()
+        if re.search(r"\bVAR\b", text):  # soccer's video review: the goal (or penalty, or card) is taken away, or it stands
+            stand = re.search(r"goal stands|good goal|confirmed", low)
+            over = not stand and re.search(r"no goal|disallowed|cancell?ed|overturned", low)
+            return (True, "") if over else (False, "") if stand else None
         if "challenge" not in low and not ("ruling on the field" in low and "review" in low):
             return None
         over = re.search(r"overturn|revers|\bsuccessful\b|\bwon\b|\bgranted\b", low) and not re.search(r"unsuccessful|\blost\b|not overturn|not revers", low)
         stand = re.search(r"upheld|\bstands?\b|confirmed|unsuccessful|\bfailed\b|\blost\b|no change|not overturn|not revers", low)
         if not over and not stand:
             return None
-        m = re.search(r"challenge[d]? (?:by|from) ([A-Za-z]{2,4})\b", text) or re.search(r"\b([A-Z]{2,4}) (?:coach'?s? |team |manager )challenge", text)
-        who = m.group(1) if m else ""
-        return bool(over), who
+        return bool(over), challenger_of(text)
+
+    def challenger_of(text):
+        """The abbreviation of the team that challenged, as ESPN's play text names it, or ""."""
+        m = (re.search(r"challenge[d]? (?:by|from) ([A-Za-z]{2,4})\b", text) or re.search(r"\b([A-Z]{2,4}) (?:coach'?s? |team |manager )challenge", text)
+             or re.search(r"\b([A-Z]{2,4}) challenged\b", text))
+        return m.group(1) if m else ""
 
     def classify_play(sport, text):
         """(headline, color, seconds) for a big play named in ESPN's last-play text, or None."""
@@ -4305,7 +4318,7 @@ def run_gui():
             return False
         secs, per = t.get("secs"), t.get("period")
         if sport == "basketball":
-            reg = 2 if "college" in (league or "") else 4
+            reg = 2 if league == "mens-college-basketball" else 4  # women's college plays quarters
             return per is not None and secs is not None and per >= reg and secs <= 240 and lead > 2.5 * secs / 60 + 3
         if sport == "football":
             return per is not None and secs is not None and per >= 4 and any(secs <= s_ and lead >= need for s_, need in ((480, 17), (300, 14), (180, 9)))
@@ -4373,7 +4386,7 @@ def run_gui():
                 continue
             k = card_key(r)
             if r["state"] == "post":  # a game that was live a moment ago has just ended
-                if k in session["was_live"] and mode != "off" and k not in session["celebs"]:
+                if k in session["was_live"] and mode != "off":  # after whatever is still playing on the card
                     try:
                         a_, b_ = float(r["score"][0]), float(r["score"][1])
                     except ValueError:
@@ -4381,8 +4394,8 @@ def run_gui():
                     win = 0 if a_ >= b_ else 1
                     teams = r.get("teams") or []
                     nm = [t_["abbr"] for t_ in teams] if len(teams) == 2 else ["", ""]
-                    make_event(r, k, win, "FINAL", None, BANNER_SECS, mode, f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}",
-                               sound="final")
+                    chain_event(k, (r, k, win, "FINAL", None, BANNER_SECS, mode, f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}"),
+                                {"sound": "final"})
                 session["was_live"].discard(k)
                 continue
             if r["state"] != "in" or k in seen:
@@ -4424,13 +4437,12 @@ def run_gui():
                 gain, pct = (w_["a_name"], wv) if up_away else (w_["b_name"], 100 - wv)
                 swing = ((r, k, 0 if up_away else 1, "MOMENTUM SWING", None, FOLLOW_SECS, mode, f"{gain} win probability now {pct:g}%"),
                          {"sound": "swing"})
-            if m4:
-                if downs[k] == 4 and session["down_prev"].get(k, 4) != 4 and k not in session["celebs"]:
-                    make_event(r, k, acting_side(r, "4TH DOWN"), "4TH DOWN", None, 3.5, mode, (r.get("info") or "").split("\n")[0].replace(" \u00b7 ", "  \u00b7  "),
-                               sound="fourth")
-                    if swing:
-                        chain_event(k, *swing)
-                    continue
+            fourth = None  # a new 4th down: played after the big play that caused it (a sack, say), or on its own
+            if m4 and downs[k] == 4 and session["down_prev"].get(k, 4) != 4:
+                fourth = ((r, k, acting_side(r, "4TH DOWN"), "4TH DOWN", None, 3.5, mode, (r.get("info") or "").split("\n")[0].replace(" \u00b7 ", "  \u00b7  ")),
+                          {"sound": "fourth"})
+            old = session["play_prev"].get(k)
+            tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
             d = (cur[0] - prev[0], cur[1] - prev[1])
             if max(d) > 0:  # somebody scored
                 side = 0 if d[0] >= d[1] else 1
@@ -4441,8 +4453,14 @@ def run_gui():
                 dag = (k, side) not in session["daggers"] and is_dagger(r, side, prev, cur)  # late and out of reach now, once per team per game
                 if sport == "basketball" and banner and not (tag or dag or swing):
                     continue  # a basket only plays as the lead-in to a Then animation
-                make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
-                           banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
+                if banner or tag:  # a free throw has neither: no empty flash
+                    make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
+                               banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
+                ch = challenge_of(ptext) if old is not None and ptext and ptext != old else None
+                if ch and ch[0]:  # the score came from an overturned call: the challenge's result follows it
+                    cside = tm_.index(ch[1].upper()) if ch[1] and ch[1].upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
+                    chain_event(k, (r, k, cside, "SUCCESSFUL CHALLENGE!", "#34d399", 3.5, mode, ptext), {"sound": None})
+                    chain_event(k, (r, k, cside, "CALL OVERTURNED", "#34d399", FOLLOW_SECS, mode, ptext), {})
                 if sport == "baseball" and banner and is_field_play(head):
                     chain_field(k, r, side, head, mode, session["bases_prev"].get(k), int(d[side]), bases.get(k), prev[side])
                 if banner and tag and head != tag:  # the lead changing hands follows the score that did it
@@ -4455,23 +4473,24 @@ def run_gui():
                 if swing:
                     chain_event(k, *swing)
                 continue
-            old = session["play_prev"].get(k)  # nobody scored: a big play?
+            # nobody scored: a big play? (each plays after whatever is still playing on the card)
             ch = challenge_of(ptext) if old is not None and ptext and ptext != old else None
-            if (not ch and old is not None and ptext and ptext != old and (re.search(r"\bchallenge", ptext, re.I) or (sport == "soccer" and re.search(r"\bVAR\b", ptext)))
-                    and k not in session["celebs"]):  # a challenge was just called, no ruling yet: red for football (the red flag), VAR blue for soccer, else the team's colour
-                who_ = re.search(r"challenge[d]? (?:by|from) ([A-Za-z]{2,4})\b", ptext) or re.search(r"\b([A-Z]{2,4}) (?:coach'?s? |team |manager )challenge", ptext)
-                tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
-                cside = tm_.index(who_.group(1).upper()) if who_ and who_.group(1).upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
-                make_event(r, k, cside, "CALL CHALLENGED", "#ef4444" if sport == "football" else "#38bdf8" if sport == "soccer" else None, 3.5, mode, ptext)
+            called = lambda t_: bool(re.search(r"\bchallenge", t_, re.I) or (sport == "soccer" and re.search(r"\bVAR\b", t_)))
+            if not ch and old is not None and ptext and ptext != old and called(ptext) and not called(old):
+                # a challenge was just called, no ruling yet (once: later plays still naming it are the same challenge): red for football (the red flag), VAR blue for soccer, else the team's colour
+                who_ = challenger_of(ptext).upper()
+                cside = tm_.index(who_) if who_ and who_ in tm_ else acting_side(r, "CHALLENGE", ptid)
+                chain_event(k, (r, k, cside, "CALL CHALLENGED", "#ef4444" if sport == "football" else "#38bdf8" if sport == "soccer" else None, 3.5, mode, ptext), {})
                 if swing:
                     chain_event(k, *swing)
                 continue
-            if ch and k not in session["celebs"]:  # a challenge was ruled on: its result, then what happens to the call
+            if ch:  # a challenge was ruled on: its result, then what happens to the call
                 over, who = ch
-                tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
-                cside = tm_.index(who.upper()) if who.upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
-                make_event(r, k, cside, "SUCCESSFUL CHALLENGE!" if over else "FAILED CHALLENGE", "#34d399" if over else "#f87171", 3.5, mode, ptext, sound=None)
+                cside = tm_.index(who.upper()) if who and who.upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
+                chain_event(k, (r, k, cside, "SUCCESSFUL CHALLENGE!" if over else "FAILED CHALLENGE", "#34d399" if over else "#f87171", 3.5, mode, ptext), {"sound": None})
                 chain_event(k, (r, k, cside, "CALL OVERTURNED" if over else "CALL STANDS", "#34d399" if over else "#f87171", FOLLOW_SECS, mode, ptext), {})
+                if fourth:  # the ruling can leave a 4th down
+                    chain_event(k, *fourth)
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -4481,23 +4500,29 @@ def run_gui():
                 big = ("TURNOVER ON DOWNS!", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
             if big and sport == "basketball" and not swing:
                 big = None  # blocks and steals only play as the lead-in to a Then animation
-            if big and k not in session["celebs"]:
+            if big:
                 side = (kick_side(r, big[0], ptext, session["poss_prev"].get(k)) if big[0] in KICK_PLAYS
                         else acting_side(r, big[0], ptid))
                 flag = big[0] == "FLAG" and sport == "football"
                 if flag:  # a flag is the penalized team's ("PENALTY on DAL-M.Parsons ..."), in flag yellow
                     pm = re.search(r"penalty on ([A-Za-z]{2,4})\b", ptext, re.I)
-                    tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
                     if pm and pm.group(1).upper() in tm_:
                         side = tm_.index(pm.group(1).upper())
-                make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
-                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS!") + KICK_PLAYS else None)
+                chain_event(k, (r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext), {"run": big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), "sound": "turnover" if big[0] in (
+                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS!") + KICK_PLAYS else None})
                 if sport == "baseball" and big[0] in ("SINGLE", "DOUBLE", "TRIPLE"):
                     chain_field(k, r, side, big[0], mode, session["bases_prev"].get(k), 0, bases.get(k))
                 if big[0] == "FUMBLE":  # then who recovered it
                     rec = recovery_side(r, ptext)
                     if rec is not None:
                         chain_event(k, (r, k, rec, "FUMBLE RECOVERED", None, FOLLOW_SECS, mode, ptext), {})
+                if fourth:  # the 4th down the play left behind
+                    chain_event(k, *fourth)
+                if swing:
+                    chain_event(k, *swing)
+                continue
+            if fourth and k not in session["celebs"]:
+                make_event(*fourth[0], **fourth[1])
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -4551,12 +4576,15 @@ def run_gui():
         if sport == "baseball":
             m = re.search(r"(?:Top|Bot|Mid|End)\s+(\d+)", txt)
             return bool(m) and int(m.group(1)) >= 9 and diff <= 1
+        t = game_time(sport, txt)  # "Q4 1:30", "1:30 - 4th" and OT alike
         if sport in ("basketball", "football", "hockey"):
             close = diff <= {"basketball": 5, "football": 8, "hockey": 1}[sport]
-            if re.search(r"\bOT\b|\dOT", txt):
+            if t.get("period") == 99:
                 return close
-            m = re.search(r"[QP](\d)\s+(\d+):(\d\d)", txt)
-            return bool(m) and int(m.group(1)) >= (3 if sport == "hockey" else 4) and int(m.group(2)) * 60 + int(m.group(3)) <= 120 and close
+            last = 3 if sport == "hockey" else 2 if (r.get("game") or {}).get("league") == "mens-college-basketball" else 4  # men's college plays halves
+            return t.get("period", 0) >= last and t.get("secs", 999) <= 120 and close
+        if sport == "soccer":
+            return t.get("minute", 0) >= 80 and diff <= 1
         return False
 
     FAKE_PLAYS = {  # made-up play text for the test animations ({t}: the team it plays for, {o}: the other team)
@@ -4610,11 +4638,23 @@ def run_gui():
         "DAGGER!": "{t} goes up big late. That should do it",
         "MOMENTUM SWING": "{t} win probability now 74%",
     }
+    FAKE_PLAYS_BY_SPORT = {  # where a sport words the same headline its own way
+        "hockey": {"PENALTY": "D. Ward 2 minutes for Tripping", "GOAL!": "J. Hughes wrist shot goal (assisted by T. Meier)"},
+    }
 
     def fake_play(head, r, side):
         """Made-up play text for a test animation, naming the dummy card's teams."""
         tm = [t_.get("abbr", "") for t_ in r.get("teams") or []] or ["", ""]
         t_, o_ = (tm[side], tm[1 - side]) if side in (0, 1) and len(tm) == 2 else (tm[0], tm[-1])
+        sport = str((r.get("game") or {}).get("sport") or session.get("sport") or "").lower()
+        if head in FAKE_PLAYS_BY_SPORT.get(sport, {}):
+            return FAKE_PLAYS_BY_SPORT[sport][head].format(t=t_, o=o_)
+        m = re.fullmatch(r"(\d+) RUNS SCORE", head)
+        if m:  # runs scored on neither a hit nor a homer
+            n_ = int(m.group(1))
+            return f"R. Ortiz doubles to left, {dict(enumerate(('', 'one', 'two', 'three', 'four'))).get(n_, n_)} runs score"
+        if head == "SCORE":  # football's odd point totals
+            return f"R. Brown 2 yard run for {t_}"
         key = next((k_ for k_ in FAKE_PLAYS if k_ == head), None) or next((k_ for k_ in FAKE_PLAYS if head.endswith(" " + k_)), None)
         if key is None and head in ("TAKES THE LEAD", "TIES IT UP", "FINAL") and r.get("score"):
             return f"{tm[0]} {r['score'][0]} \u2013 {tm[-1]} {r['score'][1]}"
@@ -4696,7 +4736,7 @@ def run_gui():
         import random
         mine = session.get("mine", 0)  # the dummy card's "Trigger for" choice: the team every test plays for
         side = mine if len(r.get("teams") or []) == 2 else None
-        make_event(r, k, side, head, color if head in ("CALL CHALLENGED", "SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE") else None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
+        make_event(r, k, side, head, color if head in ("CALL CHALLENGED", "SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE", "FLAG") else None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
                    mode, fake_play(head, r, side), grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
@@ -4835,6 +4875,7 @@ def run_gui():
         styled_button(side_, "Play chord", lambda: play_sound(force=True)).pack(anchor="w")  # the one sound every animation uses; plays even while muted
         draw_options()
         tcanvas.bind("<Map>", lambda e: show_dummy(False) if tsession.get("dummy") else None)
+        tv["show"] = show_dummy
         f.after(50, show_dummy)
         for ms_ in (1500, 4000):  # logos arrive a moment after the first draw
             f.after(ms_, lambda: show_dummy(False))
@@ -5208,10 +5249,11 @@ def run_gui():
     def fade_items(ids, bgc, f):
         """Blend the colors of existing canvas items toward the card background (f = 1: unchanged, 0: gone)."""
         for i_ in ids:
-            if i_ in pill_of:  # a pill is an image: swap in one tinted toward the card
-                canvas.itemconfigure(i_, image=pill_faded(pill_of[i_], bgc, f))
+            pk_ = (str(canvas), i_)
+            if pk_ in pill_of:  # a pill is an image: swap in one tinted toward the card
+                canvas.itemconfigure(i_, image=pill_faded(pill_of[pk_], bgc, f))
                 if session["cur_layer"]:
-                    session["cur_layer"]["fade"].append((i_, "pill", pill_of[i_]))
+                    session["cur_layer"]["fade"].append((i_, "pill", pill_of[pk_]))
                 continue
             for opt in ("fill", "outline"):
                 try:
@@ -5582,7 +5624,7 @@ def run_gui():
                     ids_ = items_since(m_)
                     fade_items(ids_, BG, a_)
                     for i_ in ids_:
-                        if canvas.type(i_) == "image" and i_ not in pill_of:  # logos can't be tinted: hide them for the dark half
+                        if canvas.type(i_) == "image" and (str(canvas), i_) not in pill_of:  # logos can't be tinted: hide them for the dark half
                             canvas.itemconfigure(i_, state="hidden" if a_ < 0.5 else "normal")
             elif t == "group":
                 y = draw_group(n, x, y, w, final)
@@ -6428,12 +6470,17 @@ def run_gui():
         tk.Label(win, text="Digital scores", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=5, column=0, padx=16, pady=(6, 4), sticky="w")
         digital_choice = tk.StringVar(value="On" if ui_state.get("digital") else "Off")
 
+        def redraw_dummy():  # the Settings dummy card shows the change too
+            if tv.get("show"):
+                tv["show"](False)
+
         def on_digital(label):
             ui_state["digital"] = label == "On"
             save_state(ui_state)
             session["sig"] = None
             draw_all()
             session["sig"] = compute_sig()
+            redraw_dummy()
         styled_option(win, digital_choice, ["Off", "On"], command=on_digital, width=12).grid(
             row=5, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Card layout", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=6, column=0, padx=16, pady=(6, 4), sticky="w")
@@ -6492,6 +6539,7 @@ def run_gui():
             draw_all()
             session["sig"] = compute_sig()
             fit()
+            redraw_dummy()
         styled_option(win, spark_choice, ["On", "Off"], command=on_spark, width=12).grid(
             row=11, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
@@ -6552,6 +6600,7 @@ def run_gui():
             set_background(h)
             bg_hex.set(BG)
             bg_swatch.itemconfigure(bg_dot, fill=BG)
+            redraw_dummy()
 
         def on_bg_entry(_=None):
             t_ = bg_hex.get().strip().lstrip("#")
