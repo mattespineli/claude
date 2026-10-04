@@ -2655,6 +2655,8 @@ def run_gui():
 
     SESSION0 = {k_: type(v_)() if isinstance(v_, (dict, list, set)) else v_ for k_, v_ in session.items()}
 
+    MAIN = session  # the real session (the dummy card swaps its own in while a test runs)
+
     def run_in(view, fn, *a):
         """Run fn with the drawing canvas and session swapped for a (canvas, session) view, e.g. the Settings dummy card."""
         nonlocal canvas, session
@@ -2862,13 +2864,8 @@ def run_gui():
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
             c.create_polygon(18, 31, 24, 31, 24, 34, 21, 37, 18, 34, fill=bg, outline=DIM)  # home plate
             ce_, ct_ = session["cur_celeb"]
-            path = run_path(ce_["head"]) if ce_ and ce_.get("run") else []
-            if path and ct_ < 0.35 * len(path) + 0.5:  # light the bases in turn: the batter's path, then home when a run scores
-                spots = ((29, 23), (21, 15), (13, 23), (21, 34))
-                last = min(int(ct_ / 0.35), len(path) - 1)
-                for j, b_ in enumerate(path[:last + 1]):
-                    bx_, by_ = spots[b_]
-                    c.create_oval(bx_ - 7, by_ - 7, bx_ + 7, by_ + 7, outline=GOLD, width=2 if j == last else 1)
+            if ce_ and ce_.get("run") and session["cur_layer"] is not None:  # the runner's path is drawn per frame (see celeb_frame)
+                session["cur_layer"]["diamond"] = (c.ox, c.oy)
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
                                                             ("O", min(g["outs"], 3), 3, "#f87171"))):
@@ -4019,7 +4016,7 @@ def run_gui():
         r = session["dummy"]
         shown = [(0, r)]
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
-        runs = session.get("test_runs", 0)
+        runs = MAIN.get("test_runs", 0)
         if head in ("SINGLE", "DOUBLE", "TRIPLE") and runs:  # a hit that scores N runs
             head, kind = f"{runs}-RUN {head}", "run"
         if kind == "redzone":  # needs a card with the football field strip
@@ -4046,7 +4043,7 @@ def run_gui():
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
         session["celeb_next"].pop(k, None)
-        follows = list(session.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
+        follows = list(MAIN.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
         for follow in follows:
             fside = side if side is None or follow != "FUMBLE RECOVERED" else 1 - side  # the other team recovers it
             chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, "Test animation"),
@@ -4071,7 +4068,6 @@ def run_gui():
         side_.grid(row=0, column=1, sticky="nw")
         opts_ = tk.Frame(head_, bg=BG)
         opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
-        sync_runs = [lambda: None]
         sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
         LEAD_ = ("Lead", "lead", (("Tied", "tied"), ("Close", "close"), ("Blowout", "blowout")))
         QTR_ = lambda title, n: (title, "q", tuple((str(i), i) for i in range(1, n + 1)))
@@ -4082,13 +4078,14 @@ def run_gui():
                          ("Ball", "poss", (("SF", "SF"), ("DAL", "DAL")))],
             "Baseball": [("Men on", "bases", ("1st", "2nd", "3rd")), ("Outs", "outs", (("0", 0), ("1", 1), ("2", 2))),
                          ("Balls", "balls", tuple((str(i), i) for i in range(4))), ("Strikes", "strikes", tuple((str(i), i) for i in range(3))),
-                         ("Half", "half", (("Top", "Top"), ("Bottom", "Bot"))), ("Inning", "inning", (("1st", 1), ("7th", 7), ("9th", 9))), LEAD_],
+                         ("Half", "half", (("Top", "Top"), ("Bottom", "Bot"))), ("Inning", "inning", (("1st", 1), ("7th", 7), ("9th", 9))), LEAD_,
+                         ("Runs", "runs", tuple((str(i), i) for i in range(5)))],  # runs a Single / Double / Triple test scores
             "Basketball": [LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("8:00", "8:00"), ("4:00", "4:00"), ("1:30", "1:30")))],
             "Hockey": [LEAD_, QTR_("Period", 3), ("Clock", "clock", (("15:00", "15:00"), ("10:00", "10:00"), ("2:00", "2:00"))),
                        ("Power play", "pp", (("On", True), ("Off", False)))],
             "Soccer": [LEAD_, ("Minute", "min", (("20'", 20), ("67'", 67), ("85'", 85))), ("Red card", "red", (("On", True), ("Off", False)))]}
         DEFAULTS_ = {"Football": {"lead": "close", "q": 3, "clock": "4:10", "down": 3, "dist": 4, "field": "mid", "poss": "SF"},
-                     "Baseball": {"bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close"},
+                     "Baseball": {"bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close", "runs": MAIN.get("test_runs", 0)},
                      "Basketball": {"lead": "close", "q": 3, "clock": "4:00"},
                      "Hockey": {"lead": "close", "q": 2, "clock": "10:00", "pp": True},
                      "Soccer": {"lead": "close", "min": 67, "red": True}}
@@ -4137,6 +4134,8 @@ def run_gui():
                             st_[k_][v_] = not st_[k_][v_]
                         else:
                             st_[k_] = v_
+                            if k_ == "runs":
+                                MAIN["test_runs"] = v_
                         paint(k_, ps_, m_)
                         show_dummy()
                     c_.bind("<ButtonRelease-1>", click)
@@ -4154,7 +4153,6 @@ def run_gui():
             ui_state["test_sport"] = v_
             save_state(ui_state)
             draw_options()
-            sync_runs[0]()
             show_dummy()
         tk.Label(side_, text="Dummy card", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
         styled_option(side_, sport_var, [n_ for n_, _ in sports_], command=on_sport, width=12).pack(anchor="w")
@@ -4213,9 +4211,6 @@ def run_gui():
         for v_ in list(session["test_follow"]):  # picks from earlier in the session
             session["test_follow"].remove(v_)
             toggle_then(v_)
-        runs_row = choice_row(2, "Runs", "test_runs", ((0, "0"), (1, "1"), (2, "2"), (3, "3"), (4, "4")), 0)  # for single, double, triple
-        sync_runs[0] = lambda: runs_row.grid() if sport_var.get() == "Baseball" else runs_row.grid_remove()  # only baseball has runs
-        sync_runs[0]()
         err = tk.Label(f, text="", bg=BG, fg=COLORS["err"], font=("Segoe UI", 9), anchor="w", justify="left", wraplength=420)
         err.grid(row=3 + (len(TESTS) + 2) // 3, column=0, columnspan=3, padx=4, pady=(6, 0), sticky="w")
         marks = []
@@ -4265,6 +4260,8 @@ def run_gui():
                 canvas.delete(lay["tag"])
                 if lay["ring"]:
                     draw_rings(*lay["ring"][0], ce, t, bgc, lay["ring"][1], lay["tag"])
+                if lay.get("diamond") and not ce.get("chained_out"):
+                    draw_path(lay, ce, t)
             except tk.TclError:
                 pass
 
@@ -4290,6 +4287,21 @@ def run_gui():
             session["celeb_on"] = False
 
     UNIT_CIRCLE = [(math.cos(a_ * math.pi / 45), math.sin(a_ * math.pi / 45)) for a_ in range(90)]
+
+    def draw_path(lay, ce, t):
+        """Baseball: once the card's own info fades back in, the batter's run lights each base of the diamond in turn."""
+        u = t - (ce["secs"] - out_secs(ce))
+        if u < 0:
+            return
+        path = run_path(ce["head"])
+        spots = ((29, 23), (21, 15), (13, 23), (21, 34))
+        last = min(int(u / 0.3), len(path) - 1)
+        ox, oy = lay["diamond"]
+        a = info_alpha(ce, t)
+        for j, b_ in enumerate(path[:last + 1]):
+            bx_, by_ = spots[b_]
+            canvas.create_oval(ox + bx_ - 7, oy + by_ - 7, ox + bx_ + 7, oy + by_ + 7, width=2 if j == last else 1,
+                               outline=blend(lay["bgc"], GOLD, a), tags=lay["tag"])
 
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
         """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
