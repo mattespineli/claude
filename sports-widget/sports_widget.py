@@ -3235,17 +3235,16 @@ def run_gui():
         return None
 
     pill_imgs = {}
+    pill_of = {}  # canvas image id -> (w, h, colour) of the pills drawn, so a fading card can re-tint them
 
-    def crisp_rr(x1, y1, x2, y2, r, color, tags=()):
-        """A rounded pill as an anti-aliased image, its edge pixels blended into the card's colour (Tk draws
-        partial transparency all-or-nothing, and its own rounded shapes have jagged corners)."""
-        x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
-        w, h, r = x2 - x1, y2 - y1, 4
-        bg = session.get("card_bg") or BG
-        key = (w, h, r, color, bg)
+    def pill_image(w, h, color, bg):
+        """A rounded pill as an anti-aliased image, its edge pixels blended into `bg` (Tk draws partial
+        transparency all-or-nothing, and its own rounded shapes have jagged corners)."""
+        key = (w, h, color, bg)
         img = pill_imgs.get(key)
         if img is None:
             import base64
+            r = 4
             fr, fg_, fb = _rgb(color)
             br, bgg, bb = _rgb(bg)
             ss, out = 4, bytearray()
@@ -3260,7 +3259,22 @@ def run_gui():
                     a = hit / (ss * ss)
                     out += bytes((round(br + (fr - br) * a), round(bgg + (fg_ - bgg) * a), round(bb + (fb - bb) * a), 255))
             img = pill_imgs[key] = tk.PhotoImage(data=base64.b64encode(_png_bytes(w, h, out)))
-        return [canvas.create_image(x1, y1, image=img, anchor="nw", tags=tags)]
+        return img
+
+    def pill_faded(spec, bgc, f):
+        """The pill image `spec` = (w, h, colour) blended toward the card colour by f (1: unchanged), in 1/16 steps."""
+        w, h, col = spec
+        return pill_image(w, h, blend(bgc, col, round(f * 16) / 16), bgc)
+
+    def crisp_rr(x1, y1, x2, y2, r, color, tags=()):
+        """A rounded pill as an anti-aliased image on the card's colour."""
+        x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
+        w, h = x2 - x1, y2 - y1
+        i_ = canvas.create_image(x1, y1, image=pill_image(w, h, color, session.get("card_bg") or BG), anchor="nw", tags=tags)
+        if len(pill_of) > 4000:
+            pill_of.clear()
+        pill_of[i_] = (w, h, color)
+        return [i_]
 
     def tv_badges(x, y, text, tags=(), center=False, limit=3):
         """Channel names as small badges in each network's colors (ESPN gives names, not logos); returns the width used."""
@@ -3589,10 +3603,10 @@ def run_gui():
             if football and re.search(r"\bpenalty\b", text, re.I):
                 # a flag on the play: PENALTY in a yellow box (like the LIVE badge), the rest of the play below it
                 text = re.sub(r"^\s*penalty\b[\s,:-]*", "", text, flags=re.I) or text
-                pw = text_width(FONTS["sec"], "PENALTY") + 12
+                pw = text_width(FONTS["sec"], "FLAG") + 12
                 canvas.create_polygon(rr_points(mx - pw / 2, my + 4, mx + pw / 2, my + 18, 5), smooth=True, fill=FLAG_YELLOW,
                                       outline=FLAG_YELLOW, tags=tags)
-                canvas.create_text(mx, my + 11, text="PENALTY", fill="#1e1e24", font=FONTS["sec"], tags=tags)
+                canvas.create_text(mx, my + 11, text="FLAG", fill="#1e1e24", font=FONTS["sec"], tags=tags)
                 my += 18
             text = text if len(text) <= cap_ else text[:cap_ - 1].rstrip() + "\u2026"
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
@@ -3716,7 +3730,7 @@ def run_gui():
             if "fumble" in low:
                 return "FUMBLE", "#f87171", 3.5
             if re.search(r"\bpenalty\b", low):  # a flag on the play (a takeaway or block above outranks it)
-                return "PENALTY", "#facc15", 3.0
+                return "FLAG", "#facc15", 3.0
             if "sacked" in low or " sack" in low:
                 return "SACK", "#fb923c", 3.0
             if "turnover on downs" in low:
@@ -4033,7 +4047,7 @@ def run_gui():
             if big and k not in session["celebs"]:
                 side = (kick_side(r, big[0], ptext, session["poss_prev"].get(k)) if big[0] in KICK_PLAYS
                         else acting_side(r, big[0], ptid))
-                flag = big[0] == "PENALTY" and sport == "football"
+                flag = big[0] == "FLAG" and sport == "football"
                 if flag:  # a flag is the penalized team's ("PENALTY on DAL-M.Parsons ..."), in flag yellow
                     pm = re.search(r"penalty on ([A-Za-z]{2,4})\b", ptext, re.I)
                     tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
@@ -4131,6 +4145,8 @@ def run_gui():
         r = session["dummy"]
         shown = [(0, r)]
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
+        if head == "PENALTY" and session.get("sport") == "Football":
+            head, color = "FLAG", "#facc15"
         if session.get("sport") == "Basketball" and head in ("THREE-POINTER", "TWO-POINTER", "SLAM DUNK!", "BLOCK", "STEAL") and not MAIN.get("test_follow"):
             return "Basketball plays this only as the lead-in to a Then animation. Pick one above."
         gb_ = next((g_ for g_ in ([r["graphic"]] if isinstance(r.get("graphic"), dict) else r.get("graphic") or []) if g_["kind"] == "baseball"), None)
@@ -4426,7 +4442,10 @@ def run_gui():
                     canvas.itemconfigure(i_, fill=blend(bgc, col, a))
                 ia = info_alpha(ce, t)
                 for i_, opt, base in lay["fade"]:
-                    canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
+                    if opt == "pill":
+                        canvas.itemconfigure(i_, image=pill_faded(base, bgc, ia))
+                    else:
+                        canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
                 if lay["flash"]:
                     bgid, hit, base = lay["flash"]
                     col = blend(base, ce["color"], 0.5 * max(0.0, 1 - t / FLASH_SECS) ** 2)
@@ -4639,6 +4658,11 @@ def run_gui():
     def fade_items(ids, bgc, f):
         """Blend the colors of existing canvas items toward the card background (f = 1: unchanged, 0: gone)."""
         for i_ in ids:
+            if i_ in pill_of:  # a pill is an image: swap in one tinted toward the card
+                canvas.itemconfigure(i_, image=pill_faded(pill_of[i_], bgc, f))
+                if session["cur_layer"]:
+                    session["cur_layer"]["fade"].append((i_, "pill", pill_of[i_]))
+                continue
             for opt in ("fill", "outline"):
                 try:
                     c_ = canvas.itemcget(i_, opt)
