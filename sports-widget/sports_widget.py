@@ -2537,7 +2537,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "hseen": {}, "h_on": False,
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -4377,6 +4377,8 @@ def run_gui():
         else:
             canvas.coords(ctx["cover"], ctx["x0"], y0 + vis, ctx["x1"], y0 + H + 3)
         canvas.configure(scrollregion=(0, 0, ctx["cw"], session["total"] + int(dy)))
+        if not user_sized["on"] and not view_tween["on"]:  # the window grows and shrinks with the content
+            canvas.configure(height=max(1, min(session["total"] + int(dy), int(root.winfo_screenheight() * 0.7))))
 
     def finish_anim(key):
         session["h_snap"] = True  # the expand / collapse already eased the card's height: the next redraw must not again
@@ -4399,14 +4401,13 @@ def run_gui():
             session["looping"] = False
             fit()
 
-    def start_anim(key, opening, from_px=None, on_done=None, dur=0.22):
+    def start_anim(key, opening, from_px=None, on_done=None, dur=0.3):
         for other in [k for k in session["anims"] if k != key]:
             finish_anim(other)  # one animation at a time: jump the previous one to its end
         session["anims"][key] = {"t0": _time.perf_counter(), "dur": dur, "opening": opening, "from": from_px,
                                  "on_done": on_done}
-        total = draw_all()  # drawn at full height; apply_frame() positions it for t = 0
-        if opening and not user_sized["on"]:  # size the window for the end state once
-            canvas.configure(height=max(canvas.winfo_height(), min(total, int(root.winfo_screenheight() * 0.7))))
+        draw_all()  # drawn at full height; apply_frame() positions it for t = 0
+        apply_frame()
         if not session["looping"]:
             session["looping"] = True
             root.after(0, anim_step)
@@ -4457,19 +4458,32 @@ def run_gui():
         if k in session["expanded"]:
             start_anim(key, False, on_done=lambda: session["expanded"].discard(k))
             return
-        session["expanded"].add(k)
+        if k in session["opening"]:
+            return
+        session["opening"].add(k)
         session["games"][k] = g
         session["details"].pop(k, None)
-        start_anim(key, True)
+        started = {"on": False}
+
+        def begin():  # grow once to the full details, or to "Loading" when ESPN is slow
+            if started["on"]:
+                return
+            started["on"] = True
+            session["opening"].discard(k)
+            session["expanded"].add(k)
+            start_anim(key, True)
 
         def work():
             fetch_details(g)
 
             def arrived():
-                if k in session["expanded"]:  # grow from the "Loading" height to the full details
+                if not started["on"]:
+                    begin()
+                elif k in session["expanded"]:  # grow from the "Loading" height to the full details
                     start_anim(key, True, from_px=session["vis"].get(key))
             root.after(0, arrived)
         threading.Thread(target=work, daemon=True).start()
+        root.after(350, begin)
 
     loading = {"on": True, "phase": 0}
 
