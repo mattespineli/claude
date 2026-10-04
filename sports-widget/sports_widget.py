@@ -712,6 +712,11 @@ def game_detail_data(data, max_plays=14, max_stats=14):
     return out
 
 
+def _halftime(comp):
+    t = (comp.get("status") or {}).get("type") or {}
+    return t.get("name") == "STATUS_HALFTIME" or "halftime" in str(t.get("shortDetail") or t.get("detail") or "").lower()
+
+
 def _possession_id(sit):
     """Id of the team with the ball. Some games (college) omit `possession`: the team that made the last play stands in."""
     poss = sit.get("possession")
@@ -774,6 +779,8 @@ def period_labels(sport, league, n):
 def situation_text(sport, comp):
     """Sport-specific live info: situation (down/possession, count/runners, power play) and team stats."""
     sit = comp.get("situation") or {}
+    if sport == "football" and _halftime(comp):
+        sit = {}  # the down and distance left over from the first half no longer apply
     lines = []
     if sport == "football" and sit:
         parts = [sit.get("shortDownDistanceText") or sit.get("downDistanceText")]
@@ -810,6 +817,8 @@ def situation_text(sport, comp):
 def _situation_graphic(sport, comp):
     """Data for the live-game graphic: baseball diamond or football field position."""
     sit = comp.get("situation") or {}
+    if sport == "football" and _halftime(comp):
+        return None
     if sport == "baseball" and ("onFirst" in sit or "outs" in sit):
         stype = comp.get("status", {}).get("type", {})
         half = str(stype.get("shortDetail") or stype.get("detail") or "").strip().lower()
