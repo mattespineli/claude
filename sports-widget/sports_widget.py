@@ -2999,6 +2999,16 @@ def run_gui():
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
+    def test_roll(r, side):
+        """Spin one side's score wheels a full turn, landing back on the same number (the score-change roll, for tests)."""
+        text = str(r["score"][side])
+        rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
+        seqs = [[str((int(ch) + n) % 10) for n in range(11)] if ch.isdigit() else [ch] for ch in text]
+        session["rolls"][(rk, side)] = {"to": text, "seqs": seqs, "t0": _time.perf_counter(), "dur": ROLL_MAX * 1.3}
+        if not session["rolling"]:
+            session["rolling"] = True
+            root.after(0, roll_tick)
+
     def roll_tick():
         now = _time.perf_counter()  # (frame budget FRAME_MS: every animation loop aims at 120 frames a second)
         roll_frame()
@@ -3571,6 +3581,8 @@ def run_gui():
         scoring = kind in ("score", "run", "grand")
         import random
         side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
+        if scoring and side is not None and r.get("score"):
+            test_roll(r, side)
         make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
