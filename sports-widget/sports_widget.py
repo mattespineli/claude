@@ -2470,7 +2470,7 @@ def run_gui():
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
-               "score_prev": {}, "play_prev": {}, "win_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
+               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
                "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {},
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False}
 
@@ -3159,7 +3159,7 @@ def run_gui():
             return
         tones = {"score": [(660, 80), (880, 130)], "turnover": [(440, 100), (330, 170)],
                  "grand": [(523, 90), (659, 90), (784, 90), (1047, 260)], "final": [(392, 280)],
-                 "swing": [(587, 90), (494, 130)]}.get(kind)
+                 "swing": [(587, 90), (494, 130)], "fourth": [(330, 110), (330, 110), (392, 180)]}.get(kind)
         if not tones:
             return
 
@@ -3174,6 +3174,28 @@ def run_gui():
                 except Exception:
                     pass
         threading.Thread(target=run, daemon=True).start()
+
+    def acting_side(r, head, ptid=""):
+        """Index (0/1) of the team that did the thing: the defense for strikeouts, outs, interceptions, sacks...; the offense for
+        runs, 4th downs, kicks; the team that takes over after a turnover on downs."""
+        tm = r.get("teams") or []
+        if len(tm) != 2:
+            return 0
+        sport = (r.get("game") or {}).get("sport", "")
+        gl = r.get("graphic") or []
+        gl = [gl] if isinstance(gl, dict) else gl
+        fb_ = next((g_ for g_ in gl if g_["kind"] == "football"), None)
+        if sport == "football" and fb_:
+            off = next((i for i, t in enumerate(tm) if t.get("abbr", "").upper() == str(fb_["off"]).upper()), None)
+            if off is not None:
+                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED KICK") else off
+        if sport == "baseball":
+            m = re.match(r"\s*(Top|Bot)", str(r.get("status") or r.get("detail") or ""))
+            bat = next((i for i, t in enumerate(tm) if m and t.get("ha") == ("away" if m.group(1) == "Top" else "home")), None)
+            if bat is not None:
+                fielding = ("STRIKEOUT", "OUT", "DOUBLE PLAY", "TRIPLE PLAY", "CAUGHT STEALING", "PICKED OFF")
+                return 1 - bat if head in fielding else bat
+        return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), 0)
 
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None):
         """Start a celebration (animation + optional sound) on card k."""
@@ -3198,6 +3220,7 @@ def run_gui():
         if ui_state.get("anim_scope", "all") == "mine":
             groups = groups[:2]  # My Teams and tracked games only
         now, seen, plays, wins, live_keys = _time.perf_counter(), {}, {}, {}, set()
+        downs, possessions = {}, {}
         for r in (r for grp in groups for r in grp):
             if not r.get("score"):
                 continue
@@ -3211,7 +3234,7 @@ def run_gui():
                     win = 0 if a_ >= b_ else 1
                     teams = r.get("teams") or []
                     nm = [t_["abbr"] for t_ in teams] if len(teams) == 2 else ["", ""]
-                    make_event(r, k, win, "FINAL", None, 4.5, "play", f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}",
+                    make_event(r, k, win, "FINAL", None, 4.5, mode, f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}",
                                sound="final")
                 session["was_live"].discard(k)
                 continue
@@ -3235,8 +3258,19 @@ def run_gui():
             wv = (r.get("win") or {}).get("a")
             if wv is not None:
                 wins[k] = wv
+            fb_ = next((g_ for g_ in gl if g_["kind"] == "football"), None)
+            m4 = re.match(r"\s*(\d)(?:st|nd|rd|th) & ", (r.get("info") or "").split("\n")[0]) if sport == "football" else None
+            if fb_:
+                possessions[k] = fb_["off"]
+            if m4:
+                downs[k] = int(m4.group(1))
             if prev is None or mode == "off":
                 continue
+            if m4:
+                if downs[k] == 4 and session["down_prev"].get(k, 4) != 4 and k not in session["celebs"]:
+                    make_event(r, k, acting_side(r, "4TH DOWN"), "4TH DOWN", None, 3.5, mode, (r.get("info") or "").split("\n")[0].replace(" \u00b7 ", "  \u00b7  "),
+                               sound="fourth")
+                    continue
             d = (cur[0] - prev[0], cur[1] - prev[1])
             if max(d) > 0:  # somebody scored
                 side = 0 if d[0] >= d[1] else 1
@@ -3253,10 +3287,11 @@ def run_gui():
                 continue
             old = session["play_prev"].get(k)  # nobody scored: a big play?
             big = classify_play(sport, ptext) if old is not None and ptext and ptext != old else None
+            if (not big and m4 and fb_ and session["down_prev"].get(k) == 4 and downs.get(k) == 1 and session["poss_prev"].get(k)
+                    and session["poss_prev"][k] != fb_["off"] and not re.search(r"punt|field goal|kick|intercept|fumble", ptext.lower())):
+                big = ("TURNOVER ON DOWNS", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
             if big and k not in session["celebs"]:
-                tm = r.get("teams") or []
-                pside = next((i_ for i_, t_ in enumerate(tm) if ptid and t_.get("id") == ptid), 0)  # the team the play belongs to
-                make_event(r, k, pside, big[0], None, big[2], "play", ptext, sound="turnover" if big[0] in (
+                make_event(r, k, acting_side(r, big[0], ptid), big[0], None, big[2], mode, ptext, sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") else None)
                 continue
             old_w = session["win_prev"].get(k)  # or a big swing in win probability
@@ -3264,11 +3299,13 @@ def run_gui():
                 w_ = r["win"]
                 up_away = wv > old_w
                 gain, pct = (w_["a_name"], wv) if up_away else (w_["b_name"], 100 - wv)
-                make_event(r, k, 0 if up_away else 1, "MOMENTUM SWING", None, 4.0, "play", f"{gain} win probability now {pct:g}%",
+                make_event(r, k, 0 if up_away else 1, "MOMENTUM SWING", None, 4.0, mode, f"{gain} win probability now {pct:g}%",
                            sound="swing")
         session["score_prev"] = seen
         session["play_prev"] = plays
         session["win_prev"] = wins
+        session["down_prev"] = downs
+        session["poss_prev"] = possessions
         session["was_live"] &= live_keys | {card_key(r) for grp in groups for r in grp if r["state"] == "post"}
 
     def start_pulse():
@@ -3318,7 +3355,9 @@ def run_gui():
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
-             ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("Momentum swing", "MOMENTUM SWING", "swing", None),
+             ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("4th down", "4TH DOWN", "fourth", None),
+             ("Turnover on downs", "TURNOVER ON DOWNS", "turnover", None),
+             ("Momentum swing", "MOMENTUM SWING", "swing", None),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None)]
 
     win_ref = [None]
@@ -3348,10 +3387,10 @@ def run_gui():
         mode = ui_state.get("score_anim", "pulse")
         mode = "pulse" if mode == "off" else mode
         scoring = kind in ("score", "run", "grand")
-        make_event(r, k, 0, head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
-                   mode if scoring else "play", "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
+        make_event(r, k, acting_side(r, head), head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
+                   mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
-                          "final": "final"}.get(kind))
+                          "final": "final", "fourth": "fourth"}.get(kind))
 
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
@@ -3419,14 +3458,14 @@ def run_gui():
             if t < delay:
                 continue
             pp = min(1.0, (t - delay) / RING_SECS)
-            hold = n >= 6  # the last set stays spread out inside the card until the banner fades
-            r_ = rad + 4 + (rmax - rad - 4) * ((0.4, 0.6, 0.8)[n - 6] if hold else 1.0) * (1 - (1 - pp) ** 2)
-            if not hold:
-                if pp >= 1:
-                    continue
-                intensity = 0.9 * (1 - pp) ** 1.5
-            else:
-                intensity = (0.85 - 0.3 * pp) * out
+            hold = n >= 6  # the last set comes out exactly like the others, then stays spread out until the banner fades
+            if not hold and pp >= 1:
+                continue
+            pe = min(pp, (0.5, 0.62, 0.74)[n - 6]) if hold else pp
+            r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pe) ** 2)
+            intensity = 0.9 * (1 - pe) ** 1.5
+            if hold:
+                intensity = max(intensity, 0.22) * out
             pts = [(cx + r_ * math.cos(a_ * math.pi / 45), cy + r_ * math.sin(a_ * math.pi / 45)) for a_ in range(90)]
             inside = [x0 <= px_ <= x1 and y0 <= py_ <= y1 for px_, py_ in pts]
             if not any(inside):
@@ -3476,7 +3515,7 @@ def run_gui():
             parts.append((i_, col))
             y += h
         col = blend(ce["color"], "#ffffff", 0.2)
-        i_, h = ctext(cx, y, ce["head"], FONTS["ban"], blend(bgc, col, a), anchor="n")
+        i_, h = ctext(cx, y, ce["head"], FONTS["ban"], blend(bgc, col, a), width=w, anchor="n", justify="center")
         parts.append((i_, col))
         y += h
         if ce["detail"]:
