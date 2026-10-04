@@ -2058,7 +2058,7 @@ def run_gui():
              "sec": ("Segoe UI", 8, "bold"), "hdr": ("Segoe UI", 9, "bold"), "small": ("Segoe UI", 8),
              "smallb": ("Segoe UI", 8, "bold")}
     PAD, GAP = 10, 6
-    LOGO_W, BB_W = 40, 112  # width reserved for a logo in front of the name; baseball bases/count panel
+    LOGO_W, BB_W = 40, 112  # width reserved for a logo in front of the name; baseball bases/count graphic
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
@@ -2252,7 +2252,7 @@ def run_gui():
     # ---- seven-segment ("digital") digits, drawn as shapes so no font is needed ----------
     SEGMENTS = {"0": "abcdef", "1": "bc", "2": "abdeg", "3": "abcdg", "4": "bcfg", "5": "acdfg", "6": "acdefg",
                 "7": "abc", "8": "abcdefg", "9": "abcdfg", "-": "g"}
-    DIG_W, DIG_H, DIG_T, DIG_GAP = 13, 22, 3, 5
+    DIG_W, DIG_H, DIG_T, DIG_GAP = 16, 24, 4, 4
 
     def digital_text(xr, y, text, color, bgc):
         """Right-aligned seven-segment text ending at xr; returns its left edge. Unlit segments show faintly."""
@@ -2445,8 +2445,8 @@ def run_gui():
             yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
         gl = r.get("graphic") or []
         gl = [gl] if isinstance(gl, dict) else gl
-        bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases and count go to a panel on the right
-        lw = ww - BB_W - 10 if bb else ww
+        bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases, count and batter/pitcher get their own row
+        lw = ww
         sx = ix
         if r["state"] == "in":  # red LIVE pill in front of the clock
             bw = 34
@@ -2464,12 +2464,12 @@ def run_gui():
         info = r.get("info") or ""
         if bb:
             yy += graphics(ix, yy, [g_ for g_ in gl if g_ not in bb], bgc, lw)
-            rx = ix + ww - BB_W
-            rh = graphics(rx, ys, bb, bgc, BB_W)
+            rh = graphics(ix, yy, bb, bgc, BB_W)  # bases and count at the left, batter/pitcher beside them
+            wy = yy + 4
             for part in (p_ for l_ in info.split("\n") if l_.startswith("AB:") for p_ in l_.split(" \u00b7 ")):
-                _, h = ctext(rx, ys + rh, part, FONTS["small"], FG, width=BB_W, tags=tags)
-                rh += h
-            yy = max(yy, ys + rh + 2)
+                _, h = ctext(ix + BB_W + 8, wy, part, FONTS["small"], FG, width=ww - BB_W - 8, tags=tags)
+                wy += h
+            yy = max(yy + rh + 2, wy)
             info = "\n".join(l_ for l_ in info.split("\n")
                              if not l_.startswith(("Runners:", "Bases empty", "AB:")))
         elif gl:
