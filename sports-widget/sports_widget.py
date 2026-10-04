@@ -970,6 +970,28 @@ def tv_channels(comp, limit=3):
     return " \u00b7 ".join(names[:limit])
 
 
+def streak_text(events, team_abbr):
+    """'W5' / 'L3': the team's current run of results from its schedule (two or more in a row), else ''."""
+    res = []
+    for e in sorted((e for e in events if e.get("competitions") and _state_of(e) == "post"), key=lambda e: e.get("date", "")):
+        comp = e["competitions"][0]
+        me = _find_me(comp, team_abbr)
+        opp = next((c for c in comp.get("competitors", []) if c is not me), None) if me else None
+        try:
+            a_, b_ = float(_score(me)), float(_score(opp))
+        except (TypeError, ValueError):
+            continue
+        res.append("W" if a_ > b_ else "L" if a_ < b_ else "T")
+    if not res or res[-1] == "T":
+        return ""
+    n = 0
+    for x in reversed(res):
+        if x != res[-1]:
+            break
+        n += 1
+    return f"{res[-1]}{n}" if n >= 2 else ""
+
+
 def series_info(comp):
     """{"head": 'East 1st Round - Game 3', "text": 'BOS leads series 2-1' / 'BOS wins series 4-2'} for a playoff game, else None."""
     ser = comp.get("series") or {}
@@ -1308,8 +1330,9 @@ def team_status(entry):
         if text:
             ser = {"head": (ser or {}).get("head", ""), "text": text}
     return {"tv": tv_channels(event["competitions"][0]) if state in ("in", "pre") else "", "series": ser,
-            "teams": [dict(t, record=t["record"] or (own if i == 0 and own else "")) for i, t in
-                      enumerate(comp_teams(event["competitions"][0], me or None))], "logos": [_logo(me.get("team", {})) or _logo(team)],
+            "teams": [dict(t, record=(t["record"] or (own if i == 0 and own else "")) + (
+                          f" \u00b7 {streak_text(events, entry['team'])}" if i == 0 and streak_text(events, entry["team"]) else ""))
+                      for i, t in enumerate(comp_teams(event["competitions"][0], me or None))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
@@ -1462,7 +1485,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
-SCORE_ANIM_CHOICES = [("Pulse + banner", "pulse"), ("Banner + flash", "flash"), ("Off", "off")]
+SCORE_ANIM_CHOICES = [("Pulse", "pulse"), ("Flash", "flash"), ("Off", "off")]
 LAYOUT_CHOICES = [("Scoreboard", "scoreboard"), ("List", "list")]  # "default" in an older state.json means List
 DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
@@ -2447,7 +2470,8 @@ def run_gui():
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
-               "score_prev": {}, "play_prev": {}, "celebs": {}, "celeb_on": False}
+               "score_prev": {}, "play_prev": {}, "win_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -2524,6 +2548,11 @@ def run_gui():
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else bg,
                                  outline=hl if on else DIM, width=2)
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
+            c.create_polygon(18, 31, 24, 31, 24, 34, 21, 37, 18, 34, fill=bg, outline=DIM)  # home plate
+            ce_, ct_ = session["cur_celeb"]
+            if ce_ and ce_.get("run") and ct_ < 1.6:  # a run scores: light the bases in turn, 1st to home
+                for j, (bx_, by_) in enumerate(((29, 23), (21, 15), (13, 23), (21, 34))[:min(int(ct_ / 0.35), 3) + 1]):
+                    c.create_oval(bx_ - 7, by_ - 7, bx_ + 7, by_ + 7, outline=GOLD, width=2 if j == min(int(ct_ / 0.35), 3) else 1)
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
                                                             ("O", min(g["outs"], 3), 3, "#f87171"))):
@@ -2555,6 +2584,10 @@ def run_gui():
             c.create_polygon(cap(px(100), W, False, True), fill=g.get("def_color", "#52526a"), outline="")  # own, then the one attacked
             for yd in range(0, 101, 10):  # goal lines and a line every 10 yards
                 c.create_line(px(yd), 14, px(yd), 20, fill=FG if yd in (0, 100) else "#7a7a88")
+            if g["red"]:  # red zone: the field bar glows
+                pid = c.create_rectangle(-2, 11, W + 2, 23, outline="#ef4444", fill="", width=2)
+                session["pulse_items"].append((pid, "#ef4444", bg))
+                start_pulse()
             if g["first"] is not None:
                 c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
             bx = px(g["x"])
@@ -3010,7 +3043,8 @@ def run_gui():
             yy = top
             img = logo_img(t["logo"], lg) if t.get("logo") else None
             if ce and i == ce["side"]:
-                draw_rings(cx, yy + lg / 2, lg / 2, ce, ct, bgc)
+                draw_rings(cx, yy + lg / 2, lg / 2, ce, ct, bgc,
+                           (cx0 + 1, top - GAP + 1, cx0 + cw_ - 1, top + max(nat, mh) + GAP - 1))
             if img:
                 canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
             yy += lg + 2 + gap
@@ -3094,6 +3128,10 @@ def run_gui():
                 return "TURNOVER ON DOWNS", "#f87171", 3.5
             if "blocked" in low and ("punt" in low or "field goal" in low or "kick" in low):
                 return "BLOCKED KICK", "#a78bfa", 3.5
+            if " punts" in low:
+                return "PUNT", "#9aa0a6", 2.5
+            if "kicks off" in low or "kickoff" in low:
+                return "KICKOFF", "#9aa0a6", 2.5
         elif sport == "baseball":
             if "triple play" in low:
                 return "TRIPLE PLAY", "#fbbf24", 4.0
@@ -3116,59 +3154,215 @@ def run_gui():
             return "PENALTY", "#fb923c", 3.0
         return None
 
+    def play_sound(kind):
+        """A short chime (Windows beeps; the system bell elsewhere), unless sounds are muted in Settings."""
+        if not ui_state.get("sound", True):
+            return
+        tones = {"score": [(660, 80), (880, 130)], "turnover": [(440, 100), (330, 170)],
+                 "grand": [(523, 90), (659, 90), (784, 90), (1047, 260)], "final": [(392, 280)],
+                 "swing": [(587, 90), (494, 130)]}.get(kind)
+        if not tones:
+            return
+
+        def run():
+            try:
+                import winsound
+                for f_, ms in tones:
+                    winsound.Beep(f_, ms)
+            except Exception:
+                try:
+                    root.after(0, root.bell)
+                except Exception:
+                    pass
+        threading.Thread(target=run, daemon=True).start()
+
+    def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None):
+        """Start a celebration (animation + optional sound) on card k."""
+        import random
+        now = _time.perf_counter()
+        teams = r.get("teams") or []
+        t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
+        rnd = random.Random(now)
+        session["celebs"][k] = {
+            "t0": now, "side": side if t else 0, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#34d399",
+            "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
+            "grand": grand, "run": run, "tag": tag, "secs": secs,
+            "bits": [(rnd.uniform(0.15, 0.85) * 3.14159, rnd.uniform(110, 330), rnd.choice((3, 4, 5)),
+                      rnd.choice((GOLD, "#ffffff", t.get("color") or "#34d399", "#f87171", "#34d399")))
+                     for _ in range(48 if grand else 0)]}
+        if sound:
+            play_sound(sound)
+        if not session["celeb_on"]:
+            session["celeb_on"] = True
+            root.after(0, celeb_tick)
+
     def detect_scores(groups):
-        """Compare live scores with the last refresh and start a celebration for each card that just scored."""
+        """Compare live games with the last refresh and start an animation for each card where something happened:
+        a score, a big play, a swing in win probability, or the final whistle."""
         mode = ui_state.get("score_anim", "pulse")
-        now, seen = _time.perf_counter(), {}
-        plays = {}
+        if ui_state.get("anim_scope", "all") == "mine":
+            groups = groups[:2]  # My Teams and tracked games only
+        now, seen, plays, wins, live_keys = _time.perf_counter(), {}, {}, {}, set()
         for r in (r for grp in groups for r in grp):
-            if r["state"] != "in" or not r.get("score"):
+            if not r.get("score"):
                 continue
             k = card_key(r)
-            if k in seen:
+            if r["state"] == "post":  # a game that was live a moment ago has just ended
+                if k in session["was_live"] and mode != "off" and k not in session["celebs"]:
+                    try:
+                        a_, b_ = float(r["score"][0]), float(r["score"][1])
+                    except ValueError:
+                        a_ = b_ = 0
+                    win = 0 if a_ >= b_ else 1
+                    teams = r.get("teams") or []
+                    nm = [t_["abbr"] for t_ in teams] if len(teams) == 2 else ["", ""]
+                    make_event(r, k, win, "FINAL", None, 4.5, "play", f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}",
+                               sound="final")
+                session["was_live"].discard(k)
+                continue
+            if r["state"] != "in" or k in seen:
                 continue
             try:
                 cur = (float(r["score"][0]), float(r["score"][1]))
             except ValueError:
                 continue
+            session["was_live"].add(k)
+            live_keys.add(k)
             gl = r.get("graphic") or []
             gl = [gl] if isinstance(gl, dict) else gl
+            sport = (r.get("game") or {}).get("sport", "")
             loaded = any(g_["kind"] == "baseball" and all(g_["bases"]) for g_ in gl)
             prev = session["score_prev"].get(k)
             seen[k] = (cur[0], cur[1], loaded)
             ptext = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
             plays[k] = ptext
+            wv = (r.get("win") or {}).get("a")
+            if wv is not None:
+                wins[k] = wv
             if prev is None or mode == "off":
                 continue
             d = (cur[0] - prev[0], cur[1] - prev[1])
-            if max(d) <= 0:  # nobody scored: maybe a big play (turnover, strikeout, double play...)
-                old = session["play_prev"].get(k)
-                big = classify_play((r.get("game") or {}).get("sport", ""), ptext) if old is not None and ptext and ptext != old else None
-                if big and k not in session["celebs"]:
-                    session["celebs"][k] = {"t0": now, "side": 0, "abbr": "", "color": big[1], "head": big[0], "mode": "play",
-                                            "detail": ptext if len(ptext) <= 90 else ptext[:89].rstrip() + "\u2026", "banner": True,
-                                            "grand": False, "secs": big[2], "bits": []}
+            if max(d) > 0:  # somebody scored
+                side = 0 if d[0] >= d[1] else 1
+                head, banner = headline_for(sport, int(d[side]), prev, cur, side, ptext)
+                before, after = prev[0] - prev[1], cur[0] - cur[1]
+                tag = ("TIES IT UP" if after == 0 else "TAKES THE LEAD" if before * after < 0 or (before == 0 and after != 0) else "")
+                grand = head == "GRAND SLAM!"
+                make_event(r, k, side, head, GOLD if grand else None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
+                           banner=banner or bool(tag), grand=grand, run=sport == "baseball", tag=tag,
+                           sound="grand" if grand else "score")
+                if not banner and tag:  # a basket that changes the lead: say that instead
+                    session["celebs"][k]["head"] = tag
+                    session["celebs"][k]["tag"] = ""
                 continue
-            side = 0 if d[0] >= d[1] else 1
-            teams = r.get("teams") or []
-            t = teams[side] if len(teams) == 2 else {}
-            text = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
-            head, banner = headline_for((r.get("game") or {}).get("sport", ""), int(d[side]), prev, cur, side, text)
-            grand = head == "GRAND SLAM!"
-            import random
-            rnd = random.Random(now)
-            session["celebs"][k] = {
-                "t0": now, "side": side, "abbr": t.get("abbr", ""), "color": GOLD if grand else t.get("color") or "#34d399",
-                "head": head, "detail": text if len(text) <= 90 else text[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
-                "grand": grand, "secs": GRAND_SECS if grand else BANNER_SECS,
-                "bits": [(rnd.uniform(0.15, 0.85) * 3.14159, rnd.uniform(110, 330), rnd.choice((3, 4, 5)),
-                          rnd.choice((GOLD, "#ffffff", t.get("color") or "#34d399", "#f87171", "#34d399")))
-                         for _ in range(48)]}
+            old = session["play_prev"].get(k)  # nobody scored: a big play?
+            big = classify_play(sport, ptext) if old is not None and ptext and ptext != old else None
+            if big and k not in session["celebs"]:
+                make_event(r, k, 0, big[0], big[1], big[2], "play", ptext, sound="turnover" if big[0] in (
+                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") else None)
+                session["celebs"][k]["abbr"] = ""
+                continue
+            old_w = session["win_prev"].get(k)  # or a big swing in win probability
+            if wv is not None and old_w is not None and abs(wv - old_w) >= 25 and k not in session["celebs"]:
+                w_ = r["win"]
+                up_away = wv > old_w
+                gain, pct = (w_["a_name"], wv) if up_away else (w_["b_name"], 100 - wv)
+                make_event(r, k, 0 if up_away else 1, "MOMENTUM SWING", None, 4.0, "play", f"{gain} win probability now {pct:g}%",
+                           sound="swing")
         session["score_prev"] = seen
         session["play_prev"] = plays
-        if session["celebs"] and not session["celeb_on"]:
-            session["celeb_on"] = True
-            root.after(0, celeb_tick)
+        session["win_prev"] = wins
+        session["was_live"] &= live_keys | {card_key(r) for grp in groups for r in grp if r["state"] == "post"}
+
+    def start_pulse():
+        if not session["pulse_on"]:
+            session["pulse_on"] = True
+            root.after(60, pulse_tick)
+
+    def pulse_tick():
+        """Breathe the outline of the clutch border / red-zone glow items (no redraw: only their colors change)."""
+        items = session["pulse_items"]
+        if not items:
+            session["pulse_on"] = False
+            return
+        k = 0.5 + 0.5 * math.sin(_time.perf_counter() * 4)
+        for i, col, bgc in list(items):
+            try:
+                canvas.itemconfigure(i, outline=blend(bgc, col, 0.3 + 0.65 * k))
+            except tk.TclError:
+                pass
+        root.after(60, pulse_tick)
+
+    def clutch_of(r):
+        """A close game in its closing minutes (or extra innings): the card gets a pulsing border."""
+        if r["state"] != "in" or not r.get("score"):
+            return False
+        sport, txt = (r.get("game") or {}).get("sport", ""), str(r.get("status") or "")
+        try:
+            diff = abs(float(r["score"][0]) - float(r["score"][1]))
+        except ValueError:
+            return False
+        if sport == "baseball":
+            m = re.search(r"(?:Top|Bot|Mid|End)\s+(\d+)", txt)
+            return bool(m) and int(m.group(1)) >= 9 and diff <= 1
+        if sport in ("basketball", "football", "hockey"):
+            close = diff <= {"basketball": 5, "football": 8, "hockey": 1}[sport]
+            if re.search(r"\bOT\b|\dOT", txt):
+                return close
+            m = re.search(r"[QP](\d)\s+(\d+):(\d\d)", txt)
+            return bool(m) and int(m.group(1)) >= (3 if sport == "hockey" else 4) and int(m.group(2)) * 60 + int(m.group(3)) <= 120 and close
+        return False
+
+    # (label, headline, kind, color): what the Settings "Test animations" window can fire
+    TESTS = [("Touchdown", "TOUCHDOWN", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
+             ("Home run", "HOME RUN", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
+             ("Three-pointer", "THREE-POINTER", "score", None), ("Takes the lead", "TAKES THE LEAD", "score", None),
+             ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Fumble", "FUMBLE", "turnover", "#f87171"),
+             ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
+             ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
+             ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
+             ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("Momentum swing", "MOMENTUM SWING", "swing", None),
+             ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None)]
+
+    def fire_test(label):
+        """Play one animation on the first live card (else the first card with two teams)."""
+        rows = [r for grp in last["args"] for r in grp] if last else []
+        r = next((r for r in rows if r["state"] == "in" and r.get("teams")), None) or next((r for r in rows if r.get("teams")), None)
+        if not r:
+            styled_message("Test animations", "There is no game card to play it on yet.")
+            return
+        k = card_key(r)
+        _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
+        if kind == "clutch":
+            session["force_clutch"][k] = _time.perf_counter() + 8
+            session["sig"] = None
+            draw_all()
+            root.after(8200, lambda: (session.update(sig=None), draw_all()))
+            return
+        mode = ui_state.get("score_anim", "pulse")
+        mode = "pulse" if mode == "off" else mode
+        scoring = kind in ("score", "run", "grand")
+        make_event(r, k, 0, head, color, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
+                   mode if scoring else "play", "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
+                   sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
+                          "final": "final"}.get(kind))
+        if not scoring:
+            session["celebs"][k]["abbr"] = r["teams"][0]["abbr"] if kind in ("swing", "final") else ""
+
+    def test_dialog():
+        win = tk.Toplevel(root)
+        win.title("Test animations")
+        win.configure(bg=BG)
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
+        dark_titlebar(win)
+        tk.Label(win, text="Plays on the first live game card", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
+            row=0, column=0, columnspan=3, padx=16, pady=(14, 6), sticky="w")
+        for i, (label, *_rest) in enumerate(TESTS):
+            styled_button(win, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 3, column=i % 3, padx=6, pady=4, sticky="ew")
+        styled_button(win, "Close", win.destroy).grid(row=2 + len(TESTS) // 3, column=2, padx=6, pady=(10, 14), sticky="e")
+        win.update_idletasks()
+        win.geometry(f"+{root.winfo_x() + root.winfo_width() + 10}+{root.winfo_y() + 30}")
 
     def celeb_tick():
         now = _time.perf_counter()
@@ -3182,16 +3376,33 @@ def run_gui():
         else:
             session["celeb_on"] = False
 
-    def draw_rings(cx, cy, rad, ce, t, bgc):
-        """Rings expanding from a logo in the scoring team's color."""
+    def draw_rings(cx, cy, rad, ce, t, bgc, bounds):
+        """Rings expanding from a logo in the scoring team's color, kept inside the card (x0, y0, x1, y1)."""
         if ce["mode"] != "pulse" and not ce["grand"]:
             return
+        x0, y0, x1, y1 = bounds
         for delay in (0.0, 0.22):
             pp = (t - delay) / RING_SECS
-            if 0 <= pp <= 1:
-                r_ = rad + 4 + 26 * (1 - (1 - pp) ** 2)
-                canvas.create_oval(cx - r_, cy - r_, cx + r_, cy + r_, outline=blend(bgc, ce["color"], 0.95 * (1 - pp)),
-                                   width=3 if pp < 0.5 else 2)
+            if not 0 <= pp <= 1:
+                continue
+            r_ = rad + 4 + 26 * (1 - (1 - pp) ** 2)
+            pts = [(cx + r_ * math.cos(a_ * math.pi / 36), cy + r_ * math.sin(a_ * math.pi / 36)) for a_ in range(72)]
+            inside = [x0 <= px_ <= x1 and y0 <= py_ <= y1 for px_, py_ in pts]
+            if not any(inside):
+                continue
+            start = inside.index(False) if not all(inside) else 0  # begin outside the card so runs don't wrap around
+            order = [(start + i_) % 72 for i_ in range(72)]
+            run = []
+            col, wd = blend(bgc, ce["color"], 0.95 * (1 - pp)), 3 if pp < 0.5 else 2
+            for i_ in order + [order[0]] if all(inside) else order:
+                if inside[i_]:
+                    run.append(pts[i_])
+                else:
+                    if len(run) > 1:
+                        canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd)
+                    run = []
+            if len(run) > 1:
+                canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd)
 
     def draw_banner(cx, y0, y1, w, ce, t, bgc):
         """The scoring banner centred in the box (y0..y1): team, what happened, the play. Fades in and out."""
@@ -3226,6 +3437,7 @@ def run_gui():
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
         ce, ct = celeb_of(r)  # this card's team just scored
+        session["cur_celeb"] = (ce, ct)
         flashing = bool(ce) and ce["mode"] == "flash" and ct < FLASH_SECS
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
@@ -3276,7 +3488,8 @@ def run_gui():
                 if img:
                     canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
                 if ce and i == (ce["side"] if len(urls) == 2 else (0 if ce["side"] == 0 else -1)):
-                    draw_rings(ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2, ce, ct, bgc)
+                    draw_rings(ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2, ce, ct, bgc,
+                               (cx0 + 1, y + 1, cx0 + cw_ - 1, y + GAP + len(urls) * (lg_size + 2) + 10))
             _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
             y_head = yy
             yy += h
@@ -3347,6 +3560,11 @@ def run_gui():
         bottom = yy + GAP
         if ce:
             draw_confetti(cx0, cx0 + cw_, y, bottom, ce, ct)
+        if clutch_of(r) or session["force_clutch"].get(card_key(r), 0) > _time.perf_counter():
+            pid = canvas.create_polygon(rr_points(cx0 + 1, y + 1, cx0 + cw_ - 1, bottom - 1, 10), smooth=True, fill="",
+                                        outline="#fb923c", width=2)
+            session["pulse_items"].append((pid, "#fb923c", bgc))
+            start_pulse()
         if bgid:
             canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
         if hit:
@@ -3556,6 +3774,7 @@ def run_gui():
         session["hits"].clear()
         session["roll_cells"].clear()
         session["clock_items"].clear()
+        session["pulse_items"].clear()
         session["actx"] = None
         cw = max(canvas.winfo_width(), MIN_BODY_W)
         y = draw_nodes(build_nodes(), 0, 2, cw, final)
@@ -4006,14 +4225,32 @@ def run_gui():
         styled_option(win, layout_choice, [l for l, _ in LAYOUT_CHOICES], command=on_layout, width=12).grid(
             row=6, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Score animation", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=7, column=0, padx=16, pady=(6, 4), sticky="w")
-        anim_choice = tk.StringVar(value=next((l for l, v in SCORE_ANIM_CHOICES if v == ui_state.get("score_anim", "pulse")), "Pulse + banner"))
+        anim_choice = tk.StringVar(value=next((l for l, v in SCORE_ANIM_CHOICES if v == ui_state.get("score_anim", "pulse")), "Pulse"))
 
         def on_anim(label):
             ui_state["score_anim"] = dict(SCORE_ANIM_CHOICES)[label]
             save_state(ui_state)
         styled_option(win, anim_choice, [l for l, _ in SCORE_ANIM_CHOICES], command=on_anim, width=12).grid(
             row=7, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=8, column=0, padx=16, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Animate", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=8, column=0, padx=16, pady=(6, 4), sticky="w")
+        scope_choice = tk.StringVar(value="My teams only" if ui_state.get("anim_scope") == "mine" else "All games")
+
+        def on_scope(label):
+            ui_state["anim_scope"] = "mine" if label == "My teams only" else "all"
+            save_state(ui_state)
+        styled_option(win, scope_choice, ["All games", "My teams only"], command=on_scope, width=12).grid(
+            row=8, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Sounds", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=9, column=0, padx=16, pady=(6, 4), sticky="w")
+        sound_choice = tk.StringVar(value="On" if ui_state.get("sound", True) else "Muted")
+
+        def on_sound(label):
+            ui_state["sound"] = label == "On"
+            save_state(ui_state)
+        styled_option(win, sound_choice, ["On", "Muted"], command=on_sound, width=12).grid(
+            row=9, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=10, column=0, padx=16, pady=(6, 4), sticky="w")
+        styled_button(win, "Test...", test_dialog).grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
             import shutil
@@ -4024,8 +4261,8 @@ def run_gui():
             session["sig"] = None
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
-        styled_button(win, "Clear cache", clear_logos).grid(row=8, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=9, column=1, padx=16, pady=(10, 16), sticky="e")
+        styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=12, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
