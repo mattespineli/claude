@@ -983,6 +983,32 @@ def aa_refresh_pixels(size, fg, bg, ring=2.0, margin=7.0, ss=4):
     return rows
 
 
+def aa_gear_pixels(size, fg, bg, teeth=8, ss=4):
+    """Anti-aliased gear icon (toothed wheel with a centre hole) as rows of hex colors."""
+    import math
+    c = size / 2
+    r_out, r_body, r_hole = c - 7.0, c - 10.0, 3.2
+    f, b = _rgb(fg), _rgb(bg)
+    step = 2 * math.pi / teeth
+    rows = []
+    for py in range(size):
+        row = []
+        for px in range(size):
+            hit = 0
+            for sy in range(ss):
+                for sx in range(ss):
+                    x, y = px + (sx + 0.5) / ss - c, py + (sy + 0.5) / ss - c
+                    d = math.hypot(x, y)
+                    ang = math.atan2(y, x) % step
+                    in_tooth = abs(ang - step / 2) < step * 0.22  # centred tooth, ~44% of the pitch
+                    on = d >= r_hole and (d <= r_body or (d <= r_out and in_tooth))
+                    hit += on
+            a = hit / (ss * ss)
+            row.append("#%02x%02x%02x" % tuple(round(bc + (fc - bc) * a) for fc, bc in zip(f, b)))
+        rows.append(row)
+    return rows
+
+
 def rr_points(x1, y1, x2, y2, r):
     """Polygon points for a rounded rectangle (draw with smooth=True)."""
     return [x1 + r, y1, x2 - r, y1, x2, y1, x2, y1 + r, x2, y2 - r, x2, y2, x2 - r, y2,
@@ -1199,6 +1225,11 @@ def run_gui():
     refresh_img = tk.PhotoImage(width=34, height=34)
     refresh_img.put(" ".join("{" + " ".join(row) + "}" for row in aa_refresh_pixels(34, FG, BG)))
     refresh_btn.create_image(17, 17, image=refresh_img)
+    gear_btn = tk.Canvas(hbar, width=34, height=34, bg=BG, highlightthickness=0, cursor="hand2")
+    gear_btn.pack(side="right", padx=(8, 0))
+    gear_img = tk.PhotoImage(width=34, height=34)
+    gear_img.put(" ".join("{" + " ".join(row) + "}" for row in aa_gear_pixels(34, FG, BG)))
+    gear_btn.create_image(17, 17, image=gear_img)
     view_imgs = {}
     icon = {"busy": False, "rows": {}}
     ICON_R = 34 / 2 - 5.0
@@ -2144,9 +2175,8 @@ def run_gui():
         threading.Thread(target=work, daemon=True).start()
 
 
-    def popup(e):
-        h = hit_at(e)
-        url = h[1].get("url") if h and h[0] == "game" else None
+    def menu_items(at, url=None):
+        """The context-menu entries; `at` has x_root/y_root (where sub-menus open); `url` adds the ESPN link."""
         items = []
         if url:
             import webbrowser
@@ -2155,11 +2185,30 @@ def run_gui():
         def toggle_top():
             topmost.set(not topmost.get())
             root.attributes("-topmost", topmost.get())
-        items += [("Track a game...", track_dialog), ("Untrack a game...", lambda: untrack_menu(e)),
+        items += [("Track a game...", track_dialog), ("Untrack a game...", lambda: untrack_menu(at)),
                   ("Refresh", refresh), ("Settings...", settings_dialog),
                   ("Always on top", toggle_top, topmost.get()), None,
                   ("Update & Restart", update_and_restart), ("Restart", restart), ("Quit", quit_app)]
-        popup_menu(e.x_root, e.y_root, items)
+        return items
+
+    def popup(e):
+        h = hit_at(e)
+        url = h[1].get("url") if h and h[0] == "game" else None
+        popup_menu(e.x_root, e.y_root, menu_items(e, url))
+
+    gear = {"was_open": False}
+
+    def gear_press(_):
+        gear["was_open"] = menu_state["top"] is not None  # this runs before the window-level handler closes it
+
+    def gear_release(_):
+        if gear["was_open"]:
+            return  # a second click on the gear just closes the menu
+        from types import SimpleNamespace
+        x, y = gear_btn.winfo_rootx(), gear_btn.winfo_rooty() + gear_btn.winfo_height() + 2
+        popup_menu(x, y, menu_items(SimpleNamespace(x_root=x, y_root=y)))
+    gear_btn.bind("<ButtonPress-1>", gear_press)
+    gear_btn.bind("<ButtonRelease-1>", gear_release)
 
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
     root.bind("<Button-1>", start)

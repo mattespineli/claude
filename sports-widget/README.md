@@ -35,6 +35,8 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
 
+The gear button in the header opens the same menu as a right-click.
+
 The window remembers its position (and size, if you resized it) between runs.
 
 Switching views (Full/Live/Title) animates the window height and the circle icon fills smoothly.
