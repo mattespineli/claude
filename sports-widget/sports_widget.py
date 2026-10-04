@@ -3737,8 +3737,6 @@ def run_gui():
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
             ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
-            if t.get("mine"):  # the team you follow: a small gold star before its abbreviation
-                canvas.create_text(canvas.bbox(ia_)[0] - 3, yy + 1, text="\u2605", anchor="ne", font=FONTS["small"], fill="#fbbf24", tags=tags)
             if tos and tos.get("poss") == t["ha"] and r["state"] == "in":  # the ball: a small arrow pointing at the basket it attacks
                 bx_ = canvas.bbox(ia_)
                 d_ = 1 if i == 0 else -1
