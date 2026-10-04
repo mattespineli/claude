@@ -857,7 +857,6 @@ def _situation_graphic(sport, comp):
         def_c = next((c for c in comp.get("competitors", []) if c is not off_c), {})
         return {"kind": "football", "x": max(0, min(100, x)), "first": first, "off": off, "def": defn,
                 "color": team_colors(off_c, "#34d399"), "def_color": team_colors(def_c, "#52526a"),
-                "last": str((sit.get("lastPlay") or {}).get("text") or "").strip(),
                 "red": bool(sit.get("isRedZone")) or x >= 80}
     return None
 
@@ -1028,6 +1027,9 @@ def situation_graphic(sport, comp, league=""):
     if core:
         out.append(core)
     sit = comp.get("situation") or {}
+    last = str((sit.get("lastPlay") or {}).get("text") or "").strip()  # what just happened (Scoreboard layout)
+    if last and not _halftime(comp):
+        out.append({"kind": "lastplay", "text": last})
     # per-team remaining timeouts / ABS challenges: dots under each team in the Scoreboard layout
     side = lambda k, words: next((int(v) for key, v in sit.items() if key.lower().startswith(k) and isinstance(v, (int, float))
                                   and any(w in key.lower() for w in words)), None)
@@ -2735,7 +2737,7 @@ def run_gui():
         import tkinter.font as tkfont
         return tkfont.Font(font=FONTS["score"]).measure(text)
 
-    def draw_scoreboard(r, cx0, cw_, y, bgc, tags, gl, tos, info):
+    def draw_scoreboard(r, cx0, cw_, y, bgc, tags, gl, tos, info, lp=None):
         """Scoreboard layout: each team's logo with its score underneath at either side, the status and game details
         (diamond and count, down and possession, timeouts) in the free space between. Returns (bottom y, info left over)."""
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
@@ -2834,8 +2836,9 @@ def run_gui():
                 canvas.create_polygon(ax - 5 * d_, ay - 6, ax + 5 * d_, ay, ax - 5 * d_, ay + 6, fill="#fbbf24" if has else bgc,
                                       outline="#fbbf24" if has else DIM, width=1, tags=tags)
             my += h
-        if fb and fb.get("last") and live:  # what just happened, in the free space under the possession row
-            text = fb["last"] if len(fb["last"]) <= 84 else fb["last"][:83].rstrip() + "\u2026"
+        if lp and live:  # what just happened, in the free space at the bottom of the middle
+            cap_ = 60 if bb else 84  # baseball's middle is already full
+            text = lp["text"] if len(lp["text"]) <= cap_ else lp["text"][:cap_ - 1].rstrip() + "\u2026"
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
             my += 4 + h
         yy = max(colb, my) + 2
@@ -2858,11 +2861,12 @@ def run_gui():
         gl = r.get("graphic") or []
         gl = [gl] if isinstance(gl, dict) else gl
         tos = next((g_ for g_ in gl if g_["kind"] == "timeouts"), None)
-        gl = [g_ for g_ in gl if g_["kind"] != "timeouts"]
+        lp = next((g_ for g_ in gl if g_["kind"] == "lastplay"), None)
+        gl = [g_ for g_ in gl if g_["kind"] not in ("timeouts", "lastplay")]
         info = r.get("info") or ""
         lw = ww
         if ui_state.get("layout", "scoreboard") == "scoreboard" and len(r.get("teams") or []) == 2 and r["state"] in ("pre", "in", "post"):
-            yy, info = draw_scoreboard(r, cx0, cw_, yy, bgc, tags, gl, tos, info)
+            yy, info = draw_scoreboard(r, cx0, cw_, yy, bgc, tags, gl, tos, info, lp)
         else:
             text_w = ww
             if sc:  # big score at the top right; the team names wrap to the space on its left
@@ -3977,8 +3981,9 @@ def demo_data():
     mlb = {"status": {"type": {"shortDetail": "Top 7th"}},
            "competitors": [team("1", "away", "SFG", 3), team("2", "home", "LAD", 2)],
            "situation": {"awayChallengesRemaining": 1, "homeChallengesRemaining": 2, "balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
-                         "batter": {"athlete": {"shortName": "M. Chapman"}}, "pitcher": {"athlete": {"shortName": "T. Glasnow"}}}}
+                         "lastPlay": {"text": "Strike 2 swinging"}, "batter": {"athlete": {"shortName": "M. Chapman"}}, "pitcher": {"athlete": {"shortName": "T. Glasnow"}}}}
     nba = {"status": {"period": 3, "clock": 312.0, "displayClock": "5:12"},
+           "situation": {"lastPlay": {"text": "S. Curry makes 26-foot three point jumper (A. Wiggins assists)"}},
            "competitors": [team("9", "away", "GS", 78, [st("fouls", 9), st("rebounds", 31)]),
                            team("2", "home", "BOS", 74, [st("fouls", 12), st("rebounds", 28)])]}
     nhl = {"status": {"period": 2, "clock": 407.0, "displayClock": "6:47"}, "situation": {"powerPlay": True, "powerPlayTeam": "NJ"},
