@@ -2182,7 +2182,7 @@ def run_gui():
              "sec": ("Segoe UI", 8, "bold"), "hdr": ("Segoe UI", 9, "bold"), "small": ("Segoe UI", 8),
              "smallb": ("Segoe UI", 8, "bold")}
     PAD, GAP = 10, 6
-    LOGO_W, BB_W = 40, 112  # width reserved for a logo in front of the name; baseball bases/count graphic
+    LOGO_W, BB_W = 52, 112  # width reserved for a logo in front of the name; baseball bases/count graphic
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
@@ -2550,7 +2550,7 @@ def run_gui():
                 x1 = canvas.bbox(idash)[0]
             text_w = max(ww - (xr - draw_score(x1 - 4, yy - 3, sc[0], c1, bgc, (rk, 0))) - 12, 80)
         urls = [u for u in (r.get("logos") or []) if u]  # team logo(s) in front of the name
-        lg_size = 34 if len(urls) == 1 else 20
+        lg_size = 44 if len(urls) == 1 else 22
         tx = ix + (LOGO_W if urls else 0)
         text_w = max(text_w - (tx - ix), 60)
         for i, u in enumerate(urls):
@@ -2563,20 +2563,18 @@ def run_gui():
         if r["line"]:
             _, h = ctext(tx, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
             yy += h
-        if urls:
-            yy = max(yy, y_head + len(urls) * (lg_size + 2))
         if sc:
             yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
         gl = r.get("graphic") or []
         gl = [gl] if isinstance(gl, dict) else gl
         bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases, count and batter/pitcher get their own row
         lw = ww
-        sx = ix
+        sx = tx  # the status line lines up with the name, beside the logo
         if r["state"] == "in":  # red LIVE pill in front of the clock
             bw = 34
-            canvas.create_polygon(rr_points(ix, yy + 2, ix + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
-            canvas.create_text(ix + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
-            sx = ix + bw + 6
+            canvas.create_polygon(rr_points(tx, yy + 2, tx + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
+            canvas.create_text(tx + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+            sx = tx + bw + 6
         ys = yy  # top of the status row: the baseball panel starts here too
         sid, h = ctext(sx, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
                        COLORS.get(r["state"], FG), width=lw - (sx - ix), tags=tags)
@@ -2585,6 +2583,8 @@ def run_gui():
             session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
             canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
         yy += max(h, 18 if r["state"] == "in" else 0)
+        if urls:
+            yy = max(yy, y_head + len(urls) * (lg_size + 2))  # the logo spans name, opponent and status lines
         info = r.get("info") or ""
         if bb:
             yy += graphics(ix, yy, [g_ for g_ in gl if g_ not in bb], bgc, lw)
