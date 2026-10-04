@@ -2089,9 +2089,30 @@ def live_clock(event, sport):
     if sport == "soccer":  # counts up in minutes; stoppage time ("45'+2'") is left alone
         m = re.fullmatch(r"(\d+)'", str(st.get("displayClock") or "").strip())
         return {"at": time.time(), "secs": secs, "up": True, "minute": int(m.group(1))} if m else None
-    if sport in ("basketball", "hockey", "football") and secs > 0:
+    if sport in ("basketball", "hockey", "football") and secs > 0 and not clock_stopped(event, secs):
         return {"at": time.time(), "secs": secs, "up": False}
     return None
+
+
+CLOCK_STOP_RE = re.compile(r"time ?out|two[- ]minute warning|official review|injury", re.I)
+_clock_seen = {}  # event id -> [clock secs, when that value was first seen]
+
+
+def clock_stopped(event, secs):
+    """Whether the game clock is stopped, so the widget shouldn't run it: the last play is a timeout, the two-minute
+    warning or a review, or the clock hasn't moved in two looks at least 8s apart (any other stoppage)."""
+    comp = event["competitions"][0]
+    last = ((comp.get("situation") or {}).get("lastPlay") or {})
+    if CLOCK_STOP_RE.search(" ".join(str(x) for x in (last.get("text"), (last.get("type") or {}).get("text")) if x)):
+        return True
+    k, now = str(event.get("id")), time.time()
+    seen = _clock_seen.get(k)
+    if seen is None or seen[0] != secs:
+        if len(_clock_seen) > 500:
+            _clock_seen.clear()
+        _clock_seen[k] = [secs, now]
+        return False
+    return now - seen[1] >= 8  # scoreboards are cached 5s, so one refresh's lookups never trip this
 
 
 def tick_clock(text, clock, now=None):
