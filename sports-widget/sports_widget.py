@@ -3580,7 +3580,7 @@ def run_gui():
             if "sacked" in low or " sack" in low:
                 return "SACK", "#fb923c", 3.0
             if "turnover on downs" in low:
-                return "TURNOVER ON DOWNS", "#f87171", 3.5
+                return "TURNOVER ON DOWNS!", "#f87171", 3.5
             if " punts" in low:
                 return "PUNT", "#9aa0a6", 2.5
             if "kicks off" in low or "kickoff" in low:
@@ -3801,7 +3801,7 @@ def run_gui():
             big = classify_play(sport, ptext) if old is not None and ptext and ptext != old else None
             if (not big and m4 and fb_ and session["down_prev"].get(k) == 4 and downs.get(k) == 1 and session["poss_prev"].get(k)
                     and session["poss_prev"][k] != fb_["off"] and not re.search(r"punt|field goal|kick|intercept|fumble", ptext.lower())):
-                big = ("TURNOVER ON DOWNS", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
+                big = ("TURNOVER ON DOWNS!", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
             if big and k not in session["celebs"]:
                 side = (kick_side(r, big[0], ptext, session["poss_prev"].get(k)) if big[0] in KICK_PLAYS
                         else acting_side(r, big[0], ptid))
@@ -3812,7 +3812,7 @@ def run_gui():
                     if pm and pm.group(1).upper() in tm_:
                         side = tm_.index(pm.group(1).upper())
                 make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
-                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") + KICK_PLAYS else None)
+                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS!") + KICK_PLAYS else None)
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -3872,7 +3872,7 @@ def run_gui():
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
              ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("4th down", "4TH DOWN", "fourth", None),
-             ("Turnover on downs", "TURNOVER ON DOWNS", "turnover", None),
+             ("Turnover on downs", "TURNOVER ON DOWNS!", "turnover", None),
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
