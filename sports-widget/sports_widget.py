@@ -4440,7 +4440,7 @@ def run_gui():
             x, y = at(path, p)
             canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, fill, a), tags=lay["tag"])
         if total >= 2 and scored:  # runs count up in the middle
-            canvas.create_text(cx, cy, text=str(scored), font=("Segoe UI", 16, "bold"), fill=blend(bg, fill, a), tags=lay["tag"])
+            canvas.create_text(cx, cy, text=str(scored), font=("Segoe UI", 8 + 2 * min(scored, 4), "bold"), fill=blend(bg, fill, a), tags=lay["tag"])  # 1.25x, 1.5x, 1.75x, then 2x of the 8 pt base
 
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
         """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
