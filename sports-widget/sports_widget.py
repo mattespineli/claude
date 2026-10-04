@@ -1860,7 +1860,12 @@ def run_gui():
     def save_geometry():
         """Remember where the window is (and its size, if the user resized it)."""
         try:
-            ui_state["pos"] = [dock_shown_x() if docked() else root.winfo_x(), root.winfo_y()]
+            if docked():  # keep the floating position/height for when docking is turned off
+                if user_sized["on"] and ui_state.get("size"):
+                    ui_state["size"][0] = root.winfo_width()
+                save_state(ui_state)
+                return
+            ui_state["pos"] = [root.winfo_x(), root.winfo_y()]
             if user_sized["on"] and ui_state.get("view", "full") != "title":
                 ui_state["size"] = [root.winfo_width(), root.winfo_height()]
             elif not user_sized["on"]:
@@ -2945,8 +2950,8 @@ def run_gui():
     def move(e):
         if e.widget not in (grip, scroll) and "x" in drag:
             drag["moved"] = True
-            x = dock["x"] if docked() else e.x_root - drag["x"]
-            root.geometry(f"+{x}+{e.y_root - drag['y']}")
+            if not docked():  # a docked widget stays put on its edge
+                root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
 
     def hit_at(e):
         if e.widget is not canvas:
@@ -3060,13 +3065,42 @@ def run_gui():
     def docked():
         return ui_state.get("dock", "off") in ("left", "right")
 
-    def dock_shown_x():
-        l, _t, r, _b = screen_bounds()
-        return l if ui_state.get("dock") == "left" else r - root.winfo_width()
+    def dock_area():
+        """(left, top, right, bottom) the docked widget fills: the work area (minus the taskbar) of the monitor at
+        the docked outer edge of the desktop; the whole screen elsewhere than Windows."""
+        l, t, r, b = screen_bounds()
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                from ctypes import wintypes
 
-    def dock_hidden_x():
-        l, _t, r, _b = screen_bounds()
-        return l - root.winfo_width() + DOCK_STRIP if ui_state.get("dock") == "left" else r - DOCK_STRIP
+                class MONITORINFO(ctypes.Structure):
+                    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", wintypes.RECT),
+                                ("rcWork", wintypes.RECT), ("dwFlags", wintypes.DWORD)]
+                user32 = ctypes.windll.user32
+                user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+                user32.MonitorFromPoint.restype = wintypes.HANDLE
+                user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE, ctypes.POINTER(MONITORINFO)]
+                pt = wintypes.POINT(l if ui_state.get("dock") == "left" else r - 1, root.winfo_y() + root.winfo_height() // 2)
+                mi = MONITORINFO()
+                mi.cbSize = ctypes.sizeof(MONITORINFO)
+                if user32.GetMonitorInfoW(user32.MonitorFromPoint(pt, 2), ctypes.byref(mi)):  # 2 = nearest monitor
+                    w = mi.rcWork
+                    return w.left, w.top, w.right, w.bottom
+            except Exception:
+                pass
+        return l, t, r, b
+
+    def dock_width():
+        return root.winfo_width() if user_sized["on"] else max(MIN_W, root.winfo_reqwidth())
+
+    def dock_shown_x(area=None, w=None):
+        l, _t, r, _b = area or dock_area()
+        return l if ui_state.get("dock") == "left" else r - (w or dock_width())
+
+    def dock_hidden_x(area=None, w=None):
+        l, _t, r, _b = area or dock_area()
+        return l - (w or dock_width()) + DOCK_STRIP if ui_state.get("dock") == "left" else r - DOCK_STRIP
 
     def dock_keep_out():
         """True while the widget must stay visible regardless of where the pointer is."""
@@ -3079,9 +3113,11 @@ def run_gui():
         try:
             if docked() and root.state() == "normal":
                 now = _time.monotonic()
+                area = dock_area()
+                top, h, w = area[1], area[3] - area[1], dock_width()
                 px, py = root.winfo_pointerxy()
-                x, y, w, h = dock["x"], root.winfo_y(), root.winfo_width(), root.winfo_height()
-                if (x <= px < x + w and y <= py < y + h) or dock_keep_out():
+                x = dock["x"]
+                if (x <= px < x + w and top <= py < top + h) or dock_keep_out():
                     dock["leave"], want = None, True
                 elif dock["shown"]:
                     dock["leave"] = dock["leave"] or now
@@ -3089,13 +3125,14 @@ def run_gui():
                 else:
                     want = False
                 dock["shown"] = want
-                target = dock_shown_x() if want else dock_hidden_x()
+                target = dock_shown_x(area, w) if want else dock_hidden_x(area, w)
                 if x != target:  # ease toward the target: a quick slide that slows at the end
                     step = (target - x) * 0.3
                     x += int(step) if abs(step) >= 1 else (1 if target > x else -1)
                     dock["x"] = x
-                    root.geometry(f"+{x}+{y}")
                     delay = 12
+                if (root.winfo_x(), root.winfo_y(), root.winfo_width(), root.winfo_height()) != (x, top, w, h):
+                    root.geometry(f"{w}x{h}+{x}+{top}")  # the full height of the edge
         except tk.TclError:
             return
         root.after(delay, dock_poll)
@@ -3103,15 +3140,22 @@ def run_gui():
     def set_dock(side):
         ui_state["dock"] = side
         save_state(ui_state)
-        l, t, r, b = screen_bounds()
-        x = root.winfo_x()
-        if side == "off":  # leave the widget fully on screen where it was last shown
-            x = max(l, min(x, r - root.winfo_width()))
+        if side == "off":  # back to a normal floating window, fully on screen where it was last shown
+            l, t, r, b = screen_bounds()
+            w = dock_width()
+            pos = ui_state.get("pos") or [dock["x"], root.winfo_y()]
+            x, y = max(l, min(int(pos[0]), r - w)), max(t, min(int(pos[1]), b - MIN_H))
+            if user_sized["on"]:
+                sh = (ui_state.get("size") or [w, 400])[1]
+                root.geometry(f"{w}x{max(MIN_H, int(sh))}+{x}+{y}")
+            else:
+                root.geometry("")
+                root.geometry(f"+{x}+{y}")
+                fit()
         else:
             x = dock_shown_x()
             dock.update(shown=True, leave=None)
         dock["x"] = x
-        root.geometry(f"+{x}+{root.winfo_y()}")
         save_geometry()
 
     def dock_hold(on):
@@ -3119,7 +3163,6 @@ def run_gui():
 
     if docked():
         dock["x"] = dock_shown_x()
-        root.geometry(f"+{dock['x']}+{root.winfo_y()}")
         dock["leave"] = _time.monotonic() + 1.0  # stay out briefly at startup, then tuck away
 
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
