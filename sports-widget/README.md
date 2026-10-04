@@ -35,7 +35,7 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
 
-Two tabs: **Games** (everything above) and **Standings** (NFL, NBA, NHL, MLB, WNBA; your teams are highlighted; opening one league closes the previous one; each league has Overall / Conference / Division views where ESPN provides them). Cards show the current score large at the top right, and live games show a win-probability bar until you expand them.
+Two tabs: **Games** (everything above) and **Standings** (NFL, NBA, NHL, MLB, WNBA; your teams are highlighted; opening one league closes the previous one; each league has Overall / Conference / Division views where ESPN provides them; college: Pac-12 football and men's basketball standings plus the AP Top 25 for each). Cards show the current score large at the top right, and live games show a win-probability bar until you expand them.
 
 While the first data loads, a spinner is shown instead of a blank window. A team shows its last game if it was within the past two weeks.
 

@@ -79,18 +79,30 @@ def _record(c):
 STANDINGS = "https://site.api.espn.com/apis/v2/sports/{sport}/{league}/standings?level=3"  # level 3 = by division
 STANDINGS_LEAGUES = [("NFL", "football", "nfl"), ("NBA", "basketball", "nba"), ("NHL", "hockey", "nhl"),
                      ("MLB", "baseball", "mlb"), ("WNBA", "basketball", "wnba")]
+# College sources shown on the Standings tab: conference standings (ESPN conference group 9 = Pac-12) and AP polls.
+COLLEGE_STANDINGS = [
+    {"key": "PAC12-FB", "title": "Pac-12 Football", "kind": "conf", "sport": "football", "league": "college-football", "group": "9"},
+    {"key": "PAC12-BB", "title": "Pac-12 Men's Basketball", "kind": "conf", "sport": "basketball", "league": "mens-college-basketball", "group": "9"},
+    {"key": "TOP25-FB", "title": "Top 25 Football", "kind": "poll", "sport": "football", "league": "college-football"},
+    {"key": "TOP25-BB", "title": "Top 25 Men's Basketball", "kind": "poll", "sport": "basketball", "league": "mens-college-basketball"},
+]
+STANDINGS_KEYS = [a for a, _, _ in STANDINGS_LEAGUES] + [c["key"] for c in COLLEGE_STANDINGS]
+RANKINGS = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/rankings"
 _seed_cache = {}
 _standings_raw = {}
 
 
-def standings_json(sport, league, max_age=600):
-    """ESPN's standings response for a league, cached for `max_age` seconds. Raises on network errors."""
-    key = (sport, league)
+def standings_json(sport, league, max_age=600, group=None):
+    """ESPN's standings response for a league (or one college conference via `group`), cached for `max_age` seconds."""
+    key = (sport, league, group)
     now = datetime.now().timestamp()
     hit = _standings_raw.get(key)
     if hit and now - hit[0] < max_age:
         return hit[1]
-    req = urllib.request.Request(STANDINGS.format(sport=sport, league=league), headers={"User-Agent": "sports-widget/1.0"})
+    url = STANDINGS.format(sport=sport, league=league)
+    if group:
+        url = url.split("?")[0] + f"?group={group}"
+    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
     with urllib.request.urlopen(req, timeout=10) as r:
         data = json.load(r)
     _standings_raw[key] = (now, data)
@@ -122,6 +134,42 @@ def parse_standings(data):
             walk(ch)
     walk(data)
     return groups
+
+
+def rankings_json(sport, league, max_age=600):
+    key = ("rankings", sport, league)
+    now = datetime.now().timestamp()
+    hit = _standings_raw.get(key)
+    if hit and now - hit[0] < max_age:
+        return hit[1]
+    req = urllib.request.Request(RANKINGS.format(sport=sport, league=league), headers={"User-Agent": "sports-widget/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.load(r)
+    _standings_raw[key] = (now, data)
+    return data
+
+
+def parse_poll(data):
+    """The AP Top 25 from ESPN's rankings response: [{rank, id, abbr, name, record, points}]."""
+    polls = data.get("rankings") or []
+    poll = next((p for p in polls if str(p.get("type", "")).lower() == "ap" or "ap" in str(p.get("name", "")).lower().split()),
+                polls[0] if polls else None)
+    rows = []
+    for r in (poll or {}).get("ranks") or []:
+        t = r.get("team") or {}
+        full = t.get("displayName") or " ".join(x for x in (t.get("location"), t.get("name")) if x) or t.get("nickname", "?")
+        rec = r.get("recordSummary") or (t.get("record") if isinstance(t.get("record"), str) else "") or ""
+        rows.append({"rank": r.get("current"), "id": str(t.get("id", "")), "abbr": t.get("abbreviation", ""),
+                     "name": full, "record": rec, "points": str(r.get("points", "")) if r.get("points") is not None else ""})
+    return rows
+
+
+def college_cells(stats):
+    """(conference record, [overall record]) for a college conference-standings row."""
+    g = stats.get
+    conf = next((g(k) for k in ("vsconf", "vs. Conf.", "conferenceRecord", "leagueRecord", "conference") if g(k)), None)
+    overall = g("overall") or (f'{g("wins")}-{g("losses")}' if g("wins") is not None else "-")
+    return conf or "-", [overall]
 
 
 def _num_stat(stats, name):
@@ -2140,6 +2188,27 @@ def run_gui():
                         fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
                         children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav})
             nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
+        for src in COLLEGE_STANDINGS:
+            data = session["standings"].get(src["key"])
+            favs_c = {(e["league"], str(e["team"]).lower()) for e in entries}
+            if data is None:
+                children = [{"t": "text", "text": "Loading..."}]
+            elif data == "error":
+                children = [{"t": "text", "text": "Standings unavailable"}]
+            elif src["kind"] == "poll":
+                children = [{"t": "sub", "text": "AP Top 25", "headers": ["Record", "Pts"]}]
+                for r in data:
+                    fav = (src["league"], r["id"]) in favs_c or (src["league"], r["abbr"].lower()) in favs_c
+                    children.append({"t": "srow", "rank": r["rank"], "name": r["name"], "vals": [r["record"], r["points"]], "fav": fav})
+            else:
+                children = []
+                for g in data:
+                    children.append({"t": "sub", "text": g["name"] or src["title"], "headers": ["Conf", "Ovr"]})
+                    for rank, r in enumerate(g["rows"], start=1):
+                        conf, cols = college_cells(r["stats"])
+                        fav = (src["league"], r["id"]) in favs_c or (src["league"], r["abbr"].lower()) in favs_c
+                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [conf] + cols, "fav": fav})
+            nodes.append(group_node(f"st:{src['key']}", src["title"], FG, 0, True, False, children))
         return nodes
 
     def build_nodes():
@@ -2272,7 +2341,7 @@ def run_gui():
         if store.get(key, n["default"]):
             start_anim(key, False, on_done=lambda: set_open(n, False))  # shrink first, then flip the state
         elif key.startswith("st:"):  # standings behave like an accordion: one league open at a time
-            others = [k for k in (f"st:{a}" for a, _, _ in STANDINGS_LEAGUES)
+            others = [k for k in (f"st:{a}" for a in STANDINGS_KEYS)
                       if k != key and ui_state.get(k, k == f"st:{STANDINGS_LEAGUES[0][0]}")]
             if not others:
                 set_open(n, True)
@@ -2365,6 +2434,16 @@ def run_gui():
                     session["standings"].setdefault(abbr, "error")
                     if session["standings"][abbr] is None:
                         session["standings"][abbr] = "error"
+            for src in COLLEGE_STANDINGS:
+                try:
+                    if src["kind"] == "conf":
+                        groups = parse_standings(standings_json(src["sport"], src["league"], group=src["group"]))
+                        session["standings"][src["key"]] = groups if any(g["rows"] for g in groups) else "error"
+                    else:
+                        rows = parse_poll(rankings_json(src["sport"], src["league"]))
+                        session["standings"][src["key"]] = rows or "error"
+                except Exception:
+                    session["standings"][src["key"]] = "error"
             root.after(0, standings_loaded)
         threading.Thread(target=work, daemon=True).start()
 
