@@ -4200,19 +4200,6 @@ def run_gui():
         styled_button(win, "Track selected", add).pack(pady=(0, 12))
         load()
 
-    def place_beside(win):
-        """Put a dialog next to the widget (right of it, else left), always fully on screen, so it covers no cards."""
-        win.update_idletasks()
-        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
-        l, t, r, b = screen_bounds()
-        x = root.winfo_x() + root.winfo_width() + 10
-        if x + w > r:  # no room on the right (the widget is near that edge, or docked there)
-            x = root.winfo_x() - w - 10
-            if x < l:
-                x = max(l, r - w)
-        y = max(t, min(root.winfo_y() + 30, b - h))
-        win.geometry(f"+{x}+{y}")
-
     def settings_dialog():
         win = tk.Toplevel(root)
         win.title("Settings")
@@ -4333,14 +4320,22 @@ def run_gui():
         win_ref[0] = win
         tests = test_buttons(win)
         shown = [False]
+        moved = [None]  # where the window was, if showing the tests had to nudge it to stay on screen
 
         def toggle_tests():
             shown[0] = not shown[0]
-            if shown[0]:  # the window grows sideways, and moves beside the widget so the cards stay visible
+            if shown[0]:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
                 tests.grid(row=0, column=2, rowspan=13, padx=(0, 16), pady=16, sticky="n")
-                place_beside(win)
+                win.update_idletasks()
+                l, _t, r, _b = screen_bounds()
+                if win.winfo_x() + win.winfo_reqwidth() > r:
+                    moved[0] = (win.winfo_x(), win.winfo_y())
+                    win.geometry(f"+{max(l, r - win.winfo_reqwidth())}+{win.winfo_y()}")
             else:
                 tests.grid_remove()
+                if moved[0]:  # put it back where it was
+                    win.geometry(f"+{moved[0][0]}+{moved[0][1]}")
+                    moved[0] = None
             test_btn.itemconfigure(2, text="Hide" if shown[0] else "Test...")
         test_btn = styled_button(win, "Test...", toggle_tests)
         test_btn.grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
