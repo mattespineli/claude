@@ -3206,6 +3206,15 @@ def run_gui():
             threading.Thread(target=work, daemon=True).start()
         return None
 
+    def crisp_rr(x1, y1, x2, y2, r, color, tags=()):
+        """A rounded rectangle from whole-pixel rectangles and corner discs: sharp edges, none of the stray pixels a smoothed polygon leaves."""
+        x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
+        ids = [canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color, outline="", tags=tags),
+               canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color, outline="", tags=tags)]
+        for cx_, cy_ in ((x1, y1), (x2 - 2 * r, y1), (x1, y2 - 2 * r), (x2 - 2 * r, y2 - 2 * r)):
+            ids.append(canvas.create_oval(cx_, cy_, cx_ + 2 * r, cy_ + 2 * r, fill=color, outline="", tags=tags))
+        return ids
+
     def tv_badges(x, y, text, tags=(), center=False, limit=3):
         """Channel names as small badges in each network's colors (ESPN gives names, not logos); returns the width used."""
         names = text.split(" \u00b7 ")[:limit]
@@ -3214,8 +3223,8 @@ def run_gui():
         px = x - total / 2 if center else x
         for n, pw in zip(names, widths):
             bg_, fg_ = NETWORK_STYLES.get(n.lower(), (PANEL, FG))
-            canvas.create_polygon(rr_points(px, y, px + pw, y + 14, 5), smooth=True, fill=bg_, outline=bg_, tags=tags)
-            canvas.create_text(px + pw / 2, y + 7, text=n, font=FONTS["small"], fill=fg_, tags=tags)
+            crisp_rr(px, y, px + pw, y + 14, 3, bg_, tags)
+            canvas.create_text(round(px + pw / 2), round(y + 7), text=n, font=FONTS["small"], fill=fg_, tags=tags)
             px += pw + 4
         return total
 
@@ -3463,8 +3472,8 @@ def run_gui():
             names_ = r["tv"].split(" \u00b7 ")[:2] if r.get("tv") else []
             tv_w = sum(text_width(FONTS["small"], n) + 10 for n in names_) + 4 * max(len(names_) - 1, 0)
             x0 = mx - (34 + (8 + tv_w if tv_w else 0)) / 2
-            canvas.create_polygon(rr_points(x0, my, x0 + 34, my + 14, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
-            canvas.create_text(x0 + 17, my + 7, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+            crisp_rr(x0, my, x0 + 34, my + 14, 3, LIVE_RED, tags)
+            canvas.create_text(round(x0 + 17), round(my + 7), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
             if tv_w:
                 tv_badges(x0 + 42, my, " \u00b7 ".join(names_), tags)
             my += 18
@@ -4713,8 +4722,8 @@ def run_gui():
             sx = tx  # the status line lines up with the name, beside the logo
             if r["state"] == "in":  # red LIVE pill in front of the clock
                 bw = 34
-                canvas.create_polygon(rr_points(tx, yy + 2, tx + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
-                canvas.create_text(tx + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+                crisp_rr(tx, yy + 2, tx + bw, yy + 16, 3, LIVE_RED, tags)
+                canvas.create_text(round(tx + bw / 2), round(yy + 9), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
                 sx = tx + bw + 6
                 if r.get("tv"):  # the channel(s) right beside the LIVE flag
                     sx += tv_badges(sx, yy + 2, r["tv"], tags, limit=2) + 8
