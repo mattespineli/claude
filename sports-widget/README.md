@@ -56,6 +56,8 @@ Right-click a game → **Open game on ESPN** opens its ESPN page.
 
 Right-click → **Update & Restart** runs `git pull` and relaunches the widget (needs Git on PATH; shows the error if the pull fails). **Restart** relaunches without pulling.
 
+Right-click → **Settings...** → **Dock and autohide** (Off / Left edge / Right edge, default Off) docks the widget to that edge of the screen. It slides away leaving a thin strip, and slides back out when the mouse touches the strip; it stays out while a menu or dialog is open. Drag it to move it up or down the edge.
+
 Right-click → **Settings...** to adjust opacity (30-100%, slider or typed value) and refresh cadence (15 seconds to 15 minutes). Live MLB games show a base diamond with outs; live NFL games show a field-position strip (ball, first-down line, red zone).
 
 ## Live-game graphics

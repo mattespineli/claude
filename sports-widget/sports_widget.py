@@ -992,6 +992,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
+DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
                    ("5 minutes", 300), ("10 minutes", 600), ("15 minutes", 900)]
 
@@ -1859,7 +1860,7 @@ def run_gui():
     def save_geometry():
         """Remember where the window is (and its size, if the user resized it)."""
         try:
-            ui_state["pos"] = [root.winfo_x(), root.winfo_y()]
+            ui_state["pos"] = [dock_shown_x() if docked() else root.winfo_x(), root.winfo_y()]
             if user_sized["on"] and ui_state.get("view", "full") != "title":
                 ui_state["size"] = [root.winfo_width(), root.winfo_height()]
             elif not user_sized["on"]:
@@ -2917,7 +2918,11 @@ def run_gui():
 
         styled_option(win, live_choice, [l for l, _ in LIVE_REFRESH_CHOICES], command=on_live_refresh, width=12).grid(
             row=3, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=4, column=1, padx=16, pady=(10, 16), sticky="e")
+        tk.Label(win, text="Dock and autohide", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=4, column=0, padx=16, pady=(6, 4), sticky="w")
+        dock_choice = tk.StringVar(value=next((l for l, v in DOCK_CHOICES if v == ui_state.get("dock", "off")), "Off"))
+        styled_option(win, dock_choice, [l for l, _ in DOCK_CHOICES], command=lambda label: set_dock(dict(DOCK_CHOICES)[label]),
+                      width=12).grid(row=4, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=5, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
@@ -2940,7 +2945,8 @@ def run_gui():
     def move(e):
         if e.widget not in (grip, scroll) and "x" in drag:
             drag["moved"] = True
-            root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
+            x = dock["x"] if docked() else e.x_root - drag["x"]
+            root.geometry(f"+{x}+{e.y_root - drag['y']}")
 
     def hit_at(e):
         if e.widget is not canvas:
@@ -3045,11 +3051,84 @@ def run_gui():
     gear_btn.bind("<ButtonPress-1>", gear_press)
     gear_btn.bind("<ButtonRelease-1>", gear_release)
 
+    # Dock to a screen edge with autohide: the widget slides off-screen leaving a thin strip at the edge,
+    # and slides back when the pointer touches that strip. It stays out while the pointer is over it, a mouse
+    # button is held (drag, resize) or a menu/dialog is open, and hides again shortly after the pointer leaves.
+    DOCK_STRIP, DOCK_HIDE_DELAY = 5, 0.6
+    dock = {"x": root.winfo_x(), "shown": True, "leave": None, "held": False}
+
+    def docked():
+        return ui_state.get("dock", "off") in ("left", "right")
+
+    def dock_shown_x():
+        l, _t, r, _b = screen_bounds()
+        return l if ui_state.get("dock") == "left" else r - root.winfo_width()
+
+    def dock_hidden_x():
+        l, _t, r, _b = screen_bounds()
+        return l - root.winfo_width() + DOCK_STRIP if ui_state.get("dock") == "left" else r - DOCK_STRIP
+
+    def dock_keep_out():
+        """True while the widget must stay visible regardless of where the pointer is."""
+        if dock["held"]:
+            return True
+        return any(isinstance(w, tk.Toplevel) and w.winfo_ismapped() for w in root.winfo_children())
+
+    def dock_poll():
+        delay = 60
+        try:
+            if docked() and root.state() == "normal":
+                now = _time.monotonic()
+                px, py = root.winfo_pointerxy()
+                x, y, w, h = dock["x"], root.winfo_y(), root.winfo_width(), root.winfo_height()
+                if (x <= px < x + w and y <= py < y + h) or dock_keep_out():
+                    dock["leave"], want = None, True
+                elif dock["shown"]:
+                    dock["leave"] = dock["leave"] or now
+                    want = now - dock["leave"] < DOCK_HIDE_DELAY
+                else:
+                    want = False
+                dock["shown"] = want
+                target = dock_shown_x() if want else dock_hidden_x()
+                if x != target:  # ease toward the target: a quick slide that slows at the end
+                    step = (target - x) * 0.3
+                    x += int(step) if abs(step) >= 1 else (1 if target > x else -1)
+                    dock["x"] = x
+                    root.geometry(f"+{x}+{y}")
+                    delay = 12
+        except tk.TclError:
+            return
+        root.after(delay, dock_poll)
+
+    def set_dock(side):
+        ui_state["dock"] = side
+        save_state(ui_state)
+        l, t, r, b = screen_bounds()
+        x = root.winfo_x()
+        if side == "off":  # leave the widget fully on screen where it was last shown
+            x = max(l, min(x, r - root.winfo_width()))
+        else:
+            x = dock_shown_x()
+            dock.update(shown=True, leave=None)
+        dock["x"] = x
+        root.geometry(f"+{x}+{root.winfo_y()}")
+        save_geometry()
+
+    def dock_hold(on):
+        dock["held"] = on
+
+    if docked():
+        dock["x"] = dock_shown_x()
+        root.geometry(f"+{dock['x']}+{root.winfo_y()}")
+        dock["leave"] = _time.monotonic() + 1.0  # stay out briefly at startup, then tuck away
+
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
     root.bind("<Button-1>", start)
     root.bind("<B1-Motion>", move)
     root.bind("<ButtonRelease-1>", on_release)
     root.bind("<Button-3>", popup)
+    root.bind("<ButtonPress-1>", lambda e: dock_hold(True), add="+")
+    root.bind("<ButtonRelease-1>", lambda e: dock_hold(False), add="+")
     root.update_idletasks()
     apply_layout()
     threading.Thread(target=icon_precompute, daemon=True).start()
@@ -3069,6 +3148,7 @@ def run_gui():
     except Exception:
         pass
     tick()
+    dock_poll()
     root.mainloop()
 
 
