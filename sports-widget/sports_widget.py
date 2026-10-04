@@ -4272,7 +4272,7 @@ def run_gui():
                 tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
                 cside = tm_.index(who.upper()) if who.upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
                 make_event(r, k, cside, "SUCCESSFUL CHALLENGE!" if over else "FAILED CHALLENGE", "#34d399" if over else "#f87171", 3.5, mode, ptext, sound=None)
-                chain_event(k, (r, k, cside, "CALL OVERTURNED" if over else "CALL STANDS", "#fbbf24" if over else "#9aa0a6", FOLLOW_SECS, mode, ptext), {})
+                chain_event(k, (r, k, cside, "CALL OVERTURNED" if over else "CALL STANDS", "#34d399" if over else "#f87171", FOLLOW_SECS, mode, ptext), {})
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -4434,7 +4434,7 @@ def run_gui():
             chain_field(k, r, side, head, mode, occ, runs or 0)
         if head in ("SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE"):  # the ruling follows the result
             over_ = head.startswith("SUCCESSFUL")
-            chain_event(k, (r, k, side, "CALL OVERTURNED" if over_ else "CALL STANDS", "#fbbf24" if over_ else "#9aa0a6", FOLLOW_SECS, mode, "Test animation"), {})
+            chain_event(k, (r, k, side, "CALL OVERTURNED" if over_ else "CALL STANDS", "#34d399" if over_ else "#f87171", FOLLOW_SECS, mode, "Test animation"), {})
         follows = list(MAIN.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
         for follow in follows:
             fside = mine if side is not None else None  # follow-ups play for the same team
