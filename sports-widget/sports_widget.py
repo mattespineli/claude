@@ -57,7 +57,7 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|aa8".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full1".encode()).hexdigest()[:16] + ".png")
 
 
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
@@ -162,6 +162,71 @@ def _shrink_png(data, f):
     return _png_bytes(ow, oh, out)
 
 
+def _area_resize(w, h, px, ow, oh):
+    """Exact area-average resize of RGBA pixels to ow x oh (alpha-weighted, so edges don't pick up a dark fringe):
+    each output pixel is the coverage-weighted mean of the source pixels under it, sampled once, with no blur."""
+    def spans(n, on):
+        """Per output index: [(source index, weight)] for the source pixels it covers."""
+        step, out = n / on, []
+        for o in range(on):
+            a, b = o * step, (o + 1) * step
+            row = []
+            for i in range(int(a), min(n, math.ceil(b))):
+                wt = min(b, i + 1) - max(a, i)
+                if wt > 1e-9:
+                    row.append((i, wt))
+            out.append(row)
+        return out
+    xs, ys = spans(w, ow), spans(h, oh)
+    tmp = []  # horizontal pass: per source row, (r*a, g*a, b*a, a) per output column
+    for y in range(h):
+        base, row = y * w * 4, []
+        for sp in xs:
+            r = g = b = a = 0.0
+            for i, wt in sp:
+                k = base + i * 4
+                al = px[k + 3] * wt
+                r += px[k] * al
+                g += px[k + 1] * al
+                b += px[k + 2] * al
+                a += al
+            row.append((r, g, b, a))
+        tmp.append(row)
+    out = bytearray()
+    for sp in ys:  # vertical pass
+        area = sum(wt for _i, wt in sp) * (w / ow)
+        for ox in range(ow):
+            r = g = b = a = 0.0
+            for i, wt in sp:
+                t = tmp[i][ox]
+                r += t[0] * wt
+                g += t[1] * wt
+                b += t[2] * wt
+                a += t[3] * wt
+            out += bytes((min(255, round(r / a)), min(255, round(g / a)), min(255, round(b / a)),
+                          min(255, round(a / area)))) if a > 1e-6 else b"\x00\x00\x00\x00"
+    return _png_bytes(ow, oh, out)
+
+
+def _full_logo(src, size):
+    """The logo at size x size from ESPN's original file (its largest, usually 500 px), area-averaged down in one step."""
+    req = urllib.request.Request("https://a.espncdn.com" + src, headers={"User-Agent": "sports-widget/1.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        dec = _png_rgba(r.read())
+    if not dec or dec[0] < size or dec[1] < size:
+        return None  # a format the decoder doesn't read, or smaller than asked: the resizer path instead
+    w, h, px = dec
+    if w != h:  # centre a non-square logo on a transparent square
+        n = max(w, h)
+        sq = bytearray(n * n * 4)
+        ox, oy = (n - w) // 2, (n - h) // 2
+        for y in range(h):
+            sq[((oy + y) * n + ox) * 4:((oy + y) * n + ox + w) * 4] = px[y * w * 4:(y + 1) * w * 4]
+        w = h = n
+        px = sq
+    return _area_resize(w, h, px, size, size)
+
+
 def _fetch_logo(src, size):
     req = urllib.request.Request(f"https://a.espncdn.com/combiner/i?img={src}&w={size}&h={size}",
                                  headers={"User-Agent": "sports-widget/1.0"})
@@ -184,7 +249,8 @@ def _smooth_logo(src, size):
 def logo_file(url, size):
     """Local PNG of a team logo scaled to size x size px (ESPN's image resizer), downloaded once; None on failure.
 
-    ESPN's "500-dark" variant is made for dark backgrounds (dark logos stay visible), so it is tried first.
+    ESPN's "500-dark" variant is made for dark backgrounds (dark logos stay visible), so it is tried first. The original,
+    full-size file is used when it can be decoded; ESPN's resizer (fetched larger and averaged down) otherwise.
     """
     path = logo_path(url, size)
     if os.path.exists(path):
@@ -193,9 +259,14 @@ def logo_file(url, size):
     body = None
     for cand in ([src.replace("/500/", "/500-dark/")] if "/500/" in src else []) + [src]:
         try:
-            body = _smooth_logo(cand, size)
+            body = _full_logo(cand, size)
         except Exception:
             body = None
+        if not body:
+            try:
+                body = _smooth_logo(cand, size)
+            except Exception:
+                body = None
         if body:
             break
     if not body:
@@ -3028,7 +3099,7 @@ def run_gui():
         return x + DIG_GAP
 
     # ---- team logos: downloaded once to logos/, loaded on first use, cards redraw when they arrive -------------
-    logo_imgs, logo_pending, logo_done = {}, set(), set()
+    logo_imgs, logo_pending, logo_done, logo_failed = {}, set(), set(), set()
 
     def logos_ready():
         logo_pending.clear()
@@ -3039,23 +3110,44 @@ def run_gui():
         fit()
 
     def logo_img(url, size):
-        key = (url, size)
+        """The logo as a Tk image, its antialiased edges already blended into the card's colour (Tk may draw
+        partial transparency as all-or-nothing, which leaves edges jagged)."""
+        bg = session.get("card_bg") or BG
+        key, dl = (url, size, bg), (url, size)
+        if dl in logo_failed:
+            return None
         if key in logo_imgs:
             return logo_imgs[key]
         path = logo_path(url, size)
         if os.path.exists(path):
             try:
-                logo_imgs[key] = tk.PhotoImage(file=path)
-            except tk.TclError:
+                with open(path, "rb") as f_:
+                    dec = _png_rgba(f_.read())
+                if dec:
+                    w_, h_, px_ = dec
+                    br, bgg, bb = _rgb(bg)
+                    out = bytearray()
+                    for i_ in range(0, len(px_), 4):
+                        a_ = px_[i_ + 3]
+                        if a_ == 0:
+                            out += b"\x00\x00\x00\x00"
+                        else:  # opaque, pre-blended with the background
+                            out += bytes((br + (px_[i_] - br) * a_ // 255, bgg + (px_[i_ + 1] - bgg) * a_ // 255,
+                                          bb + (px_[i_ + 2] - bb) * a_ // 255, 255))
+                    import base64
+                    logo_imgs[key] = tk.PhotoImage(data=base64.b64encode(_png_bytes(w_, h_, out)))
+                else:
+                    logo_imgs[key] = tk.PhotoImage(file=path)
+            except (tk.TclError, OSError):
                 logo_imgs[key] = None
             return logo_imgs[key]
-        if key not in logo_pending and not session["anims"]:
-            logo_pending.add(key)
+        if dl not in logo_pending and not session["anims"]:
+            logo_pending.add(dl)
 
             def work():
                 if not logo_file(url, size):
-                    logo_imgs[key] = None  # unavailable: don't keep retrying
-                logo_done.add(key)
+                    logo_failed.add(dl)  # unavailable: don't keep retrying
+                logo_done.add(dl)
                 if logo_pending <= logo_done:
                     root.after(0, logos_ready)  # the last outstanding logo arrived
             threading.Thread(target=work, daemon=True).start()
@@ -3891,6 +3983,8 @@ def run_gui():
             if t >= ce["secs"]:
                 continue
             bgc = lay["bgc"]
+            if lay["flash"]:  # text fades toward the card as it is right now, flash included, so hidden text stays hidden
+                bgc = blend(lay["flash"][2], ce["color"], 0.5 * max(0.0, 1 - t / FLASH_SECS) ** 2)
             a = banner_alpha(ce, t)
             try:
                 for i_, col in lay["banner"]:
@@ -3937,8 +4031,8 @@ def run_gui():
 
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
         """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
-        if ce["mode"] != "pulse" and not ce["grand"]:
-            return
+        if ce["mode"] != "pulse" and not ce["grand"] or ce.get("chained_in"):
+            return  # a follow-up (takes the lead, momentum swing) flashes the card but adds no ripples
         x0, y0, x1, y1 = bounds
         rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
         sets = 3 if ce["secs"] >= 6 else 1  # short events get one set
@@ -4036,10 +4130,11 @@ def run_gui():
         session["cur_celeb"] = (ce, ct)
         session["cur_key"] = card_key(r)
         base_bgc = bgc
+        session["card_bg"] = base_bgc  # logos blend their edges into this
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None and not ce.get("chained_in")
+        flashing = bool(ce) and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
         cx0, cw_ = x + 2, w - 4
