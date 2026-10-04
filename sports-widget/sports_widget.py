@@ -1974,6 +1974,7 @@ def run_gui():
     COLORS = {"in": "#34d399", "pre": DIM, "post": FG, "none": DIM, "err": "#f87171"}
     PANEL, HOVER = "#2a2a33", "#3a3a46"
     TRACK, LIVE_RED = "#3a3a44", "#ef4444"  # empty-bar track, LIVE badge
+    FLAG_YELLOW = "#facc15"  # PENALTY badge (the color of a penalty flag)
     UI_FONT = ("Segoe UI", 9)
     _font_objs = {}
 
@@ -2486,7 +2487,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {},
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -2944,8 +2945,9 @@ def run_gui():
             px += pw + 4
         return total
 
-    def draw_score(xr, y, text, color, bgc, key):
-        """One side's score, right-aligned at xr; rolls from the last value drawn for `key`. Returns the left edge."""
+    def draw_score(xr, y, text, color, bgc, key, center=False):
+        """One side's score, right-aligned at xr; rolls from the last value drawn for `key`. Returns the left edge.
+        `center`: the caller centres the score (xr is its centre plus half its width), so a crossfade text centres too."""
         prev = session["roll_last"].get(key)
         session["roll_last"][key] = text
         if ui_state.get("digital"):
@@ -2963,6 +2965,13 @@ def run_gui():
                 root.after(0, roll_tick)
         if not roll:
             i, _h = ctext(xr, y, text, FONTS["score"], color, anchor="ne")
+            xf, lay = session["xfade"], session["cur_layer"]
+            if xf and xf[0] == key and lay:  # a test score: the real one fades back in as the animation fades out
+                real = xf[1]
+                j, _h = (ctext(xr - score_width(text) / 2, y, real, FONTS["score"], color, anchor="n") if center
+                         else ctext(xr, y, real, FONTS["score"], color, anchor="ne"))
+                lay["xfade"] = (i, j, color)
+                xfade_apply(lay, _time.perf_counter() - lay["ce"]["t0"])
             return canvas.bbox(i)[0]
         hgt = font_obj(FONTS["score"]).metrics("linespace")
         x = xr
@@ -3000,15 +3009,46 @@ def run_gui():
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
-    def test_roll(r, side):
-        """Spin one side's score wheels a full turn, landing back on the same number (the score-change roll, for tests)."""
-        text = str(r["score"][side])
-        rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
-        seqs = [[str((int(ch) + n) % 10) for n in range(11)] if ch.isdigit() else [ch] for ch in text]
-        session["rolls"][(rk, side)] = {"to": text, "seqs": seqs, "t0": _time.perf_counter(), "dur": ROLL_MAX * 1.3}
-        if not session["rolling"]:
-            session["rolling"] = True
-            root.after(0, roll_tick)
+    TEST_POINTS = {"TOUCHDOWN": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2}
+
+    def test_score(r, k, side, head):
+        """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
+        try:
+            a_, b_ = float(r["score"][0]), float(r["score"][1])
+        except (ValueError, TypeError, IndexError):
+            return
+        mine, other = (a_, b_) if side == 0 else (b_, a_)
+        new = mine + (TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
+        session["test_scores"][k] = {"side": side, "text": f"{new:g}", "ce": session["celebs"].get(k)}
+
+    def test_view(r):
+        """The card as a running scoring test shows it (its points added); the real card once the test is over."""
+        k = card_key(r)
+        ov = session["test_scores"].get(k)
+        if not ov:
+            return r
+        ce = session["celebs"].get(k)
+        if ce is not ov["ce"] or _time.perf_counter() - ce["t0"] >= ce["secs"]:  # over: back to the real score, no roll
+            del session["test_scores"][k]
+            session["roll_last"][(k, ov["side"])] = str(r["score"][ov["side"]])
+            session["rolls"].pop((k, ov["side"]), None)
+            return r
+        sc = list(r["score"])
+        real = str(sc[ov["side"]])
+        sc[ov["side"]] = ov["text"]
+        return dict(r, score=sc, _real=r, _xfade=((k, ov["side"]), real))
+
+    def xfade_apply(lay, t):
+        """Test score -> real score while the banner fades out: the test score fades away, then the real one fades in."""
+        fake, real, col = lay["xfade"]
+        ce = lay["ce"]
+        o = max(0.0, min(1.0, (t - (ce["secs"] - out_secs(ce))) / out_secs(ce)))
+        if o < 0.5:
+            canvas.itemconfigure(fake, state="normal", fill=blend(lay["bgc"], col, 1 - 2 * o))
+            canvas.itemconfigure(real, state="hidden")
+        else:
+            canvas.itemconfigure(fake, state="hidden")
+            canvas.itemconfigure(real, state="normal", fill=blend(lay["bgc"], col, 2 * o - 1))
 
     def roll_tick():
         now = _time.perf_counter()  # (frame budget FRAME_MS: every animation loop aims at 120 frames a second)
@@ -3160,7 +3200,17 @@ def run_gui():
             my += h
         if lp and live:  # what just happened, in the free space at the bottom of the middle
             cap_ = 60 if bb else 84  # baseball's middle is already full
-            text = lp["text"] if len(lp["text"]) <= cap_ else lp["text"][:cap_ - 1].rstrip() + "\u2026"
+            text = lp["text"]
+            football = (r.get("game") or {}).get("sport") == "football" or any(g_["kind"] == "football" for g_ in gl)
+            if football and re.search(r"\bpenalty\b", text, re.I):
+                # a flag on the play: PENALTY in a yellow box (like the LIVE badge), the rest of the play below it
+                text = re.sub(r"^\s*penalty\b[\s,:-]*", "", text, flags=re.I) or text
+                pw = text_width(FONTS["sec"], "PENALTY") + 12
+                canvas.create_polygon(rr_points(mx - pw / 2, my + 4, mx + pw / 2, my + 18, 5), smooth=True, fill=FLAG_YELLOW,
+                                      outline=FLAG_YELLOW, tags=tags)
+                canvas.create_text(mx, my + 11, text="PENALTY", fill="#1e1e24", font=FONTS["sec"], tags=tags)
+                my += 18
+            text = text if len(text) <= cap_ else text[:cap_ - 1].rstrip() + "\u2026"
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
             my += 4 + h
         banner = bool(ce and ce.get("banner"))
@@ -3189,7 +3239,7 @@ def run_gui():
                 canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
             yy += lg + 2 + gap
             if sc:
-                draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i))
+                draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
             _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
             yy += h
@@ -3558,6 +3608,7 @@ def run_gui():
                 if bb_ and bb_[3] > top_ and bb_[1] < bot_:
                     shown.append((bb_[1], payload[1]))
         shown.sort(key=lambda t_: t_[0])
+        shown = [(y_, r_.get("_real", r_)) for y_, r_ in shown]
         r = next((r for _y, r in shown if r["state"] == "in"), None) or (shown[0][1] if shown else None)
         if not r:
             styled_message("Test animations", "No game card is in view to play it on. Switch to the Games tab and scroll to a game.", win_ref[0])
@@ -3583,12 +3634,13 @@ def run_gui():
         scoring = kind in ("score", "run", "grand")
         import random
         side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
-        if scoring and side is not None and r.get("score"):
-            test_roll(r, side)
         make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
+        session["test_scores"].pop(k, None)
+        if scoring and side is not None and r.get("score"):
+            test_score(r, k, side, head)
 
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
@@ -3620,6 +3672,8 @@ def run_gui():
                     for i_ in (bgid, hit):
                         if i_:
                             canvas.itemconfigure(i_, fill=col, **({"outline": col} if i_ == bgid else {}))
+                if lay.get("xfade"):
+                    xfade_apply(lay, t)
                 canvas.delete(lay["tag"])
                 if lay["ring"]:
                     draw_rings(*lay["ring"][0], ce, t, bgc, lay["ring"][1], lay["tag"])
@@ -3731,6 +3785,8 @@ def run_gui():
             lay["banner"] += parts
 
     def draw_card(r, x, y, w, final):
+        r = test_view(r)
+        session["xfade"] = r.get("_xfade")
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
         ce, ct = celeb_of(r)  # this card's team just scored
