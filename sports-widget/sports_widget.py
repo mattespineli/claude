@@ -3869,7 +3869,7 @@ def run_gui():
         end = max(d_ + (len(p_) - 1) * FIELD_LEG for d_, p_ in runners)
         if base is not None and n and side is not None:  # the score holds its old value, then counts up as each runner reaches home
             session["run_hold"][k] = {"side": side, "base": base, "n": n, "started": False}
-        chain_event(k, (r, k, side, "", None, end + 1.7, mode, ""), {"field": (head, occ, n, after), "out": 0.6})
+        chain_event(k, (r, k, side, "", None, end + 2.5, mode, ""), {"field": (head, occ, n, after), "out": 0.6})
 
     def detect_scores(groups):
         """Compare live games with the last refresh and start an animation for each card where something happened:
@@ -4410,7 +4410,8 @@ def run_gui():
 
     UNIT_CIRCLE = [(math.cos(a_ * math.pi / 45), math.sin(a_ * math.pi / 45)) for a_ in range(90)]
 
-    FIELD_LEG = 0.4  # seconds a runner takes between two bases
+    FIELD_LEG = 0.55  # seconds a runner takes between two bases
+    FIELD_GAP = 0.5  # seconds between one runner starting and the next
 
     def is_field_play(head):
         """Baseball headlines that get the base-running diamond after their banner."""
@@ -4426,8 +4427,8 @@ def run_gui():
         need = max(0, n - 1 if homer else n)
         pool = on + [b_ for b_ in (3, 2, 1) if b_ not in on]  # a run can score with nobody on (a wild pitch, a walk-off...)
         scorers = pool[:need]
-        runners = [(0.35 * i, list(range(b_, 4)) + [0]) for i, b_ in enumerate(scorers)]
-        delay = 0.35 * len(scorers)
+        runners = [(FIELD_GAP * i, list(range(b_, 4)) + [0]) for i, b_ in enumerate(scorers)]
+        delay = FIELD_GAP * len(scorers)
         if hit and after is not None:  # a real game: the men still on and the batter end up exactly where ESPN now has them
             movers = [b_ for b_ in on if b_ not in scorers] + [0]  # farthest round first, the batter last
             finals = [b_ for b_ in (3, 2, 1) if after[b_ - 1]]
