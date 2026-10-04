@@ -2329,12 +2329,23 @@ def run_gui():
             return 44
         if kind == "football":
             px = lambda yd: W * (yd + 10) / 120  # yards from the offense's goal line, with an end zone at each end
-            c.create_rectangle(0, 14, W, 20, fill=TRACK, outline="")
+            import math
+
+            def cap(x0, x1, left, right):
+                """Polygon for the bar from x0 to x1 (y 14-20) with a half-circle end where `left` / `right` is set."""
+                pts = []
+                for k in range(9):  # left end: from the top round to the bottom
+                    t = math.pi / 2 + math.pi * k / 8
+                    pts += [x0 + 3 + 3 * math.cos(t), 17 - 3 * math.sin(t)] if left else ([x0, 14] if k == 0 else [x0, 20] if k == 8 else [])
+                for k in range(9):  # right end: from the bottom round to the top
+                    t = -math.pi / 2 + math.pi * k / 8
+                    pts += [x1 - 3 + 3 * math.cos(t), 17 - 3 * math.sin(t)] if right else ([x1, 20] if k == 0 else [x1, 14] if k == 8 else [])
+                return pts
+            c.create_polygon(cap(0, W, True, True), fill=TRACK, outline="")
             if g["red"]:
                 c.create_rectangle(px(80), 14, px(100), 20, fill="#7f3b3b", outline="")
-            ez = px(0)  # end zones in the team colors: the offense's own on the left, the one it attacks on the right
-            c.create_rectangle(0, 14, ez, 20, fill=g.get("color", "#52526a"), outline="")
-            c.create_rectangle(px(100), 14, W, 20, fill=g.get("def_color", "#52526a"), outline="")
+            c.create_polygon(cap(0, px(0), True, False), fill=g.get("color", "#52526a"), outline="")  # end zones in team colors:
+            c.create_polygon(cap(px(100), W, False, True), fill=g.get("def_color", "#52526a"), outline="")  # own, then the one attacked
             for yd in range(0, 101, 10):  # goal lines and a line every 10 yards
                 c.create_line(px(yd), 14, px(yd), 20, fill=FG if yd in (0, 100) else "#7a7a88")
             if g["first"] is not None:
