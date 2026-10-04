@@ -57,7 +57,7 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full3".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full4".encode()).hexdigest()[:16] + ".png")
 
 
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
@@ -167,18 +167,26 @@ _TO_LIN = [(i / 255) ** _LOGO_GAMMA for i in range(256)]
 
 
 def _area_resize(w, h, px, ow, oh):
-    """Resize RGBA pixels to ow x oh with a Gaussian filter (sigma 0.45 output pixels), weighting by alpha and averaging
-    colours at a gamma between sRGB and linear light. A box average leaves thin rings and diagonals visibly stepped at
-    icon sizes; the Gaussian smooths them without blurring the logo."""
+    """Resize RGBA pixels to ow x oh with a Lanczos-3 filter (windowed sinc, stretched to the reduction so it
+    antialiases), weighting by alpha and averaging colours at a gamma between sRGB and linear light. Sharper than a
+    box or Gaussian average: thin rings and diagonals stay crisp without stepping. Overshoot is clamped."""
     def spans(n, on):
         """Per output index: [(source index, weight)], the weights adding up to 1."""
         step, out = n / on, []
-        sig, rad = 0.45 * step, 1.5 * step
+        sc = max(step, 1.0)
+        rad = 3 * sc
+        def lanczos(t):
+            t = abs(t)
+            if t >= 3:
+                return 0.0
+            if t < 1e-9:
+                return 1.0
+            return 3 * math.sin(math.pi * t) * math.sin(math.pi * t / 3) / (math.pi * t) ** 2
         for o in range(on):
             c = (o + 0.5) * step
             row = []
             for i in range(max(0, int(c - rad)), min(n, math.ceil(c + rad))):
-                row.append((i, math.exp(-0.5 * ((i + 0.5 - c) / sig) ** 2)))
+                row.append((i, lanczos((i + 0.5 - c) / sc)))
             tot = sum(wt for _i, wt in row)
             out.append([(i, wt / tot) for i, wt in row])
         return out
@@ -209,8 +217,11 @@ def _area_resize(w, h, px, ow, oh):
                 g += t[1] * wt
                 b += t[2] * wt
                 a += t[3] * wt
-            out += bytes((min(255, round(255 * (r / a) ** inv)), min(255, round(255 * (g / a) ** inv)),
-                          min(255, round(255 * (b / a) ** inv)), min(255, round(a)))) if a > 1e-6 else b"\x00\x00\x00\x00"
+            if a > 1e-6:
+                cl = lambda v: max(0, min(255, round(255 * max(0.0, v / a) ** inv)))
+                out += bytes((cl(r), cl(g), cl(b), max(0, min(255, round(a)))))
+            else:
+                out += b"\x00\x00\x00\x00"
     return _png_bytes(ow, oh, out)
 
 
