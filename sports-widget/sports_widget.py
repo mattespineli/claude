@@ -4060,7 +4060,7 @@ def run_gui():
         return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), None)  # None: no team to attach it to
 
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None,
-                   chained_in=False, chained_out=False, field=None, out=None):
+                   chained_in=False, chained_out=False, field=None, out=None, shake=False):
         """Start a celebration (animation + optional sound) on card k. `field`: a baseball run's (head, men on, runs), drawn as
         a little diamond instead of text; `out`: how long its fade-out takes."""
         now = _time.perf_counter()
@@ -4071,7 +4071,7 @@ def run_gui():
             "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
             "tcolor": t.get("gcolor") or t.get("color"), "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
             "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out,
-            "field": field, "out": out}
+            "field": field, "out": out, "shake": shake or grand}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
         if banner and not field and not chained_in:  # every animation plays the same chord (the steps of a base run do not repeat it)
             play_sound()
@@ -4143,8 +4143,10 @@ def run_gui():
         queue = session["celeb_next"].setdefault(k, [])
         if queue:
             queue[-1][1]["chained_out"] = True
+            queue[-1][1]["shake"] = queue[-1][0][3] != "FAILED CHALLENGE"  # the headline shakes when something follows it, but a failed challenge deflates
         elif k in session["celebs"]:
             session["celebs"][k]["chained_out"] = True
+            session["celebs"][k]["shake"] = session["celebs"][k]["head"] != "FAILED CHALLENGE"
         else:
             make_event(*args, **kw)
             return
@@ -4353,7 +4355,7 @@ def run_gui():
 
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
     TESTS = [("Touchdown", "TOUCHDOWN!", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
-             ("Home run", "HOME RUN!", "run", None), ("Inside-the-park HR", "INSIDE THE PARK HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
+             ("Home run", "HOME RUN!", "run", None), ("Inside-the-park HR", "INSIDE THE PARK HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", None),
              ("Three-pointer", "THREE-POINTER", "score", None), ("Two-pointer", "TWO-POINTER", "score", None), ("Slam dunk", "SLAM DUNK!", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX!", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
@@ -4684,6 +4686,10 @@ def run_gui():
             try:
                 for i_, col in lay["banner"]:
                     canvas.itemconfigure(i_, fill=blend(bgc, col, a))
+                if lay.get("shake"):  # the headline trembles as it lands, then settles
+                    hi_, bx_, by_ = lay["shake"]
+                    amp = 3.0 * a * max(0.0, 1 - max(0.0, t - INFO_OUT) / 1.4)
+                    canvas.coords(hi_, bx_ + amp * math.sin(t * 75), by_ + amp * math.cos(t * 91))
                 ia = info_alpha(ce, t)
                 for i_, opt, base in lay["fade"]:
                     if opt == "pill":
@@ -4960,6 +4966,7 @@ def run_gui():
                 break
         i_, h = ctext(cx, y, ce["head"], bfont, blend(bgc, col, a), width=w, anchor="n", justify="center")
         parts.append((i_, col))
+        head_i = i_
         y += h
         if ce["detail"]:
             col = blend(bgc, FG, 0.9)
@@ -4972,6 +4979,8 @@ def run_gui():
                 canvas.move(i_, 0, shift)
         if lay:
             lay["banner"] += parts
+            if ce.get("shake"):
+                lay["shake"] = (head_i, *canvas.coords(head_i)[:2])
 
     FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
 
