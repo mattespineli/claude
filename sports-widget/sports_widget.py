@@ -3022,8 +3022,12 @@ def run_gui():
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
             my += 4 + h
         banner = bool(ce and ce.get("banner"))
-        if banner:  # the banner takes the middle for a few seconds, without changing the card's height
-            canvas.delete(*canvas.find_all()[n0:])
+        if banner:  # the banner takes the middle for a few seconds (crossfading), without changing the card's height
+            keep = 1 - banner_alpha(ce, ct)
+            if keep < 0.03:
+                canvas.delete(*canvas.find_all()[n0:])
+            else:
+                fade_items(canvas.find_all()[n0:], bgc, keep)
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
@@ -3413,9 +3417,25 @@ def run_gui():
             if len(run) > 1:
                 canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd)
 
+    def banner_alpha(ce, t):
+        """0..1 visibility of a banner: eased (smoothstep) fades, slower out than in."""
+        ease = lambda v: (lambda u: u * u * (3 - 2 * u))(max(0.0, min(1.0, v)))
+        return ease(t / 0.45) * ease((ce["secs"] - t) / 0.9)
+
+    def fade_items(ids, bgc, f):
+        """Blend the colors of existing canvas items toward the card background (f = 1: unchanged, 0: gone)."""
+        for i_ in ids:
+            for opt in ("fill", "outline"):
+                try:
+                    c_ = canvas.itemcget(i_, opt)
+                    if len(c_) == 7 and c_.startswith("#"):
+                        canvas.itemconfigure(i_, **{opt: blend(bgc, c_, f)})
+                except tk.TclError:
+                    pass
+
     def draw_banner(cx, y0, y1, w, ce, t, bgc):
         """The scoring banner centred in the box (y0..y1): team, what happened, the play. Fades in and out."""
-        a = max(0.0, min(1.0, t / 0.25, (ce["secs"] - t) / 0.5))
+        a = banner_alpha(ce, t)
         n0_ = len(canvas.find_all())
         y = y0
         if ce["abbr"]:
@@ -3499,6 +3519,7 @@ def run_gui():
                 if ce and i == (ce["side"] if len(urls) == 2 else (0 if ce["side"] == 0 else -1)):
                     draw_rings(ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2, ce, ct, bgc,
                                (cx0 + 1, y + 1, cx0 + cw_ - 1, y + GAP + len(urls) * (lg_size + 2) + 10))
+            n_head = len(canvas.find_all())
             _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
             y_head = yy
             yy += h
@@ -3507,7 +3528,7 @@ def run_gui():
                 yy += h
             if ce and ce.get("banner"):  # the banner covers the name and opponent for a few seconds
                 by1 = max(yy, y_head + 40)
-                canvas.create_rectangle(tx - 2, y_head - 2, tx + text_w + 2, by1, fill=bgc, outline="")
+                fade_items(canvas.find_all()[n_head:], bgc, 1 - banner_alpha(ce, ct))
                 draw_banner(tx + text_w / 2, y_head, by1, text_w, ce, ct, bgc)
             if sc:
                 yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
