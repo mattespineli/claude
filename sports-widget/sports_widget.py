@@ -931,6 +931,21 @@ def comp_logos(comp):
     return [_logo(c.get("team", {})) for c in pair]
 
 
+def series_info(comp):
+    """{"head": 'East 1st Round - Game 3', "text": 'BOS leads series 2-1' / 'BOS wins series 4-2'} for a playoff game, else None."""
+    ser = comp.get("series") or {}
+    head = str((comp.get("notes") or [{}])[0].get("headline") or "").strip()
+    text = str(ser.get("summary") or "").strip()
+    wins = [(c.get("id"), int(c.get("wins") or 0)) for c in ser.get("competitors") or []]
+    if ser.get("completed") and len(wins) == 2 and "win" not in text.lower():  # ESPN's summary doesn't always name the winner
+        (wid, w_), (_lid, l_) = sorted(wins, key=lambda t: -t[1])
+        abbr = next((c.get("team", {}).get("abbreviation") for c in comp.get("competitors", [])
+                     if str(c.get("id", c.get("team", {}).get("id"))) == str(wid)), "")
+        if abbr:
+            text = f"{abbr} wins series {w_}-{l_}"
+    return {"head": head, "text": text} if head or text else None
+
+
 def comp_teams(comp, first=None):
     """Both teams of a game for the Scoreboard layout, [{logo, abbr, ha}]: `first` (a competitor) first, else away then home."""
     cs = comp.get("competitors", [])
@@ -1189,7 +1204,8 @@ def team_status(entry):
         comp_ = event["competitions"][0]
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
-    return {"teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
+    return {"series": series_info(event["competitions"][0]) if state == "post" else None,
+            "teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
@@ -1314,7 +1330,8 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             parts = score_parts(e)
-            row = {"logos": comp_logos(comp), "teams": comp_teams(comp), "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+            row = {"logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
+                   "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
                    "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
@@ -1569,6 +1586,7 @@ def pinned_status(pin):
             if s:
                 parts = score_parts(e)
                 return {"logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0]),
+                        "series": series_info(e["competitions"][0]) if s[0] == "post" else None,
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
@@ -2858,6 +2876,18 @@ def run_gui():
                 yy += 12 + gap
             colb = max(colb, yy)
         yy = max(colb, my) + 2
+        sr = r.get("series") if r["state"] == "post" else None
+        if sr:  # a finished playoff game: which game of the series it was, and where the series stands
+            canvas.create_line(ix, yy + 2, ix + ww, yy + 2, fill=blend(bgc, FG, 0.12))
+            yy += 6
+            if sr["head"]:
+                _, h = ctext(mx, yy, sr["head"], FONTS["small"], DIM, width=ww, anchor="n", tags=tags, justify="center")
+                yy += h
+            if sr["text"]:
+                won = "win" in sr["text"].lower()
+                _, h = ctext(mx, yy, sr["text"], FONTS["detb"], COLORS["in"] if won else FG, width=ww, anchor="n", tags=tags, justify="center")
+                yy += h
+            yy += 2
         if gl:
             yy += graphics(ix, yy, gl, bgc, ww)
         return yy, "\n".join(lines)
