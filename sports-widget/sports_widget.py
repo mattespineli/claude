@@ -953,6 +953,54 @@ def series_info(comp):
     return {"head": head, "text": text} if head or text else None
 
 
+def _postseason_event(e):
+    st = e.get("seasonType") or (e.get("season") or {}).get("type")
+    t = st.get("type") if isinstance(st, dict) else st
+    try:
+        return int(t) == 3
+    except (TypeError, ValueError):
+        return False
+
+
+def series_from_schedule(events, event, team_abbr):
+    """Series status worked out from the team's own schedule, for when ESPN's game data carries none:
+    'GS wins series 2-1' once no more games against that opponent are scheduled, else 'GS leads series 2-1' / 'Series tied 1-1'."""
+    def sides(e):
+        comp = e["competitions"][0]
+        me = _find_me(comp, team_abbr)
+        opp = next((c for c in comp.get("competitors", []) if c is not me), None)
+        return (me, opp) if me and opp else (None, None)
+    _me, opp0 = sides(event)
+    if not opp0:
+        return ""
+    oid = str(opp0.get("team", {}).get("id", opp0.get("id")))
+    won = lost = ahead = 0
+    for e in events:
+        if not e.get("competitions") or not _postseason_event(e):
+            continue
+        me, opp = sides(e)
+        if not opp or str(opp.get("team", {}).get("id", opp.get("id"))) != oid:
+            continue
+        st = _state_of(e)
+        if st == "pre":
+            ahead += 1
+        elif st == "post":
+            try:
+                a_, b_ = float(_score(me)), float(_score(opp))
+            except ValueError:
+                continue
+            won += a_ > b_
+            lost += a_ < b_
+    if not won and not lost:
+        return ""
+    mine = (_me.get("team", {}).get("abbreviation") or team_abbr).upper()
+    theirs = opp0.get("team", {}).get("abbreviation", "OPP")
+    lead, trail, who = (won, lost, mine) if won >= lost else (lost, won, theirs)
+    if not ahead and won != lost:
+        return f"{who} wins series {lead}-{trail}"
+    return f"{who} leads series {lead}-{trail}" if won != lost else f"Series tied {won}-{lost}"
+
+
 def comp_teams(comp, first=None):
     """Both teams of a game for the Scoreboard layout, [{logo, abbr, ha}]: `first` (a competitor) first, else away then home."""
     cs = comp.get("competitors", [])
@@ -1215,6 +1263,10 @@ def team_status(entry):
     if state == "post" and not ser:  # schedule data often lacks the series; the scoreboard's copy of the game has it
         sb_ev = scoreboard_event(entry["sport"], entry["league"], event)
         ser = series_info(sb_ev["competitions"][0]) if sb_ev else None
+    if state == "post" and not (ser or {}).get("text") and _postseason_event(event):  # still nothing: count it from the schedule
+        text = series_from_schedule(events, event, entry["team"])
+        if text:
+            ser = {"head": (ser or {}).get("head", ""), "text": text}
     return {"series": ser,
             "teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
