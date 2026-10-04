@@ -954,16 +954,22 @@ def situation_graphic(sport, comp, league=""):
     return out or None
 
 
+COLLEGE_GROUPS = {"college-football": ("80", "81"), "mens-college-basketball": ("50",),
+                  "womens-college-basketball": ("50",)}  # FBS/FCS, Division I
+
+
 def fresh_event(entry, event):
     """The live game from ESPN's scoreboard, fetched now (schedule data lacks live scores and situation)."""
     today = datetime.now().astimezone().date()
     rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
-    try:
-        for e in fetch_scoreboard(entry["sport"], entry["league"], rng):
-            if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
-                return e
-    except Exception:
-        pass
+    # ESPN's default college scoreboard lists only featured games; the other games need their conference group
+    for groups in (None,) + COLLEGE_GROUPS.get(entry["league"], ()):
+        try:
+            for e in fetch_scoreboard(entry["sport"], entry["league"], rng, groups):
+                if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
+                    return e
+        except Exception:
+            pass
     return None
 
 
@@ -1307,8 +1313,10 @@ def save_pinned(pins):
         json.dump(pins, f, indent=2)
 
 
-def _get_scoreboard(sport, league, date, limit):
+def _get_scoreboard(sport, league, date, limit, groups=None):
     url = SCOREBOARD.format(sport=sport, league=league, date=date)
+    if groups:
+        url += f"&groups={groups}"
     if limit:
         url += f"&limit={limit}"
     data = get_json(url)
@@ -1320,33 +1328,33 @@ def _get_scoreboard(sport, league, date, limit):
     return events
 
 
-def fetch_scoreboard(sport, league, date):
+def fetch_scoreboard(sport, league, date, groups=None):
     """Scoreboard events for a YYYYMMDD date or YYYYMMDD-YYYYMMDD range.
 
     Cached for a few seconds, so the many callers in one refresh (live teams, tracked games,
     Leagues, Playoffs) that want the same scoreboard share one request.
     """
-    return cached(("scoreboard", sport, league, date), 5, lambda: _fetch_scoreboard(sport, league, date))
+    return cached(("scoreboard", sport, league, date, groups), 5, lambda: _fetch_scoreboard(sport, league, date, groups))
 
 
-def _fetch_scoreboard(sport, league, date):
+def _fetch_scoreboard(sport, league, date, groups=None):
     """ESPN answers HTTP 400 to parameter combinations it dislikes, so fall back:
     range + limit -> range alone -> one request per day.
     """
     try:
-        return _get_scoreboard(sport, league, date, 300)
+        return _get_scoreboard(sport, league, date, 300, groups)
     except urllib.error.HTTPError as ex:
         if ex.code != 400:
             raise
     try:
-        return _get_scoreboard(sport, league, date, None)
+        return _get_scoreboard(sport, league, date, None, groups)
     except urllib.error.HTTPError as ex:
         if ex.code != 400 or "-" not in date:
             raise
     start, end = (datetime.strptime(d, "%Y%m%d") for d in date.split("-"))
     days = [f"{start + timedelta(days=i):%Y%m%d}" for i in range((end - start).days + 1)]
     events, seen = [], set()
-    for day_events in pmap(lambda day: _get_scoreboard(sport, league, day, None), days):
+    for day_events in pmap(lambda day: _get_scoreboard(sport, league, day, None, groups), days):
         for e in day_events:
             if e.get("id") not in seen:
                 seen.add(e.get("id"))
