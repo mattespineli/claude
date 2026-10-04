@@ -4072,7 +4072,7 @@ def run_gui():
         opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
         relayout = [lambda: None]  # re-lists the test buttons for the chosen sport (set once they exist)
         sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
-        MINE_ = ("Trigger for", "mine", (("Away", 0), ("Home", 1)))  # which side of the dummy card is the user's team
+        MINE_ = ("Trigger for", "mine", (("Left", 0), ("Right", 1)))  # the side of the dummy card every test plays for
         LEAD_ = ("Lead", "lead", (("Tied", "tied"), ("Close", "close"), ("Blowout", "blowout")))
         QTR_ = lambda title, n: (title, "q", tuple((str(i), i) for i in range(1, n + 1)))
         OPTS_ = {  # what each sport's dummy card can be set to: (title, key, ((label, value), ...))
