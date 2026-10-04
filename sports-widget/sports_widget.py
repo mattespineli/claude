@@ -2556,6 +2556,7 @@ def run_gui():
     container.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 0))
     container.grid_rowconfigure(0, weight=1)
     container.grid_columnconfigure(0, weight=1)
+    container.grid_columnconfigure(1, minsize=8)  # the scroll bar's room is always reserved, so it appearing never changes the width
     canvas = tk.Canvas(container, bg=BG, highlightthickness=0, width=330, height=100)
     scroll = tk.Canvas(container, width=8, height=1, bg=BG, highlightthickness=0, cursor="arrow")
     sb = {"lo": 0.0, "hi": 1.0, "off": 0.0, "hover": False}
