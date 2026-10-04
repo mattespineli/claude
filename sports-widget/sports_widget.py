@@ -2554,7 +2554,7 @@ def run_gui():
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
-               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
+               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_next": {}, "celeb_on": False,
                "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
@@ -3348,7 +3348,7 @@ def run_gui():
             my += 4 + h
         banner = bool(ce and ce.get("banner"))
         if banner:  # the banner takes the middle for a few seconds (crossfading), without changing the card's height
-            fade_items(items_since(n0), bgc, 1 - banner_alpha(ce, ct))  # never deleted: the frames fade it back in
+            fade_items(items_since(n0), bgc, info_alpha(ce, ct))  # never deleted: the frames fade it back in
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
@@ -3580,7 +3580,8 @@ def run_gui():
                 return 1 - bat if head in fielding else bat
         return next((i for i, t in enumerate(tm) if ptid and t.get("id") == ptid), None)  # None: no team to attach it to
 
-    def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None):
+    def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None,
+                   chained_in=False, chained_out=False):
         """Start a celebration (animation + optional sound) on card k."""
         now = _time.perf_counter()
         secs = max(secs, ripple_end(secs) + 0.4)  # long enough for the ripples to clear before the fade-out
@@ -3589,13 +3590,25 @@ def run_gui():
         session["celebs"][k] = {
             "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
             "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
-            "grand": grand, "run": run, "tag": tag, "secs": secs}
+            "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
         if sound:
             play_sound(sound)
         if not session["celeb_on"]:
             session["celeb_on"] = True
             root.after(0, celeb_tick)
+
+    def chain_event(k, args, kw):
+        """Play an event on card k once its current one ends, the card's own info staying hidden in between."""
+        queue = session["celeb_next"].setdefault(k, [])
+        if queue:
+            queue[-1][1]["chained_out"] = True
+        elif k in session["celebs"]:
+            session["celebs"][k]["chained_out"] = True
+        else:
+            make_event(*args, **kw)
+            return
+        queue.append((args, dict(kw, chained_in=True)))
 
     def detect_scores(groups):
         """Compare live games with the last refresh and start an animation for each card where something happened:
@@ -3651,10 +3664,20 @@ def run_gui():
                 downs[k] = int(m4.group(1))
             if prev is None or mode == "off":
                 continue
+            old_w = session["win_prev"].get(k)  # a big swing in win probability: shown after whatever caused it
+            swing = None
+            if wv is not None and old_w is not None and abs(wv - old_w) >= 25:
+                w_ = r["win"]
+                up_away = wv > old_w
+                gain, pct = (w_["a_name"], wv) if up_away else (w_["b_name"], 100 - wv)
+                swing = ((r, k, 0 if up_away else 1, "MOMENTUM SWING", None, 4.0, mode, f"{gain} win probability now {pct:g}%"),
+                         {"sound": "swing"})
             if m4:
                 if downs[k] == 4 and session["down_prev"].get(k, 4) != 4 and k not in session["celebs"]:
                     make_event(r, k, acting_side(r, "4TH DOWN"), "4TH DOWN", None, 3.5, mode, (r.get("info") or "").split("\n")[0].replace(" \u00b7 ", "  \u00b7  "),
                                sound="fourth")
+                    if swing:
+                        chain_event(k, *swing)
                     continue
             d = (cur[0] - prev[0], cur[1] - prev[1])
             if max(d) > 0:  # somebody scored
@@ -3663,12 +3686,14 @@ def run_gui():
                 before, after = prev[0] - prev[1], cur[0] - cur[1]
                 tag = ("TIES IT UP" if after == 0 else "TAKES THE LEAD" if before * after < 0 or (before == 0 and after != 0) else "")
                 grand = head == "GRAND SLAM!"
-                make_event(r, k, side, head, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
-                           banner=banner or bool(tag), grand=grand, run=sport == "baseball", tag=tag,
-                           sound="grand" if grand else "score")
-                if not banner and tag:  # a basket that changes the lead: say that instead
-                    session["celebs"][k]["head"] = tag
-                    session["celebs"][k]["tag"] = ""
+                make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
+                           banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
+                if banner and tag and head != tag:  # the lead changing hands follows the score that did it
+                    tm_ = [t_.get("abbr", "") for t_ in r.get("teams") or []]
+                    line = f"{tm_[0]} {cur[0]:g} \u2013 {tm_[1]} {cur[1]:g}" if len(tm_) == 2 else ""
+                    chain_event(k, (r, k, side, tag, None, 3.5, mode, line), {})
+                if swing:
+                    chain_event(k, *swing)
                 continue
             old = session["play_prev"].get(k)  # nobody scored: a big play?
             big = classify_play(sport, ptext) if old is not None and ptext and ptext != old else None
@@ -3686,14 +3711,11 @@ def run_gui():
                         side = tm_.index(pm.group(1).upper())
                 make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") + KICK_PLAYS else None)
+                if swing:
+                    chain_event(k, *swing)
                 continue
-            old_w = session["win_prev"].get(k)  # or a big swing in win probability
-            if wv is not None and old_w is not None and abs(wv - old_w) >= 25 and k not in session["celebs"]:
-                w_ = r["win"]
-                up_away = wv > old_w
-                gain, pct = (w_["a_name"], wv) if up_away else (w_["b_name"], 100 - wv)
-                make_event(r, k, 0 if up_away else 1, "MOMENTUM SWING", None, 4.0, mode, f"{gain} win probability now {pct:g}%",
-                           sound="swing")
+            if swing:  # on its own, or after an animation still playing from the last refresh
+                chain_event(k, *swing)
         session["score_prev"] = seen
         session["play_prev"] = plays
         session["win_prev"] = wins
@@ -3743,8 +3765,7 @@ def run_gui():
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
     TESTS = [("Touchdown", "TOUCHDOWN", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
              ("Home run", "HOME RUN", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
-             ("Three-pointer", "THREE-POINTER", "score", None), ("Takes the lead", "TAKES THE LEAD", "score", None),
-             ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Fumble", "FUMBLE", "turnover", "#f87171"),
+             ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Fumble", "FUMBLE", "turnover", "#f87171"),
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
@@ -3752,13 +3773,12 @@ def run_gui():
              ("Turnover on downs", "TURNOVER ON DOWNS", "turnover", None),
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
-             ("Momentum swing", "MOMENTUM SWING", "swing", None),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
              ("Run scores", "RUN SCORES", "run", None), ("RBI single", "RBI SINGLE", "run", None),
              ("RBI double", "RBI DOUBLE", "run", None), ("RBI triple", "RBI TRIPLE", "run", None),
              ("Triple play", "TRIPLE PLAY", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
-             ("Ties it up", "TIES IT UP", "score", None), ("Extra point", "EXTRA POINT", "score", None),
+             ("Extra point", "EXTRA POINT", "score", None),
              ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt TD", "BLOCKED PUNT TD", "score", None),
              ("Blocked PAT", "BLOCKED PAT", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
              ("Punt", "PUNT", "play", "#9aa0a6"),
@@ -3768,7 +3788,7 @@ def run_gui():
     win_ref = [None]
 
     def fire_test(label):
-        """Play one animation on the first live card (else the first card with two teams)."""
+        """Play one animation on the first live card (else the first card with two teams). The reason when it can't play."""
         top_, bot_ = canvas.canvasy(0), canvas.canvasy(canvas.winfo_height())
         shown = []  # game cards in view, top to bottom
         for tag, payload in session["hits"].items():
@@ -3780,8 +3800,7 @@ def run_gui():
         shown = [(y_, r_.get("_real", r_)) for y_, r_ in shown]
         r = next((r for _y, r in shown if r["state"] == "in"), None) or (shown[0][1] if shown else None)
         if not r:
-            styled_message("Test animations", "No game card is in view to play it on. Switch to the Games tab and scroll to a game.", win_ref[0])
-            return
+            return "No game card is in view to play it on. Switch to the Games tab and scroll to a game."
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
         if kind == "redzone":  # needs a card with the football field strip
             def has_field(r_):
@@ -3789,8 +3808,7 @@ def run_gui():
                 return any(g_["kind"] == "football" for g_ in ([gl_] if isinstance(gl_, dict) else gl_))
             r = next((r_ for _y, r_ in shown if has_field(r_)), None)
             if not r:
-                styled_message("Test animations", "The red zone shows on a live football game's field strip. Scroll to one and try again.", win_ref[0])
-                return
+                return "The red zone shows on a live football game's field strip. Scroll to one and try again."
         k = card_key(r)
         if kind in ("clutch", "redzone"):
             session["force_clutch" if kind == "clutch" else "force_red"][k] = _time.perf_counter() + 8
@@ -3807,17 +3825,61 @@ def run_gui():
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
+        session["celeb_next"].pop(k, None)
+        follow = session.get("test_follow", "")
+        if follow == "MOMENTUM SWING":  # what the play caused, played after it
+            chain_event(k, (r, k, side, follow, None, 4.0, mode, "Test animation"), {"sound": "swing"})
+        elif follow:
+            chain_event(k, (r, k, side, follow, None, 3.5, mode, "Test animation"), {})
         session["test_scores"].pop(k, None)
         if scoring and side is not None and r.get("score"):
-            test_score(r, k, side, head)
+            test_score(r, k, side, follow if follow in ("TAKES THE LEAD", "TIES IT UP") else head)
 
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
         f = tk.Frame(parent, bg=BG)
         tk.Label(f, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
             row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
+        # what follows the animation (these only ever play after the play that caused them): one choice, like radio buttons
+        then = tk.Frame(f, bg=BG)
+        then.grid(row=1, column=0, columnspan=3, pady=(0, 8), sticky="w")
+        tk.Label(then, text="Then", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(side="left", padx=(4, 6))
+        pills = {}
+
+        def pick(val):
+            session["test_follow"] = val
+            for v_, (c_, shape_, txt_) in pills.items():
+                on = v_ == val
+                c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
+                c_.itemconfigure(txt_, fill=FG if on else DIM)
+        for val, label in (("", "Nothing"), ("TAKES THE LEAD", "Takes the lead"), ("TIES IT UP", "Ties it up"),
+                           ("MOMENTUM SWING", "Momentum swing")):
+            pw = text_width(FONTS["smallb"], label) + 20
+            c_ = tk.Canvas(then, width=pw, height=24, bg=BG, highlightthickness=0, cursor="hand2")
+            shape_ = c_.create_polygon(rr_points(1, 2, pw - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
+            txt_ = c_.create_text(pw / 2, 12, text=label, font=FONTS["smallb"], fill=DIM)
+            c_.bind("<ButtonRelease-1>", lambda e, v_=val: pick(v_))
+            c_.pack(side="left", padx=2)
+            pills[val] = (c_, shape_, txt_)
+        pick(session.get("test_follow", ""))
+        err = tk.Label(f, text="", bg=BG, fg=COLORS["err"], font=("Segoe UI", 9), anchor="w", justify="left", wraplength=420)
+        err.grid(row=2 + (len(TESTS) + 2) // 3, column=0, columnspan=3, padx=4, pady=(6, 0), sticky="w")
+        marks = []
+
+        def run_test(label, btn):
+            why = fire_test(label)
+            for m_ in marks:  # a new try clears the last error
+                m_.destroy()
+            marks.clear()
+            err.configure(text=why or "")
+            if why:  # couldn't play: a red X beside its button, the reason below the buttons
+                x_ = tk.Label(f, text="\u2715", bg=BG, fg=COLORS["err"], font=("Segoe UI", 10, "bold"))
+                x_.place(in_=btn, relx=1.0, x=2, rely=0.5, anchor="w")
+                marks.append(x_)
         for i, (label, *_rest) in enumerate(TESTS):
-            styled_button(f, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 3, column=i % 3, padx=4, pady=3, sticky="w")
+            b_ = styled_button(f, label, lambda: None)
+            b_.bind("<ButtonRelease-1>", lambda e, lb=label, b2=b_: run_test(lb, b2) if 0 <= e.x <= b2.winfo_width() and 0 <= e.y <= 28 else None)
+            b_.grid(row=2 + i // 3, column=i % 3, padx=(4, 16), pady=3, sticky="w")
         return f
 
     def celeb_frame():
@@ -3833,8 +3895,9 @@ def run_gui():
             try:
                 for i_, col in lay["banner"]:
                     canvas.itemconfigure(i_, fill=blend(bgc, col, a))
+                ia = info_alpha(ce, t)
                 for i_, opt, base in lay["fade"]:
-                    canvas.itemconfigure(i_, **{opt: blend(bgc, base, 1 - a)})
+                    canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
                 if lay["flash"]:
                     bgid, hit, base = lay["flash"]
                     col = blend(base, ce["color"], 0.5 * max(0.0, 1 - t / FLASH_SECS) ** 2)
@@ -3854,6 +3917,10 @@ def run_gui():
         live = {k: e for k, e in session["celebs"].items() if now - e["t0"] < e["secs"]}
         finished = len(live) != len(session["celebs"])
         session["celebs"] = live
+        for k in [k for k, q_ in session["celeb_next"].items() if q_ and k not in live]:  # the next chained event starts as this one ends
+            args, kw = session["celeb_next"][k].pop(0)
+            make_event(*args, **kw)
+        live = session["celebs"]
         if session["anims"]:
             pass  # an expand / collapse is running; it redraws everything itself
         elif finished or session["celeb_dirty"]:
@@ -3907,6 +3974,13 @@ def run_gui():
     def out_secs(ce):
         """The fade-out starts only once the last ripple has cleared, and takes as long as a set of ripples (0.5 s stagger + 1.3 s)."""
         return max(0.4, min(RING_SECS + 0.5, ce["secs"] - ripple_end(ce["secs"])))
+
+    def info_alpha(ce, t):
+        """0..1 visibility of the card's own middle info under a banner: hidden while it shows, and kept hidden
+        across two chained events (the first fades out, the next fades in, then the info returns)."""
+        if t < ce["secs"] / 2 and ce.get("chained_in") or t >= ce["secs"] / 2 and ce.get("chained_out"):
+            return 0.0
+        return 1 - banner_alpha(ce, t)
 
     def banner_alpha(ce, t):
         """0..1 visibility of a banner: eased (smoothstep) fades, slower out than in."""
@@ -3965,7 +4039,7 @@ def run_gui():
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None
+        flashing = bool(ce) and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None and not ce.get("chained_in")
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
         cx0, cw_ = x + 2, w - 4
@@ -4027,7 +4101,7 @@ def run_gui():
                 yy += h
             if ce and ce.get("banner"):  # the banner covers the name and opponent for a few seconds
                 by1 = max(yy, y_head + 40)
-                fade_items(items_since(n_head), bgc, 1 - banner_alpha(ce, ct))
+                fade_items(items_since(n_head), bgc, info_alpha(ce, ct))
                 draw_banner(tx + text_w / 2, y_head, by1, text_w, ce, ct, bgc)
             if sc:
                 yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
