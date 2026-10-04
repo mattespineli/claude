@@ -2211,7 +2211,7 @@ def run_gui():
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
-               "clock_items": []}
+               "clock_items": [], "stats": {}, "stats_redraw": False}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -2543,6 +2543,37 @@ def run_gui():
                 pass
         root.after(1000 - int(now * 1000) % 1000 + 5, clock_tick)  # just after each whole second
 
+    def ensure_stats(g):
+        """Team stats of a finished game (for the Scoreboard layout), fetched in the background on first use."""
+        k = gkey(g)
+        if k not in session["stats"] and not session["anims"]:
+            session["stats"][k] = None
+
+            def work():
+                try:
+                    session["stats"][k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=600))
+                except Exception:
+                    session["stats"][k] = {"stats": []}
+                root.after(0, stats_loaded)
+            threading.Thread(target=work, daemon=True).start()
+        return session["stats"].get(k)
+
+    def stats_loaded():
+        if session["stats_redraw"]:
+            return
+        session["stats_redraw"] = True
+
+        def redraw():
+            if session["anims"]:
+                root.after(200, redraw)  # an expand/collapse is running: wait for it
+                return
+            session["stats_redraw"] = False
+            session["sig"] = None
+            draw_all()
+            session["sig"] = compute_sig()
+            fit()
+        root.after(150, redraw)
+
     def score_width(text):
         if ui_state.get("digital"):
             return len(text) * (DIG_W + DIG_GAP) - DIG_GAP
@@ -2596,6 +2627,16 @@ def run_gui():
             session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
             canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
         my += h + 4
+        if r["state"] == "post" and r.get("game"):  # a finished game: its team stats fill the middle
+            d_ = ensure_stats(r["game"])
+            if isinstance(d_, dict) and d_.get("stats"):
+                flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
+                for label, a_, h_ in d_["stats"][:4]:
+                    vl, vr = (h_, a_) if flip else (a_, h_)
+                    ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
+                    ctext(mx, my, label[:12], FONTS["small"], DIM, anchor="n", tags=tags)
+                    _, h = ctext(mx + mw / 2, my, vr, FONTS["small"], FG, anchor="ne", tags=tags)
+                    my += h
         lines = info.split("\n") if info else []
         bb = [g_ for g_ in gl if g_["kind"] == "baseball"]
         fb = next((g_ for g_ in gl if g_["kind"] == "football"), None)
