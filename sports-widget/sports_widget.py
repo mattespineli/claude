@@ -4258,12 +4258,12 @@ def run_gui():
                 continue
             old = session["play_prev"].get(k)  # nobody scored: a big play?
             ch = challenge_of(ptext) if old is not None and ptext and ptext != old else None
-            if (not ch and old is not None and ptext and ptext != old and re.search(r"\bchallenge", ptext, re.I)
-                    and k not in session["celebs"]):  # a challenge was just called, no ruling yet: red for football (the red flag), else sky blue
+            if (not ch and old is not None and ptext and ptext != old and (re.search(r"\bchallenge", ptext, re.I) or (sport == "soccer" and re.search(r"\bVAR\b", ptext)))
+                    and k not in session["celebs"]):  # a challenge was just called, no ruling yet: red for football (the red flag), VAR blue for soccer, else the team's colour
                 who_ = re.search(r"challenge[d]? (?:by|from) ([A-Za-z]{2,4})\b", ptext) or re.search(r"\b([A-Z]{2,4}) (?:coach'?s? |team |manager )challenge", ptext)
                 tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
                 cside = tm_.index(who_.group(1).upper()) if who_ and who_.group(1).upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
-                make_event(r, k, cside, "CALL CHALLENGED", "#ef4444" if sport == "football" else "#38bdf8", 3.5, mode, ptext)
+                make_event(r, k, cside, "CALL CHALLENGED", "#ef4444" if sport == "football" else "#38bdf8" if sport == "soccer" else None, 3.5, mode, ptext)
                 if swing:
                     chain_event(k, *swing)
                 continue
