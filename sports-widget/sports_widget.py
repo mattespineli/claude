@@ -57,7 +57,7 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full3".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full4".encode()).hexdigest()[:16] + ".png")
 
 
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
@@ -167,18 +167,26 @@ _TO_LIN = [(i / 255) ** _LOGO_GAMMA for i in range(256)]
 
 
 def _area_resize(w, h, px, ow, oh):
-    """Resize RGBA pixels to ow x oh with a Gaussian filter (sigma 0.45 output pixels), weighting by alpha and averaging
-    colours at a gamma between sRGB and linear light. A box average leaves thin rings and diagonals visibly stepped at
-    icon sizes; the Gaussian smooths them without blurring the logo."""
+    """Resize RGBA pixels to ow x oh with a Lanczos-3 filter (windowed sinc, stretched to the reduction so it
+    antialiases), weighting by alpha and averaging colours at a gamma between sRGB and linear light. Sharper than a
+    box or Gaussian average: thin rings and diagonals stay crisp without stepping. Overshoot is clamped."""
     def spans(n, on):
         """Per output index: [(source index, weight)], the weights adding up to 1."""
         step, out = n / on, []
-        sig, rad = 0.45 * step, 1.5 * step
+        sc = max(step, 1.0)
+        rad = 3 * sc
+        def lanczos(t):
+            t = abs(t)
+            if t >= 3:
+                return 0.0
+            if t < 1e-9:
+                return 1.0
+            return 3 * math.sin(math.pi * t) * math.sin(math.pi * t / 3) / (math.pi * t) ** 2
         for o in range(on):
             c = (o + 0.5) * step
             row = []
             for i in range(max(0, int(c - rad)), min(n, math.ceil(c + rad))):
-                row.append((i, math.exp(-0.5 * ((i + 0.5 - c) / sig) ** 2)))
+                row.append((i, lanczos((i + 0.5 - c) / sc)))
             tot = sum(wt for _i, wt in row)
             out.append([(i, wt / tot) for i, wt in row])
         return out
@@ -209,8 +217,11 @@ def _area_resize(w, h, px, ow, oh):
                 g += t[1] * wt
                 b += t[2] * wt
                 a += t[3] * wt
-            out += bytes((min(255, round(255 * (r / a) ** inv)), min(255, round(255 * (g / a) ** inv)),
-                          min(255, round(255 * (b / a) ** inv)), min(255, round(a)))) if a > 1e-6 else b"\x00\x00\x00\x00"
+            if a > 1e-6:
+                cl = lambda v: max(0, min(255, round(255 * max(0.0, v / a) ** inv)))
+                out += bytes((cl(r), cl(g), cl(b), max(0, min(255, round(a)))))
+            else:
+                out += b"\x00\x00\x00\x00"
     return _png_bytes(ow, oh, out)
 
 
@@ -3208,14 +3219,33 @@ def run_gui():
             threading.Thread(target=work, daemon=True).start()
         return None
 
+    pill_imgs = {}
+
     def crisp_rr(x1, y1, x2, y2, r, color, tags=()):
-        """A rounded rectangle from whole-pixel rectangles and corner discs: sharp edges, none of the stray pixels a smoothed polygon leaves."""
+        """A rounded pill as an anti-aliased image, its edge pixels blended into the card's colour (Tk draws
+        partial transparency all-or-nothing, and its own rounded shapes have jagged corners)."""
         x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
-        ids = [canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color, outline="", tags=tags),
-               canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color, outline="", tags=tags)]
-        for cx_, cy_ in ((x1, y1), (x2 - 2 * r, y1), (x1, y2 - 2 * r), (x2 - 2 * r, y2 - 2 * r)):
-            ids.append(canvas.create_oval(cx_, cy_, cx_ + 2 * r, cy_ + 2 * r, fill=color, outline="", tags=tags))
-        return ids
+        w, h, r = x2 - x1, y2 - y1, 4
+        bg = session.get("card_bg") or BG
+        key = (w, h, r, color, bg)
+        img = pill_imgs.get(key)
+        if img is None:
+            import base64
+            fr, fg_, fb = _rgb(color)
+            br, bgg, bb = _rgb(bg)
+            ss, out = 4, bytearray()
+            for py in range(h):
+                for px in range(w):
+                    hit = 0
+                    for sy in range(ss):
+                        for sx in range(ss):
+                            x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
+                            dx, dy = max(r - x, x - (w - r), 0), max(r - y, y - (h - r), 0)
+                            hit += dx * dx + dy * dy <= r * r
+                    a = hit / (ss * ss)
+                    out += bytes((round(br + (fr - br) * a), round(bgg + (fg_ - bgg) * a), round(bb + (fb - bb) * a), 255))
+            img = pill_imgs[key] = tk.PhotoImage(data=base64.b64encode(_png_bytes(w, h, out)))
+        return [canvas.create_image(x1, y1, image=img, anchor="nw", tags=tags)]
 
     def tv_badges(x, y, text, tags=(), center=False, limit=3):
         """Channel names as small badges in each network's colors (ESPN gives names, not logos); returns the width used."""
