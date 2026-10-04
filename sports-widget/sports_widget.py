@@ -2299,10 +2299,11 @@ def run_gui():
                                   outline=color if on else DIM, width=1)
             return 44
         if kind == "football":
-            px = lambda yd: W * yd / 100
-            c.create_line(3, 17, W - 3, 17, fill=TRACK, width=6, capstyle="round")
-            if g["red"]:
-                c.create_line(px(80), 17, W - 3, 17, fill="#7f3b3b", width=6, capstyle="round")
+            px = lambda yd: W * (yd + 10) / 120  # yards from the offense's goal line, with an end zone at each end
+            seg = W / 12
+            for i in range(12):  # two end zones and ten 10-yard segments
+                col = "#52526a" if i in (0, 11) else "#7f3b3b" if g["red"] and i in (9, 10) else TRACK
+                c.create_line(i * seg + 4.5, 17, (i + 1) * seg - 4.5, 17, fill=col, width=6, capstyle="round")
             if g["first"] is not None:
                 c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
             bx = px(g["x"])
