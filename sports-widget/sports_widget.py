@@ -2572,9 +2572,17 @@ def run_gui():
             for i, f in enumerate(g["fills"]):
                 x = i * (seg + gap)
                 c.create_line(x + 3, 7, x + seg - 3, 7, fill=TRACK, width=6, capstyle="round")
-                if f > 0:
-                    c.create_line(x + 3, 7, x + 3 + (seg - 6) * f, 7, fill="#34d399" if f < 1 else "#6b6b78",
-                                  width=6, capstyle="round")
+                pk = tkey("period", str(i))  # each segment eases to its new fill
+                fill_ = c.create_line(x + 3, 7, x + 3, 7, fill="#34d399" if f < 1 else "#6b6b78", width=6, capstyle="round")
+
+                def put_fill(v, it=fill_, x=x):
+                    if v > 0.001:
+                        canvas.coords(it, c.ox + x + 3, c.oy + 7, c.ox + x + 3 + (seg - 6) * v, c.oy + 7)
+                        canvas.itemconfigure(it, state="normal")
+                    else:
+                        canvas.itemconfigure(it, state="hidden")
+                put_fill(tween_value(pk, f))
+                tween_apply(pk, put_fill)
             return 14
         if kind == "versus":
             vk = tkey("versus", g["label"])
@@ -2601,7 +2609,9 @@ def run_gui():
             span = 90 if g["minute"] <= 90 else 120
             px = lambda m: 6 + (W - 12) * min(m, span) / span
             c.create_line(6, 22, W - 6, 22, fill="#33333d", width=4, capstyle="round")
-            c.create_line(6, 22, px(g["minute"]), 22, fill="#34d399", width=4, capstyle="round")
+            mk = tkey("minute")  # the progress line and the minute dot ease along the timeline
+            mv = tween_value(mk, g["minute"])
+            prog = c.create_line(6, 22, px(mv), 22, fill="#34d399", width=4, capstyle="round")
             for m in (45, 90):
                 c.create_line(px(m), 17, px(m), 27, fill="#4a4a55")
             for ev in g["events"]:
@@ -2610,7 +2620,12 @@ def run_gui():
                     c.create_oval(x - 4, y - 4, x + 4, y + 4, fill=ev.get("color", FG), outline=FG)
                 else:
                     c.create_rectangle(x - 3, y - 4, x + 3, y + 4, fill="#fbbf24" if ev["kind"] == "yellow" else "#ef4444", outline="")
-            c.create_oval(px(g["minute"]) - 4, 18, px(g["minute"]) + 4, 26, fill="#34d399", outline=FG)
+            dot = c.create_oval(px(mv) - 4, 18, px(mv) + 4, 26, fill="#34d399", outline=FG)
+
+            def put_minute(v):
+                canvas.coords(prog, c.ox + 6, c.oy + 22, c.ox + px(v), c.oy + 22)
+                canvas.coords(dot, c.ox + px(v) - 4, c.oy + 18, c.ox + px(v) + 4, c.oy + 26)
+            tween_apply(mk, put_minute)
             return 44
         if kind == "baseball":
             def base(cx, cy, on):
