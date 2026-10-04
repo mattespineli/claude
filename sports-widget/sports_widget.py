@@ -4559,6 +4559,67 @@ def run_gui():
             return bool(m) and int(m.group(1)) >= (3 if sport == "hockey" else 4) and int(m.group(2)) * 60 + int(m.group(3)) <= 120 and close
         return False
 
+    FAKE_PLAYS = {  # made-up play text for the test animations ({t}: the team it plays for, {o}: the other team)
+        "TOUCHDOWN!": "J. Smith 12 yard pass from M. Jones (K. Lee kick) for {t}",
+        "FIELD GOAL": "K. Lee 47 yard field goal is GOOD for {t}",
+        "GOAL!": "Goal! {t} 1, {o} 0. A. Silva right footed shot from the centre of the box to the bottom left corner",
+        "HOME RUN!": "M. Davis homers (24) on a fly ball to left center field",
+        "INSIDE THE PARK HOME RUN!": "M. Davis hits an inside-the-park home run (3) on a line drive to right field",
+        "GRAND SLAM!": "M. Davis hits a grand slam (2) to left field. Three runners score",
+        "THREE-POINTER": "J. Carter makes 27-foot three point jumper (T. Hill assists)",
+        "TWO-POINTER": "J. Carter makes 14-foot pullup jump shot",
+        "SLAM DUNK!": "J. Carter makes driving dunk (T. Hill assists)",
+        "INTERCEPTION": "M. Jones pass intended for J. Smith INTERCEPTED by D. Ward at the {o} 34",
+        "PICK SIX!": "M. Jones pass INTERCEPTED by D. Ward, returned 41 yards for a TOUCHDOWN",
+        "FUMBLE": "R. Brown rush for 3 yards, FUMBLES, RECOVERED by {t}-D. Ward",
+        "SACK": "M. Jones sacked at the {o} 28 for -7 yards (D. Ward)",
+        "STRIKEOUT": "T. Webb strikes out R. Ortiz swinging",
+        "DOUBLE PLAY": "R. Ortiz grounds into double play, shortstop to second to first",
+        "OUT": "R. Ortiz flies out to center field",
+        "BLOCK": "D. Ward blocks J. Carter's 6-foot layup",
+        "PENALTY": "PENALTY on {t}-D. Ward, Defensive Holding, 5 yards, enforced at the {t} 40",
+        "FLAG": "PENALTY on {t}-D. Ward, Defensive Holding, 5 yards, enforced at the {t} 40",
+        "KICKOFF": "K. Lee kicks 64 yards from {t} 35 to the {o} 1. R. Brown returns for 24 yards",
+        "4TH DOWN": "4th & 2 at the {o} 38",
+        "TURNOVER ON DOWNS!": "M. Jones pass incomplete short right. Turnover on downs",
+        "SAFETY": "M. Jones sacked in the end zone for a SAFETY (D. Ward)",
+        "BLOCKED FG!": "K. Lee 51 yard field goal is BLOCKED (D. Ward), recovered by {t}",
+        "BLOCKED PUNT!": "P. Hart punt is BLOCKED by D. Ward, recovered by {t} at the {o} 22",
+        "ONSIDE KICK RECOVERED!": "K. Lee onside kick recovered by {t}-J. Smith at the {o} 47",
+        "SINGLE": "R. Ortiz singles on a line drive to right field",
+        "DOUBLE": "R. Ortiz doubles on a sharp line drive to left field",
+        "TRIPLE": "R. Ortiz triples on a fly ball to right center field",
+        "RUN SCORES": "R. Ortiz grounds out to second, M. Davis scores",
+        "TRIPLE PLAY!": "R. Ortiz lines into a triple play, third to second to first",
+        "CAUGHT STEALING": "M. Davis caught stealing second, catcher to shortstop",
+        "PICKED OFF": "M. Davis picked off first, pitcher to first",
+        "STEAL": "D. Ward steals the ball from J. Carter",
+        "EXTRA POINT": "K. Lee extra point is GOOD for {t}",
+        "2-PT CONVERSION": "TWO-POINT CONVERSION ATTEMPT. R. Brown rushes up the middle. ATTEMPT SUCCEEDS",
+        "BLOCKED PUNT TOUCHDOWN!": "P. Hart punt BLOCKED by D. Ward, recovered by {t} in the end zone for a TOUCHDOWN",
+        "BLOCKED FG TOUCHDOWN!": "K. Lee field goal BLOCKED, returned 68 yards by D. Ward for a TOUCHDOWN",
+        "BLOCKED PAT!": "K. Lee extra point is BLOCKED by D. Ward",
+        "ONSIDE KICK": "K. Lee onside kick recovered by {o}-J. Smith at the {o} 48",
+        "PUNT": "P. Hart punts 46 yards to the {o} 12, fair catch by R. Brown",
+        "CALL CHALLENGED": "{t} challenges the call on the field: the ruling is under review",
+        "SUCCESSFUL CHALLENGE!": "{t} challenge: after review, the call on the field is overturned",
+        "FAILED CHALLENGE": "{t} challenge: after review, the call on the field stands",
+        "CALL OVERTURNED": "After review, the ruling on the field is reversed",
+        "CALL STANDS": "After review, the ruling on the field stands",
+        "FUMBLE RECOVERED": "Fumble recovered by {t}-D. Ward at the {o} 31",
+        "DAGGER!": "{t} goes up big late. That should do it",
+        "MOMENTUM SWING": "{t} win probability now 74%",
+    }
+
+    def fake_play(head, r, side):
+        """Made-up play text for a test animation, naming the dummy card's teams."""
+        tm = [t_.get("abbr", "") for t_ in r.get("teams") or []] or ["", ""]
+        t_, o_ = (tm[side], tm[1 - side]) if side in (0, 1) and len(tm) == 2 else (tm[0], tm[-1])
+        key = next((k_ for k_ in FAKE_PLAYS if k_ == head), None) or next((k_ for k_ in FAKE_PLAYS if head.endswith(" " + k_)), None)
+        if key is None and head in ("TAKES THE LEAD", "TIES IT UP", "FINAL") and r.get("score"):
+            return f"{tm[0]} {r['score'][0]} \u2013 {tm[-1]} {r['score'][1]}"
+        return FAKE_PLAYS.get(key, "").format(t=t_, o=o_) if key else ""
+
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
     TESTS = [("Touchdown", "TOUCHDOWN!", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
              ("Home run", "HOME RUN!", "run", None), ("Inside-the-park HR", "INSIDE THE PARK HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", None),
@@ -4634,7 +4695,7 @@ def run_gui():
         mine = session.get("mine", 0)  # the dummy card's "Trigger for" choice: the team every test plays for
         side = mine if len(r.get("teams") or []) == 2 else None
         make_event(r, k, side, head, color if head in ("CALL CHALLENGED", "SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE") else None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
-                   mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
+                   mode, fake_play(head, r, side), grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
         session["celeb_next"].pop(k, None)
@@ -4642,11 +4703,12 @@ def run_gui():
             chain_field(k, r, side, head, mode, occ, runs or 0)
         if head in ("SUCCESSFUL CHALLENGE!", "FAILED CHALLENGE"):  # the ruling follows the result
             over_ = head.startswith("SUCCESSFUL")
-            chain_event(k, (r, k, side, "CALL OVERTURNED" if over_ else "CALL STANDS", "#34d399" if over_ else "#f87171", FOLLOW_SECS, mode, "Test animation"), {})
+            chain_event(k, (r, k, side, "CALL OVERTURNED" if over_ else "CALL STANDS", "#34d399" if over_ else "#f87171", FOLLOW_SECS, mode,
+                                fake_play("CALL OVERTURNED" if over_ else "CALL STANDS", r, side)), {})
         follows = list(MAIN.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
         for follow in follows:
             fside = mine if side is not None else None  # follow-ups play for the same team
-            chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, "Test animation"),
+            chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, fake_play(follow, r, fside)),
                         {"sound": "swing"} if follow == "MOMENTUM SWING" else {})
         session["test_scores"].pop(k, None)
         if runs and occ is not None and side is not None and is_field_play(head) and r.get("score"):
