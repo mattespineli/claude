@@ -2862,7 +2862,7 @@ def run_gui():
                     _, h = ctext(x, y, (f"{when} · " if when else "") + text, FONTS["small"], FG, width=w)
                     y += h
         if d.get("box"):
-            y += draw_box(x, y, w, d, g)
+            y += draw_box(x, y, w, bgc, d, g)
         if d["stats"]:
             _, h = ctext(x, y + 4, "Team stats", FONTS["smallb"], DIM)
             y += 4 + h
@@ -2870,10 +2870,12 @@ def run_gui():
             ctext(x, y, d["away_abbr"], FONTS["smallb"], DIM, anchor="nw")
             _, h = ctext(x + w, y, d["home_abbr"], FONTS["smallb"], DIM, anchor="ne")
             y += h
-            for label, a_, h_ in d["stats"]:
-                ctext(x, y, a_, FONTS["small"], FG, anchor="nw")
+            for n_, (label, a_, h_) in enumerate(d["stats"]):
+                first, _ = ctext(x, y, a_, FONTS["small"], FG, anchor="nw")
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
+                if n_ % 2 == 0:
+                    stripe(x, y, w, h, bgc, first)
                 y += h
         if not (d["plays"] or d["scoring"] or d["stats"] or d.get("box") or d.get("linescore") or d.get("home_win_start") is not None
                 or d.get("home_win") is not None and not win_shown):
@@ -2881,7 +2883,12 @@ def run_gui():
             y += h
         return y - y0
 
-    def draw_box(x, y, w, d, g):
+    def stripe(x, y, w, h, bgc, below):
+        """A darker rounded band behind a table row (every other row), under the canvas item `below`."""
+        i = canvas.create_polygon(rr_points(x - 4, y, x + w + 4, y + h, 7), smooth=True, fill=blend(bgc, "#000000", 0.3), outline="")
+        canvas.tag_lower(i, below)
+
+    def draw_box(x, y, w, bgc, d, g):
         """Box score of one team, with a pill per team to switch between them. Returns its height."""
         y0 = y
         gk = gkey(g) if g else None
@@ -2914,10 +2921,12 @@ def run_gui():
             y += 18
             rows = [(nm, v, FONTS["small"], FG) for nm, v in cat["rows"]] + (
                 [("Team", cat["totals"], FONTS["smallb"], DIM)] if cat["totals"] and any(cat["totals"]) else [])
-            for nm, v, font, col in rows:
+            for n_, (nm, v, font, col) in enumerate(rows):
                 while len(nm) > 3 and text_width(font, nm) > name_w - 4:  # long names lose letters, not columns
                     nm = nm.rstrip("\u2026")[:-1] + "\u2026"
-                ctext(x, y, nm, font, col)
+                first, _ = ctext(x, y, nm, font, col)
+                if n_ % 2 == 0:
+                    stripe(x, y, w, 15, bgc, first)
                 xr = x + w
                 for val, wd in zip(reversed(v), reversed(cw)):
                     ctext(xr, y, val, font, col, anchor="ne")
@@ -4092,8 +4101,9 @@ def run_gui():
                     ctext(x + w - 8 - 40 * k, y + 7, title, FONTS["small"], DIM, anchor="ne")
                 y += 6 + h + 4
             elif t == "srow":  # standings row
-                if n["fav"]:
-                    canvas.create_rectangle(x + 2, y, x + w - 2, y + 18, fill=blend(BG, "#34d399", 0.18), outline="")
+                if n["fav"] or n.get("odd"):  # a favourite in green, otherwise every other row darker
+                    canvas.create_polygon(rr_points(x + 2, y, x + w - 2, y + 18, 7), smooth=True, outline="",
+                                          fill=blend(BG, "#34d399", 0.18) if n["fav"] else blend(BG, "#000000", 0.3))
                 ctext(x + 24, y + 2, str(n["rank"]), FONTS["small"], DIM, anchor="ne")
                 limit = x + w
                 for k, val in enumerate(reversed(n["vals"])):
@@ -4168,7 +4178,7 @@ def run_gui():
                     for rank, r in enumerate(g["rows"], start=1):
                         rec, cols = standing_cells(abbr, r["stats"])
                         fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
-                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav})
+                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav, "odd": rank % 2 == 1})
             nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
         for key, cfg in COLLEGE_SECTIONS.items():
             store = session["college"].get(key, {})
@@ -4184,16 +4194,17 @@ def run_gui():
                 children.append({"t": "text", "text": "Standings unavailable"})
             elif sel == "top25":
                 children.append({"t": "sub", "text": cfg.get("poll", "AP Top 25"), "headers": ["Record", "Pts"]})
-                for r in data:
+                for k, r in enumerate(data):
                     fav = (cfg["league"], r["id"]) in favs or (cfg["league"], r["abbr"].lower()) in favs
-                    children.append({"t": "srow", "rank": r["rank"], "name": r["name"], "vals": [r["record"], r["points"]], "fav": fav})
+                    children.append({"t": "srow", "rank": r["rank"], "name": r["name"], "vals": [r["record"], r["points"]], "fav": fav,
+                                     "odd": k % 2 == 0})
             else:
                 for g in data:
                     children.append({"t": "sub", "text": g["name"] or dict(options)[sel], "headers": ["Conf", "Ovr"]})
                     for rank, r in enumerate(g["rows"], start=1):
                         conf, cols = college_cells(r["stats"])
                         fav = (cfg["league"], r["id"]) in favs or (cfg["league"], r["abbr"].lower()) in favs
-                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [conf] + cols, "fav": fav})
+                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [conf] + cols, "fav": fav, "odd": rank % 2 == 1})
             nodes.append(group_node(f"st:{key}", cfg["title"], FG, 0, True, False, children))
         return nodes
 
