@@ -3995,7 +3995,7 @@ def run_gui():
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
         session["celebs"][k] = {
             "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
-            "tcolor": t.get("color"), "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
+            "tcolor": t.get("gcolor") or t.get("color"), "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
             "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out,
             "field": field, "out": out}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
