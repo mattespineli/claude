@@ -930,10 +930,10 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
         drives = data.get("drives") or {}
         for d in (drives.get("previous") or []) + ([drives["current"]] if drives.get("current") else []):
             plays += d.get("plays") or []
-    flow = []  # the away (left) team's lead after each play that has the score
+    flow = []  # (away, home) score after each play that has it
     for p in plays:
         try:
-            flow.append(float(p["awayScore"]) - float(p["homeScore"]))
+            flow.append((float(p["awayScore"]), float(p["homeScore"])))
         except (KeyError, TypeError, ValueError):
             pass
     out["flow"] = thin(flow) if len(flow) > 1 else []
@@ -3219,6 +3219,21 @@ def run_gui():
         canvas.create_oval(ex_ - 2.5, ey_ - 2.5, ex_ + 2.5, ey_ + 2.5, fill=ca if vals[-1] > 0 else cb if vals[-1] < 0 else DIM, outline="")
         return 4 + h + 2 + H + 4
 
+    def draw_flow(x, y, w, bgc, flow, ca, cb, note=""):
+        """Game flow: each team's score climbing over the game, one line per team in its colour. Returns the height used."""
+        _, h = ctext(x, y + 4, "Game flow", FONTS["small"], DIM)
+        if note:
+            ctext(x + w, y + 4, note, FONTS["small"], DIM, anchor="ne")
+        top, H = y + 4 + h + 2, 40
+        top_score = max(max(a_, h_) for a_, h_ in flow) or 1
+        canvas.create_line(x, top + H, x + w, top + H, fill=blend(bgc, DIM, 0.45))
+        n = len(flow)
+        for side, col in ((0, ca), (1, cb)):
+            pts = [c_ for i, f_ in enumerate(flow) for c_ in (x + w * i / (n - 1), top + H - f_[side] / top_score * H)]
+            canvas.create_line(*pts, fill=col, width=2, joinstyle="round", capstyle="round")
+            canvas.create_oval(pts[-2] - 2.5, pts[-1] - 2.5, pts[-2] + 2.5, pts[-1] + 2.5, fill=col, outline="")
+        return 4 + h + 2 + H + 4
+
     def draw_details(x, y, w, bgc, d, win_shown=False, g=None):  # win_shown: no win probability here (shown on the card, or game over)
         """Expanded-game section; returns its height."""
         y0 = y
@@ -3234,10 +3249,9 @@ def run_gui():
             y += draw_linescore(x, y, w, d, g) + 4
         ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
         if d.get("flow") and d.get("state") != "pre" and ui_state.get("sparklines", True):  # the score margin over the game, under the line score
-            m_ = max(abs(v_) for v_ in d["flow"]) or 1
-            big_ = max(d["flow"], key=abs)
+            big_ = max((a_ - h_ for a_, h_ in d["flow"]), key=abs)
             lead_ = f"Largest lead {d['away_abbr'] if big_ > 0 else d['home_abbr']} {abs(big_):g}" if big_ else ""
-            y += draw_spark(x, y, w, bgc, [v_ / m_ for v_ in d["flow"]], ca_, cb_, "Game flow", lead_)
+            y += draw_flow(x, y, w, bgc, d["flow"], ca_, cb_, lead_)
         if d.get("state") == "post" and d.get("home_win_start") is not None:  # the final is 100-0: show where the game began
             hw = round(d["home_win_start"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
