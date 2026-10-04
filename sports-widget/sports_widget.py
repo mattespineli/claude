@@ -3567,9 +3567,9 @@ def run_gui():
                 pass
         root.after(1000 - int(now * 1000) % 1000 + 5, clock_tick)  # just after each whole second
 
-    def ensure_stats(g):
-        """Team stats of a finished game (for the Scoreboard layout), fetched in the background on first use."""
-        k = gkey(g)
+    def ensure_stats(g, ht=False):
+        """Team stats of a finished game, or of a game at halftime (for the Scoreboard layout), fetched in the background on first use."""
+        k = gkey(g) + ("|ht" if ht else "")
         if k not in session["stats"] and not session["anims"]:
             session["stats"][k] = None
 
@@ -3647,8 +3647,13 @@ def run_gui():
             tv_badges(mx, my - 2, r["tv"], tags, center=True)
             my += 16
         n_hdr, my_hdr = item_mark(), my  # the pills and status line stay at the top of every card; only what is below them is centred
-        if r["state"] == "post" and r.get("game"):  # a finished game: its team stats fill the middle
-            d_ = ensure_stats(r["game"])
+        stxt_ = f'{r.get("status") or ""} {r.get("detail") or ""}'
+        quiet_ = not (lp and lp.get("text")) and not (info or "").strip()  # nothing else is shown in the middle
+        at_half = r["state"] == "in" and (r.get("game") or {}).get("sport") != "baseball" and bool(
+            re.search(r"\bhalf-?time\b", stxt_, re.I)
+            or quiet_ and re.search(r"\b(end of|intermission|break|delay(?:ed)?|suspended)\b", stxt_, re.I))  # halftime, quarter / period breaks, delays
+        if (r["state"] == "post" or at_half) and r.get("game"):  # a finished game, or one at halftime: its team stats fill the middle
+            d_ = ensure_stats(r["game"], at_half)
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
                 room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
