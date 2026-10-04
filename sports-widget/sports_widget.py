@@ -3569,7 +3569,9 @@ def run_gui():
         mode = ui_state.get("score_anim", "pulse")
         mode = "pulse" if mode == "off" else mode
         scoring = kind in ("score", "run", "grand")
-        make_event(r, k, acting_side(r, head), head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
+        import random
+        side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
+        make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
