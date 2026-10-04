@@ -3236,7 +3236,7 @@ def run_gui():
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
-    TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
+    TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
                    "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD!": 6, "BLOCKED FG TD!": 6}
 
     def test_score(r, k, side, head):
@@ -3524,7 +3524,7 @@ def run_gui():
             if "grand slam" in low or (n == 4 and prev[2]):
                 return "GRAND SLAM!", True
             if "homer" in low or "home run" in low:
-                return "HOME RUN!", True
+                return ("INSIDE THE PARK HOME RUN!" if re.search(r"inside[- ]the[- ]park", low) else "HOME RUN!"), True
             hit = next((h_ for h_, w_ in (("TRIPLE", "tripled"), ("DOUBLE", "doubled"), ("SINGLE", "singled")) if re.search(rf"\b{w_}\b(?! off)", low)), None)
             if hit:  # runs scored on a hit: 1-RUN SINGLE, 2-RUN DOUBLE
                 return f"{n}-RUN {hit}", True
@@ -3704,6 +3704,12 @@ def run_gui():
             session["celeb_on"] = True
             root.after(0, celeb_tick)
 
+    def recovery_side(r, text):
+        """Index of the team that recovered a fumble ("... RECOVERED by DAL-J.Doe"), or None when the play names nobody."""
+        m = re.search(r"recovered by ([A-Za-z]{2,4})\b", text, re.I)
+        tm = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
+        return tm.index(m.group(1).upper()) if m and m.group(1).upper() in tm else None
+
     def chain_event(k, args, kw):
         """Play an event on card k once its current one ends, the card's own info staying hidden in between."""
         queue = session["celeb_next"].setdefault(k, [])
@@ -3817,6 +3823,10 @@ def run_gui():
                         side = tm_.index(pm.group(1).upper())
                 make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS!") + KICK_PLAYS else None)
+                if big[0] == "FUMBLE":  # then who recovered it
+                    rec = recovery_side(r, ptext)
+                    if rec is not None:
+                        chain_event(k, (r, k, rec, "FUMBLE RECOVERED", None, FOLLOW_SECS, mode, ptext), {})
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -3870,7 +3880,7 @@ def run_gui():
 
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
     TESTS = [("Touchdown", "TOUCHDOWN!", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
-             ("Home run", "HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
+             ("Home run", "HOME RUN!", "run", None), ("Inside-the-park HR", "INSIDE THE PARK HOME RUN!", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
              ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX!", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
@@ -3934,14 +3944,15 @@ def run_gui():
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
         session["celeb_next"].pop(k, None)
-        follow = session.get("test_follow", "")
-        if follow == "MOMENTUM SWING":  # what the play caused, played after it
-            chain_event(k, (r, k, side, follow, None, FOLLOW_SECS, mode, "Test animation"), {"sound": "swing"})
-        elif follow:
-            chain_event(k, (r, k, side, follow, None, FOLLOW_SECS, mode, "Test animation"), {})
+        follows = list(session.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
+        for follow in follows:
+            fside = side if side is None or follow != "FUMBLE RECOVERED" else 1 - side  # the other team recovers it
+            chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, "Test animation"),
+                        {"sound": "swing"} if follow == "MOMENTUM SWING" else {})
         session["test_scores"].pop(k, None)
         if scoring and side is not None and r.get("score"):
-            test_score(r, k, side, follow if follow in ("TAKES THE LEAD", "TIES IT UP") else head)
+            lead = next((f_ for f_ in follows if f_ in ("TAKES THE LEAD", "TIES IT UP")), None)
+            test_score(r, k, side, lead or head)
 
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
@@ -3971,8 +3982,32 @@ def run_gui():
                 c_.pack(side="left", padx=2)
                 pills[val] = (c_, shape_, txt_)
             pick(session.get(key, default))
-        choice_row(1, "Then", "test_follow", (("", "Nothing"), ("TAKES THE LEAD", "Takes the lead"), ("TIES IT UP", "Ties it up"),
-                                              ("MOMENTUM SWING", "Momentum swing")), "")
+        # Then: any number of follow-ups, played one after the other in the order they were picked
+        then = tk.Frame(f, bg=BG)
+        then.grid(row=1, column=0, columnspan=3, pady=(0, 6), sticky="w")
+        tk.Label(then, text="Then", bg=BG, fg=DIM, font=("Segoe UI", 9), width=5, anchor="w").pack(side="left", padx=(4, 6))
+        then_pills = {}
+        session.setdefault("test_follow", [])
+
+        def toggle_then(val):
+            chosen = session["test_follow"]
+            chosen.remove(val) if val in chosen else chosen.append(val)
+            for v_, (c_, shape_, txt_, base_) in then_pills.items():
+                on = v_ in chosen
+                c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
+                c_.itemconfigure(txt_, fill=FG if on else DIM, text=(f"{chosen.index(v_) + 1}  " if on else "") + base_)
+        for val, label in (("TAKES THE LEAD", "Takes the lead"), ("TIES IT UP", "Ties it up"),
+                           ("MOMENTUM SWING", "Momentum swing"), ("FUMBLE RECOVERED", "Fumble recovery")):
+            pw = text_width(FONTS["smallb"], "1  " + label) + 20
+            c_ = tk.Canvas(then, width=pw, height=24, bg=BG, highlightthickness=0, cursor="hand2")
+            shape_ = c_.create_polygon(rr_points(1, 2, pw - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
+            txt_ = c_.create_text(pw / 2, 12, text=label, font=FONTS["smallb"], fill=DIM)
+            c_.bind("<ButtonRelease-1>", lambda e, v_=val: toggle_then(v_))
+            c_.pack(side="left", padx=2)
+            then_pills[val] = (c_, shape_, txt_, label)
+        for v_ in list(session["test_follow"]):  # picks from earlier in the session
+            session["test_follow"].remove(v_)
+            toggle_then(v_)
         choice_row(2, "Runs", "test_runs", ((0, "0"), (1, "1"), (2, "2"), (3, "3"), (4, "4")), 0)  # for single, double, triple
         err = tk.Label(f, text="", bg=BG, fg=COLORS["err"], font=("Segoe UI", 9), anchor="w", justify="left", wraplength=420)
         err.grid(row=3 + (len(TESTS) + 2) // 3, column=0, columnspan=3, padx=4, pady=(6, 0), sticky="w")
