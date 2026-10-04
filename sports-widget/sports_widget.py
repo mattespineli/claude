@@ -1042,7 +1042,7 @@ def comp_teams(comp, first=None):
     else:
         away = next((c for c in cs if c.get("homeAway") == "away"), None)
         order = [away, [c for c in cs if c is not away][0]] if away else list(cs)
-    return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""),
+    return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""), "record": _record(c).strip(" ()"),
              "abbr": (c.get("team") or {}).get("abbreviation") or (c.get("athlete") or {}).get("shortName") or "?"}
             for c in order]
 
@@ -1299,7 +1299,8 @@ def team_status(entry):
         if text:
             ser = {"head": (ser or {}).get("head", ""), "text": text}
     return {"tv": tv_channels(event["competitions"][0]) if state in ("in", "pre") else "", "series": ser,
-            "teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
+            "teams": [dict(t, record=t["record"] or (own if i == 0 and own else "")) for i, t in
+                      enumerate(comp_teams(event["competitions"][0], me or None))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
@@ -2971,7 +2972,7 @@ def run_gui():
             my += 4 + h
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
-        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0)  # natural height of a team column
+        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)  # natural height of a team column
         lg = max(44, min(64, 44 + int(max(mh - nat, 0) // 4) * 4))  # a bigger logo, in steps so few sizes are cached
         gap = max(0, min(10, (mh - nat - (lg - 44)) / 3))  # what is left over is spread between the rows
         colb = top
@@ -2987,6 +2988,9 @@ def run_gui():
                 yy += 30 + gap
             _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
             yy += h
+            if t.get("record"):  # the team's record under its abbreviation
+                _, h = ctext(cx, yy, t["record"], FONTS["small"], DIM, anchor="n", tags=tags)
+                yy += h
             if counts[i] is not None:  # remaining timeouts / challenges: filled dots, unlabelled
                 total = max(tos.get("total", 3), counts[i])
                 x0 = cx - 5 * (total - 1)
@@ -4130,7 +4134,10 @@ TEAM_COLORS = {"SF": {"color": "aa0000", "alternateColor": "b3995d"}, "DAL": {"c
 def demo_data():
     """Fake live games for every sport, built through the real graphic/text code paths."""
     st = lambda n, v: {"name": n, "displayValue": str(v)}
+    recs = {"SF": "4-1", "DAL": "3-2", "SFG": "85-77", "LAD": "98-64", "GS": "48-34", "BOS": "64-18", "NJ": "3-1-0",
+            "ARS": "6-1-2", "CHE": "5-2-2"}
     team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
+                                              "records": [{"name": "overall", "summary": recs.get(a, "")}],
                                               "team": {"id": i, "abbreviation": a, **TEAM_COLORS.get(a, {})}}
     def row(name, sport, league, line, detail, comp, tint=None, state="in", next_line="", win=None):
         m = re.match(r"^(?:([WLT])\s+)?(\d+)-(\d+)\s+(.*)$", detail)
