@@ -2504,7 +2504,8 @@ def run_gui():
             return call
 
     # ---- eased movement of bars and markers when a value changes (win probability, ball, first-down marker) ----
-    TWEEN_SECS = 0.7
+    TWEEN_SECS = 1.1
+    ease_io = lambda p: 0.5 - 0.5 * math.cos(math.pi * p)  # gentle start and finish
 
     def tkey(kind, label=""):
         """A key for one animated element of the card being drawn (the n-th of its kind, so a card's bar and its details' bar differ)."""
@@ -2525,20 +2526,20 @@ def run_gui():
             cur = target
             if tw:
                 p = min(1.0, (now - tw["t0"]) / tw["dur"])
-                cur = tw["v0"] + (tw["v1"] - tw["v0"]) * p * p * (3 - 2 * p)
+                cur = tw["v0"] + (tw["v1"] - tw["v0"]) * ease_io(p)
             else:
                 cur = shown
             tw = session["tweens"][key] = {"v0": cur, "v1": target, "t0": now, "dur": TWEEN_SECS, "apply": None}
             session["shown"][key] = target
             if not session["tween_on"]:
                 session["tween_on"] = True
-                root.after(25, tween_tick)
+                root.after(8, tween_tick)
         if tw:
             p = (now - tw["t0"]) / tw["dur"]
             if p >= 1:
                 session["tweens"].pop(key, None)
                 return target
-            return tw["v0"] + (tw["v1"] - tw["v0"]) * p * p * (3 - 2 * p)
+            return tw["v0"] + (tw["v1"] - tw["v0"]) * ease_io(p)
         return target
 
     def tween_apply(key, fn):
@@ -2553,13 +2554,13 @@ def run_gui():
             p = min(1.0, (now - tw["t0"]) / tw["dur"])
             if tw["apply"]:
                 try:
-                    tw["apply"](tw["v0"] + (tw["v1"] - tw["v0"]) * p * p * (3 - 2 * p))
+                    tw["apply"](tw["v0"] + (tw["v1"] - tw["v0"]) * ease_io(p))
                 except tk.TclError:
                     pass
             if p >= 1:
                 session["tweens"].pop(key, None)
         if session["tweens"]:
-            root.after(25, tween_tick)
+            root.after(max(1, 14 - int((_time.perf_counter() - now) * 1000)), tween_tick)  # ~60 frames a second where it can
         else:
             session["tween_on"] = False
 
