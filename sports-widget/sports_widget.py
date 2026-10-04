@@ -4410,8 +4410,8 @@ def run_gui():
 
     UNIT_CIRCLE = [(math.cos(a_ * math.pi / 45), math.sin(a_ * math.pi / 45)) for a_ in range(90)]
 
-    FIELD_LEG = 0.55  # seconds a runner takes between two bases
-    FIELD_GAP = 0.5  # seconds between one runner starting and the next
+    FIELD_LEG = 0.4  # seconds a runner takes between two bases
+    FIELD_GAP = 0.35  # seconds between one runner starting and the next
 
     def is_field_play(head):
         """Baseball headlines that get the base-running diamond after their banner."""
