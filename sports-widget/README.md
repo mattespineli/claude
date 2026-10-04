@@ -60,3 +60,5 @@ Right-click → **Settings...** to adjust opacity (30-100%, slider or typed valu
 ## Live-game graphics
 Football: field-position strip. Baseball: base diamond plus ball/strike/out dots. Basketball/hockey: period progress bar. Hockey: shots-on-goal comparison. Soccer: match timeline (goals, cards) and possession bar.
 Preview them with fake data: `python sports_widget.py --demo` (see `demo.png`).
+
+When a score changes, its digits roll to the new value like an odometer wheel. Game clocks on live cards (basketball, hockey, football, soccer minutes) run every second between refreshes and resync on each refresh; ESPN doesn't report clock stoppages, so a stopped clock may run on until the next refresh. In `--demo`, press the refresh button to make the scores change.

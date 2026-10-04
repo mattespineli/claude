@@ -874,7 +874,7 @@ def team_status(entry):
         comp_ = event["competitions"][0]
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
-    return {"score": parts["score"], "status": parts["status"], "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
+    return {"score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
@@ -957,6 +957,7 @@ def playoff_games(debug=False, days=7):
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
                    "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
+                   "clock": live_clock(e, sport),
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
                    "graphic": situation_graphic(sport, comp, league) if state == "in" else None}
@@ -1021,7 +1022,7 @@ def league_games():
             comp = e["competitions"][0]
             parts = score_parts(e)
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
-                        "score": parts["score"], "status": parts["status"],
+                        "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
                         "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -1158,13 +1159,50 @@ def score_parts(event, team_abbr=None):
     return {"score": (a_, b_), "status": " \u00b7 ".join(x for x in (result, detail, played) if x)}
 
 
+CLOCK_STALE = 90  # stop running the clock locally this long after the last refresh (ESPN data is stale by then)
+
+
+def live_clock(event, sport):
+    """The game clock at fetch time, so the widget can run it between refreshes; None when it can't."""
+    if _state_of(event) != "in":
+        return None
+    st = event["competitions"][0].get("status") or {}
+    try:
+        secs = float(st.get("clock"))
+    except (TypeError, ValueError):
+        return None
+    if sport == "soccer":  # counts up in minutes; stoppage time ("45'+2'") is left alone
+        m = re.fullmatch(r"(\d+)'", str(st.get("displayClock") or "").strip())
+        return {"at": time.time(), "secs": secs, "up": True, "minute": int(m.group(1))} if m else None
+    if sport in ("basketball", "hockey", "football") and secs > 0:
+        return {"at": time.time(), "secs": secs, "up": False}
+    return None
+
+
+def tick_clock(text, clock, now=None):
+    """`text` with its game clock run forward to `now` (ESPN doesn't say when the clock stops; refreshes resync it)."""
+    el = min((time.time() if now is None else now) - clock["at"], CLOCK_STALE)
+    if el <= 0:
+        return text
+    if clock["up"]:
+        minute = clock["minute"] + int((clock["secs"] % 60 + el) // 60)
+        return re.sub(r"(?<![+\d])\d+'(?!\+)", f"{minute}'", text, count=1)
+    import math
+    rem = max(0, math.ceil(clock["secs"] - el))
+    m = re.search(r"\b\d{1,2}:\d{2}\b|\b\d{1,2}\.\d\b", text)
+    if not m:
+        return text
+    new = f"{rem // 60}:{rem % 60:02d}" if ":" in m.group() or rem >= 60 else f"{max(0.0, clock['secs'] - el):.1f}"
+    return text[:m.start()] + new + text[m.end():]
+
+
 def pinned_status(pin):
     for e in fetch_scoreboard(pin["sport"], pin["league"], pin["date"]):
         if str(e.get("id")) == str(pin["id"]):
             s = summarize_game(e, pin["sport"], pin["league"])
             if s:
                 parts = score_parts(e)
-                return {"score": parts["score"], "status": parts["status"], "name": s[1], "state": s[0], "line": "", "detail": s[2],
+                return {"score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
                         "game": {"sport": pin["sport"], "league": pin["league"], "id": str(pin["id"])},
@@ -1849,7 +1887,9 @@ def run_gui():
     PAD, GAP = 10, 6
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
-               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {}}
+               "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
+               "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
+               "clock_items": []}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -1890,7 +1930,10 @@ def run_gui():
                 c.create_rectangle(x, 14, x + seg, 20, fill="#33333d", outline="")
                 if f > 0:
                     c.create_rectangle(x, 14, x + seg * f, 20, fill="#34d399" if f < 1 else "#4a4a55", outline="")
-            c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=FONTS["smallb"])
+            tid = c.create_text(0, 6, text=g["label"], anchor="w", fill=FG, font=FONTS["smallb"])
+            if session.get("card_clock"):
+                session["clock_items"].append((tid, g["label"], session["card_clock"]))
+                canvas.itemconfigure(tid, text=tick_clock(g["label"], session["card_clock"]))
             return 24
         if kind == "versus":
             split = W * g["a"] / (g["a"] + g["b"])
@@ -2018,6 +2061,99 @@ def run_gui():
         p = min((_time.perf_counter() - spec["t0"]) / spec["dur"], 1.0)
         return a_ + (b_ - a_) * p * p * (3 - 2 * p)
 
+    # ---- score changes roll like an odometer wheel -----------------------------------
+    ROLL_STEP, ROLL_MIN, ROLL_MAX = 0.09, 0.45, 1.1  # seconds per digit passed, shortest and longest roll
+
+    def roll_seq(a, b):
+        """Digits one wheel shows going from a to b: counting up through 0-9 like an odometer."""
+        if a == b:
+            return [b]
+        if a.isdigit() and b.isdigit():
+            seq, d = [a], int(a)
+            while str(d) != b:
+                d = (d + 1) % 10
+                seq.append(str(d))
+            return seq
+        return [a, b]  # a digit appearing or disappearing (9 -> 10), or a non-digit
+
+    def draw_score(xr, y, text, color, bgc, key):
+        """One side's score, right-aligned at xr; rolls from the last value drawn for `key`. Returns the left edge."""
+        prev = session["roll_last"].get(key)
+        session["roll_last"][key] = text
+        roll = session["rolls"].get(key)
+        if prev is not None and prev != text and not (roll and roll["to"] == text):
+            n = max(len(prev), len(text))
+            old, new = (roll["to"] if roll else prev).rjust(n), text.rjust(n)
+            seqs = [roll_seq(a, b) for a, b in zip(old, new)]
+            steps = max(len(q) - 1 for q in seqs)
+            roll = session["rolls"][key] = {"to": text, "seqs": seqs, "t0": _time.perf_counter(),
+                                            "dur": max(ROLL_MIN, min(ROLL_MAX, steps * ROLL_STEP))}
+            if not session["rolling"]:
+                session["rolling"] = True
+                root.after(0, roll_tick)
+        if not roll:
+            i, _h = ctext(xr, y, text, FONTS["score"], color, anchor="ne")
+            return canvas.bbox(i)[0]
+        import tkinter.font as tkfont
+        f = tkfont.Font(font=FONTS["score"])
+        hgt = f.metrics("linespace")
+        x = xr
+        for seq in reversed(roll["seqs"]):  # one wheel per digit, right to left
+            cw = max(f.measure(ch) for ch in seq)
+            cx, cy = x - cw / 2, y + hgt / 2
+            anchor = canvas.create_rectangle(cx, cy, cx, cy, outline="", state="hidden")  # moves with the card
+            items = [canvas.create_text(cx, cy, text="", font=FONTS["score"], fill=color) for _ in range(2)]
+            session["roll_cells"].append({"roll": roll, "seq": seq, "anchor": anchor, "items": items,
+                                          "color": color, "bg": bgc, "h": hgt})
+            x -= cw
+        roll_frame()
+        return x
+
+    def roll_frame():
+        """Place every rolling digit for the current time: the old digit rolls up and away, the next rolls in."""
+        now = _time.perf_counter()
+        px0 = FONTS["score"][1] * root.winfo_fpixels("1p")
+        for c in session["roll_cells"]:
+            p = min((now - c["roll"]["t0"]) / c["roll"]["dur"], 1.0)
+            v = (1 - (1 - p) ** 3) * (len(c["seq"]) - 1)  # ease out: fast start, settles onto the new digit
+            k = min(int(v), len(c["seq"]) - 1)
+            frac = v - k
+            ax, ay = canvas.coords(c["anchor"])[:2]
+            travel = c["h"] * 0.42  # how far a digit rolls before it is out of sight on the drum
+            for item, idx, off in ((c["items"][0], k, -frac), (c["items"][1], k + 1, 1 - frac)):
+                if idx >= len(c["seq"]) or abs(off) >= 1:
+                    canvas.itemconfigure(item, text="")
+                    continue
+                d = abs(off)
+                canvas.coords(item, ax, ay + off * travel)
+                canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
+                                     font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
+
+    def roll_tick():
+        now = _time.perf_counter()
+        roll_frame()
+        done = [k for k, r_ in session["rolls"].items() if now - r_["t0"] >= r_["dur"]]
+        for k in done:
+            del session["rolls"][k]
+        if done:
+            draw_all()  # finished wheels go back to plain text
+        if session["rolls"]:
+            root.after(16, roll_tick)
+        else:
+            session["rolling"] = False
+
+    def clock_tick():
+        """Run the game clocks on live cards once a second between refreshes."""
+        now = time.time()
+        for item, base, clock in session["clock_items"]:
+            try:
+                text = tick_clock(base, clock, now)
+                if canvas.itemcget(item, "text") != text:
+                    canvas.itemconfigure(item, text=text)
+            except tk.TclError:
+                pass
+        root.after(1000 - int(now * 1000) % 1000 + 5, clock_tick)  # just after each whole second
+
     def draw_card(r, x, y, w, final):
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
@@ -2041,12 +2177,11 @@ def run_gui():
             hi = COLORS["in"] if live else FG
             c1 = hi if lead >= 0 or live else DIM
             c2 = hi if lead <= 0 or live else DIM
-            i2, _h = ctext(xr, yy - 3, sc[1], FONTS["score"], c2, anchor="ne")
-            x2 = canvas.bbox(i2)[0]
+            rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
+            x2 = draw_score(xr, yy - 3, sc[1], c2, bgc, (rk, 1))
             idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
             x1 = canvas.bbox(idash)[0]
-            i1, _h = ctext(x1 - 4, yy - 3, sc[0], FONTS["score"], c1, anchor="ne")
-            text_w = max(ww - (xr - canvas.bbox(i1)[0]) - 12, 80)
+            text_w = max(ww - (xr - draw_score(x1 - 4, yy - 3, sc[0], c1, bgc, (rk, 0))) - 12, 80)
         _, h = ctext(ix, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
         yy += h
         if r["line"]:
@@ -2054,8 +2189,13 @@ def run_gui():
             yy += h
         if sc:
             yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
-        _, h = ctext(ix, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
-                     COLORS.get(r["state"], FG), width=ww, tags=tags)
+        sid, h = ctext(ix, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
+                       COLORS.get(r["state"], FG), width=ww, tags=tags)
+        clock = r.get("clock") if r["state"] == "in" else None
+        session["card_clock"] = clock  # the period bar label shows the clock too
+        if clock:
+            session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
+            canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
         yy += h
         if r.get("graphic"):
             yy += graphics(ix, yy, r["graphic"], bgc, ww)
@@ -2281,6 +2421,8 @@ def run_gui():
             return 0
         canvas.delete("all")
         session["hits"].clear()
+        session["roll_cells"].clear()
+        session["clock_items"].clear()
         session["actx"] = None
         cw = max(canvas.winfo_width(), MIN_BODY_W)
         y = draw_nodes(build_nodes(), 0, 2, cw, final)
@@ -2841,6 +2983,7 @@ def run_gui():
         load_standings()
         load_open_college()
     spin()
+    clock_tick()
     try:
         round_corners(root)
     except Exception:
@@ -2866,7 +3009,11 @@ def demo_data():
         status = " \u00b7 ".join(x for x in ((m.group(1) or "") if m else "", m.group(4) if m else detail) if x)
         wbar = {"kind": "versus", "label": "Win probability", "a_name": win[0], "a": win[1], "b_name": win[2], "b": win[3],
                 "a_color": win[4], "b_color": win[5]} if win else None
-        return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/",
+        cm = re.search(r"(\d+):(\d\d)$|(\d+)'$", detail)
+        clock = None if state != "in" or not cm else (
+            {"at": time.time(), "secs": int(cm.group(1)) * 60 + int(cm.group(2)), "up": False} if cm.group(1)
+            else {"at": time.time(), "secs": int(cm.group(3)) * 60 - 30, "up": True, "minute": int(cm.group(3))})
+        return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/", "clock": clock,
                 "score": score, "status": status, "win": wbar, "next": next_line,
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
@@ -2913,7 +3060,14 @@ def demo_leagues():
 
 if __name__ == "__main__":
     if "--demo" in sys.argv:  # preview the live-game graphics with fake data (no network)
-        fetch_all = lambda entries: demo_data()
+        demo_refreshes = [0]
+
+        def fetch_all(entries):  # each refresh (press the refresh button) bumps the live scores so they roll
+            n, rows = demo_refreshes[0], demo_data()
+            demo_refreshes[0] += 1
+            for r, (da, db) in zip(rows, ((7, 3), (0, 1), (2, 3), (1, 0), (0, 1))):
+                r["score"] = (str(int(r["score"][0]) + da * n), str(int(r["score"][1]) + db * n))
+            return rows
         fetch_pinned = lambda pins: []
         playoff_games = lambda: []
         league_games = demo_leagues
