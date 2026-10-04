@@ -4396,7 +4396,7 @@ def run_gui():
             f = ease(p - i)
             (x0, y0), (x1, y1) = spot[path[i]], spot[path[i + 1]]
             return x0 + (x1 - x0) * f, y0 + (y1 - y0) * f
-        lit, scored, arrivals, counts = set(), 0, [], []
+        lit, scored, arrivals = set(), 0, []
         for delay, path in runners:
             p = (u - delay) / LEG
             if path[0] != 0 and p < 0:
@@ -4404,10 +4404,8 @@ def run_gui():
             for idx in range(1, len(path)):
                 if p >= idx and path[idx] != 0:
                     lit.add(path[idx])
-            if path[-1] == 0 and p >= len(path) - 1 - 0.35:  # the count appears just before the runner touches home
-                scored += 1
-                counts.append((p - (len(path) - 1 - 0.35)) * LEG)
             if path[-1] == 0 and p >= len(path) - 1:
+                scored += 1
                 arrivals.append((p - (len(path) - 1)) * LEG)
         for i in range(4):  # the basepaths
             x0, y0 = spot[i]
@@ -4442,10 +4440,10 @@ def run_gui():
             x, y = at(path, p)
             canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, fill, a), tags=lay["tag"])
         if total >= 2 and scored:  # runs count up in the middle: bigger with every run, eased, and shaking when it changes
-            sizes = (8, 10, 14, 19, 25)  # pt for 0 (where it grows in from), 1, 2, 3 and 4+ runs
+            sizes = (5, 10, 14, 19, 25)  # pt for 0 (where it grows in from), 1, 2, 3 and 4+ runs
             now_s, was_s = sizes[min(scored, 4)], sizes[min(scored, 4) - 1]
-            age = min(counts)  # seconds since the latest run scored
-            size = was_s + (now_s - was_s) * ease(min(1.0, age / (0.15 if scored == 1 else 0.35)))  # the first run pops in fast
+            age = min(arrivals)  # seconds since the latest run scored
+            size = was_s + (now_s - was_s) * ease(min(1.0, age / 0.35))
             shake = max(0.0, 1 - age / 0.45)
             canvas.create_text(cx + 4 * shake * math.sin(age * 70), cy + 2 * shake * math.cos(age * 85), text=str(scored),
                                font=("Segoe UI", max(6, int(round(size))), "bold"), fill=blend(bg, fill, a), tags=lay["tag"])
