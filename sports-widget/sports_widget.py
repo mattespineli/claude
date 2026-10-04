@@ -4655,6 +4655,8 @@ def run_gui():
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
         if head == "PENALTY" and session.get("sport") == "Football":
             head, color = "FLAG", "#facc15"
+        if head == "CALL CHALLENGED":  # red flag in football, VAR blue in soccer, the team's colour elsewhere
+            color = {"Football": "#ef4444", "Soccer": "#38bdf8"}.get(session.get("sport"))
         if session.get("sport") == "Basketball" and head in ("THREE-POINTER", "TWO-POINTER", "SLAM DUNK!", "BLOCK", "STEAL") and not MAIN.get("test_follow"):
             return "Basketball plays this only as the lead-in to a Then animation. Pick one above."
         gb_ = next((g_ for g_ in ([r["graphic"]] if isinstance(r.get("graphic"), dict) else r.get("graphic") or []) if g_["kind"] == "baseball"), None)
@@ -4915,7 +4917,7 @@ def run_gui():
                     "Baseball": ("Home run", "Inside-the-park HR", "Grand slam", "Strikeout", "Double play", "Out", "Single", "Double", "Triple",
                                  "Run scores", "Triple play", "Caught stealing", "Picked off"),
                     "Basketball": ("Three-pointer", "Two-pointer", "Slam dunk", "Block", "Steal"), "Hockey": ("Goal", "Penalty"), "Soccer": ("Goal",)}
-        everywhere = ("Final", "Clutch border")
+        everywhere = ("Final", "Clutch border", "Call challenged", "Successful challenge", "Failed challenge")
         btns = []
         for label, *_rest in sorted(TESTS, key=lambda t_: t_[0].lower()):  # alphabetical, across the rows
             b_ = styled_button(f, label, lambda: None)
