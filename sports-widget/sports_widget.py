@@ -4037,7 +4037,8 @@ def run_gui():
         mode = "pulse" if mode in ("off", "flash") else mode
         scoring = kind in ("score", "run", "grand")
         import random
-        side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
+        mine = session.get("mine", 0)  # the dummy card's "my team": good things happen to it, bad ones (a penalty) to the other team
+        side = (1 - mine if head == "PENALTY" else mine) if len(r.get("teams") or []) == 2 else None
         make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
@@ -4045,7 +4046,7 @@ def run_gui():
         session["celeb_next"].pop(k, None)
         follows = list(MAIN.get("test_follow", []))  # what the play caused, in the order picked, each after the one before
         for follow in follows:
-            fside = side if side is None or follow != "FUMBLE RECOVERED" else 1 - side  # the other team recovers it
+            fside = mine if side is not None else None  # follow-ups are good news: my team takes the lead, recovers the fumble...
             chain_event(k, (r, k, fside, follow, None, FOLLOW_SECS, mode, "Test animation"),
                         {"sound": "swing"} if follow == "MOMENTUM SWING" else {})
         session["test_scores"].pop(k, None)
@@ -4063,6 +4064,7 @@ def run_gui():
         tsession = {k_: type(v_)() if isinstance(v_, (dict, list, set)) else v_ for k_, v_ in SESSION0.items()}
         tview = (tcanvas, tsession)
         tsession["view"] = tview
+        tsession["mine"] = 0
         tv["view"] = tview
         side_ = tk.Frame(head_, bg=BG)
         side_.grid(row=0, column=1, sticky="nw")
@@ -4070,26 +4072,27 @@ def run_gui():
         opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
         relayout = [lambda: None]  # re-lists the test buttons for the chosen sport (set once they exist)
         sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
+        MINE_ = ("My team", "mine", (("Away", 0), ("Home", 1)))  # which side of the dummy card is the user's team
         LEAD_ = ("Lead", "lead", (("Tied", "tied"), ("Close", "close"), ("Blowout", "blowout")))
         QTR_ = lambda title, n: (title, "q", tuple((str(i), i) for i in range(1, n + 1)))
         OPTS_ = {  # what each sport's dummy card can be set to: (title, key, ((label, value), ...))
-            "Football": [LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("10:00", "10:00"), ("4:10", "4:10"), ("1:30", "1:30"))),
+            "Football": [MINE_, LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("10:00", "10:00"), ("4:10", "4:10"), ("1:30", "1:30"))),
                          ("Down", "down", tuple((str(i), i) for i in range(1, 5))), ("To go", "dist", (("1", 1), ("4", 4), ("10", 10), ("20", 20))),
                          ("Field", "field", (("Own 25", "own"), ("Midfield", "mid"), ("Red zone", "red"), ("Goal line", "goal"))),
                          ("Ball", "poss", (("SF", "SF"), ("DAL", "DAL")))],
             "Baseball": [("Men on", "bases", ("1st", "2nd", "3rd")), ("Outs", "outs", (("0", 0), ("1", 1), ("2", 2))),
-                         ("Balls", "balls", tuple((str(i), i) for i in range(4))), ("Strikes", "strikes", tuple((str(i), i) for i in range(3))),
+                         ("Balls", "balls", tuple((str(i), i) for i in range(4))), ("Strikes", "strikes", tuple((str(i), i) for i in range(3))), MINE_,
                          ("Half", "half", (("Top", "Top"), ("Bottom", "Bot"))), ("Inning", "inning", (("1st", 1), ("7th", 7), ("9th", 9))), LEAD_,
                          ("Runs", "runs", tuple((str(i), i) for i in range(5)))],  # runs a Single / Double / Triple test scores
-            "Basketball": [LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("8:00", "8:00"), ("4:00", "4:00"), ("1:30", "1:30")))],
-            "Hockey": [LEAD_, QTR_("Period", 3), ("Clock", "clock", (("15:00", "15:00"), ("10:00", "10:00"), ("2:00", "2:00"))),
+            "Basketball": [MINE_, LEAD_, QTR_("Quarter", 4), ("Clock", "clock", (("8:00", "8:00"), ("4:00", "4:00"), ("1:30", "1:30")))],
+            "Hockey": [MINE_, LEAD_, QTR_("Period", 3), ("Clock", "clock", (("15:00", "15:00"), ("10:00", "10:00"), ("2:00", "2:00"))),
                        ("Power play", "pp", (("On", True), ("Off", False)))],
-            "Soccer": [LEAD_, ("Minute", "min", (("20'", 20), ("67'", 67), ("85'", 85))), ("Red card", "red", (("On", True), ("Off", False)))]}
-        DEFAULTS_ = {"Football": {"lead": "close", "q": 3, "clock": "4:10", "down": 3, "dist": 4, "field": "mid", "poss": "SF"},
-                     "Baseball": {"bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close", "runs": MAIN.get("test_runs", 0)},
-                     "Basketball": {"lead": "close", "q": 3, "clock": "4:00"},
-                     "Hockey": {"lead": "close", "q": 2, "clock": "10:00", "pp": True},
-                     "Soccer": {"lead": "close", "min": 67, "red": True}}
+            "Soccer": [MINE_, LEAD_, ("Minute", "min", (("20'", 20), ("67'", 67), ("85'", 85))), ("Red card", "red", (("On", True), ("Off", False)))]}
+        DEFAULTS_ = {"Football": {"mine": 0, "lead": "close", "q": 3, "clock": "4:10", "down": 3, "dist": 4, "field": "mid", "poss": "SF"},
+                     "Baseball": {"mine": 0, "bases": [True, False, True], "outs": 2, "balls": 1, "strikes": 2, "half": "Top", "inning": 7, "lead": "close", "runs": MAIN.get("test_runs", 0)},
+                     "Basketball": {"mine": 0, "lead": "close", "q": 3, "clock": "4:00"},
+                     "Hockey": {"mine": 0, "lead": "close", "q": 2, "clock": "10:00", "pp": True},
+                     "Soccer": {"mine": 0, "lead": "close", "min": 67, "red": True}}
         dstate_ = {k_: dict(v_, **({"bases": list(v_["bases"])} if "bases" in v_ else {})) for k_, v_ in DEFAULTS_.items()}
 
         def build_dummy(sport_):
@@ -4137,6 +4140,10 @@ def run_gui():
                             st_[k_] = v_
                             if k_ == "runs":
                                 MAIN["test_runs"] = v_
+                            if k_ == "mine":  # one choice for every sport
+                                tsession["mine"] = v_
+                                for d_ in dstate_.values():
+                                    d_["mine"] = v_
                         paint(k_, ps_, m_)
                         show_dummy()
                     c_.bind("<ButtonRelease-1>", click)
