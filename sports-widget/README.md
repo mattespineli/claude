@@ -35,6 +35,8 @@ Playoffs has a **Live** section (opens automatically whenever a game goes live),
 
 Click the Full/Live/Title button in the header to switch between all games, live games only, and title only.
 
+While the first data loads, a spinner is shown instead of a blank window. A team shows its last game if it was within the past two weeks.
+
 The gear button in the header opens the same menu as a right-click.
 
 The window remembers its position (and size, if you resized it) between runs.

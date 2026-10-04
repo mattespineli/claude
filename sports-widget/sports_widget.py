@@ -564,8 +564,8 @@ def _state_of(e):
     return "pre"
 
 
-def recent_result(events, hours=24 * 7):
-    """Most recent completed game that started within the last `hours` hours (default: a week)."""
+def recent_result(events, hours=24 * 14):
+    """Most recent completed game that started within the last `hours` hours (default: two weeks)."""
     now = datetime.now(timezone.utc)
     best = None
     for e in events:
@@ -1965,7 +1965,32 @@ def run_gui():
             root.after(0, arrived)
         threading.Thread(target=work, daemon=True).start()
 
+    loading = {"on": True, "phase": 0}
+
+    def spin():
+        """Spinner shown on the canvas until the first data arrives."""
+        if not loading["on"]:
+            return
+        try:
+            canvas.delete("loading")
+            cw = max(canvas.winfo_width(), MIN_BODY_W)
+            ch = max(canvas.winfo_height(), 100)
+            cx, cy, n = cw / 2, ch / 2 - 10, 8
+            import math
+            for i in range(n):
+                a_ = 2 * math.pi * i / n
+                shade = ((i - loading["phase"]) % n) / n  # the lead dot is brightest, the tail fades out
+                col = blend(BG, FG, 0.15 + 0.85 * (1 - shade))
+                x, y = cx + 12 * math.cos(a_), cy + 12 * math.sin(a_)
+                canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=col, outline="", tags="loading")
+            canvas.create_text(cx, cy + 30, text="Loading...", fill=DIM, font=FONTS["line"], tags="loading")
+            loading["phase"] = (loading["phase"] + 1) % n
+            root.after(90, spin)
+        except tk.TclError:
+            pass
+
     def render(results, pin_results, playoffs, leagues=()):
+        loading["on"] = False
         last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
         stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
         any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
@@ -2256,6 +2281,8 @@ def run_gui():
     root.update_idletasks()
     apply_layout()
     threading.Thread(target=icon_precompute, daemon=True).start()
+    stamp.config(text="Loading...")
+    spin()
     try:
         round_corners(root)
     except Exception:
