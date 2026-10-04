@@ -16,6 +16,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
@@ -317,10 +318,10 @@ def cached(key, max_age, fn):
             return hit[1]
         data = fn()
         now = time.monotonic()
-        _cache[key] = (now, data)
-        if len(_cache) > 300:  # drop entries no caller would still accept (longest max_age is an hour)
+        _cache[key] = (now, data, max_age)
+        if len(_cache) > 300:  # drop entries older than their own max_age (season starts keep 6 h, scoreboards seconds)
             with _cache_lock:
-                for k in [k for k, v in list(_cache.items()) if now - v[0] > 3600]:
+                for k in [k for k, v in list(_cache.items()) if now - v[0] > v[2]]:
                     _cache.pop(k, None)
                     _key_locks.pop(k, None)
         return data
@@ -723,16 +724,21 @@ def fetch_summary_cached(sport, league, event_id, max_age=20):
 
 def win_bar(game):
     """Win-probability data for a live game's card ({a, b, names, colors}) or None."""
-    try:
-        d = game_detail_data(fetch_summary_cached(game["sport"], game["league"], game["id"]), sport=game["sport"], league=game["league"])
+    try:  # only the last win probability and the teams: read straight from the summary (game_detail_data does far more)
+        data = fetch_summary_cached(game["sport"], game["league"], game["id"])
+        wp = data.get("winprobability") or []
+        if not wp or wp[-1].get("homeWinPercentage") is None:
+            return None
+        cs = (((data.get("header") or {}).get("competitions") or [{}])[0]).get("competitors", [])
+        away = next((c for c in cs if c.get("homeAway") == "away"), cs[0] if cs else {})
+        home = next((c for c in cs if c.get("homeAway") == "home"), cs[1] if len(cs) > 1 else {})
+        hw = round(float(wp[-1]["homeWinPercentage"]) * 100)
+        ca, cb = matchup_colors([away, home]) if away and home else ("#60a5fa", "#f59e0b")
+        abbr = lambda c: (c.get("team") or {}).get("abbreviation", "")
     except Exception:
         return None
-    if d.get("home_win") is None:
-        return None
-    hw = round(d["home_win"] * 100)
-    ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
-    return {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
-            "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}
+    return {"kind": "versus", "label": "Win probability", "a_name": abbr(away), "a": 100 - hw,
+            "b_name": abbr(home), "b": hw, "a_color": ca, "b_color": cb}
 
 
 def fetch_summary(sport, league, event_id):
@@ -1793,6 +1799,28 @@ def is_postseason(e):
     return any(w in note for w in _POST_WORDS)
 
 
+def _prefetch_summaries(sport, league, events):
+    """Fetch the live games' summaries side by side into the cache: situation_graphic reads them one at a time
+    (hoops_from_plays, abs_challenges), and win_bar wants them after."""
+    if sport != "basketball" and league != "mlb":
+        return
+
+    def one(cid):
+        try:
+            fetch_summary_cached(sport, league, cid)
+        except Exception:
+            pass
+    ids = []
+    for e in events:
+        try:
+            comp = e["competitions"][0]
+            if ((comp.get("status") or e.get("status") or {}).get("type") or {}).get("state") == "in" and comp.get("id"):
+                ids.append(comp["id"])
+        except (KeyError, IndexError, TypeError, AttributeError):
+            continue
+    pmap(one, ids, workers=6)
+
+
 def playoff_games(debug=False, days=7):
     """Postseason games: live and today's, plus the latest result per matchup from the last `days` days."""
     today = datetime.now().astimezone().date()
@@ -1806,44 +1834,48 @@ def playoff_games(debug=False, days=7):
             continue
         if debug:
             print(f"{name}: {len(events)} events, season types {sorted({str(e.get('season', {}).get('type')) for e in events})}")
+        _prefetch_summaries(sport, league, events)
         for e in events:
-            if not e.get("competitions") or not is_postseason(e):
-                continue
-            summ = summarize_game(e, sport, league)
-            if not summ:
-                continue
-            state, matchup, detail = summ
-            d = _parse_date(e.get("date"))
-            local = d.astimezone() if d else None
-            if state == "in":
-                prio = 0
-            elif state == "pre":
-                if not (local and local.date() == today):
+            try:  # one malformed event must not fail the whole refresh
+                if not e.get("competitions") or not is_postseason(e):
                     continue
-                prio = 1
-            else:
-                prio = 2
-            comp = e["competitions"][0]
-            note = (comp.get("notes") or [{}])[0].get("headline", "")
-            series = comp.get("series", {}).get("summary", "")
-            extra = " · ".join(x for x in (note, series) if x)
-            parts = score_parts(e)
-            row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
-                   "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
-                   "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
-                   "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
-                   "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
-                   "clock": live_clock(e, sport),
-                   "detail": detail, "_date": e.get("date", ""),
-                   "info": situation_text(sport, comp) if state == "in" else "",
-                   "graphic": situation_graphic(sport, comp, league) if state == "in" else None}
-            teams = frozenset((league, str(c.get("team", {}).get("id", c.get("id", "")))) for c in comp.get("competitors", []))
-            row["_teams"] = teams
-            key = (league, teams)
-            cur = best.get(key)
-            # lower priority number wins; within completed games the most recent wins
-            if cur is None or prio < cur[0] or (prio == cur[0] == 2 and row["_date"] > cur[1]):
-                best[key] = (prio, row["_date"], row)
+                summ = summarize_game(e, sport, league)
+                if not summ:
+                    continue
+                state, matchup, detail = summ
+                d = _parse_date(e.get("date"))
+                local = d.astimezone() if d else None
+                if state == "in":
+                    prio = 0
+                elif state == "pre":
+                    if not (local and local.date() == today):
+                        continue
+                    prio = 1
+                else:
+                    prio = 2
+                comp = e["competitions"][0]
+                note = (comp.get("notes") or [{}])[0].get("headline", "")
+                series = comp.get("series", {}).get("summary", "")
+                extra = " · ".join(x for x in (note, series) if x)
+                parts = score_parts(e)
+                row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
+                       "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+                       "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
+                       "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
+                       "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
+                       "clock": live_clock(e, sport),
+                       "detail": detail, "_date": e.get("date", ""),
+                       "info": situation_text(sport, comp) if state == "in" else "",
+                       "graphic": situation_graphic(sport, comp, league) if state == "in" else None}
+                teams = frozenset((league, str(c.get("team", {}).get("id", c.get("id", "")))) for c in comp.get("competitors", []))
+                row["_teams"] = teams
+                key = (league, teams)
+                cur = best.get(key)
+                # lower priority number wins; within completed games the most recent wins
+                if cur is None or prio < cur[0] or (prio == cur[0] == 2 and row["_date"] > cur[1]):
+                    best[key] = (prio, row["_date"], row)
+            except Exception:
+                continue
     rows = sorted((v for v in best.values()), key=lambda v: (v[0], v[1] if v[0] < 2 else ""))
     # Completed games: hide a game if either team has a more recent completed game (newest first).
     seen, done = set(), []
@@ -1891,23 +1923,27 @@ def league_games():
     for (name, sport, league), events in zip(LEAGUE_SECTION, fetched):
         if isinstance(events, Exception):
             continue
+        _prefetch_summaries(sport, league, events)
         for e in events:
-            if not e.get("competitions") or is_postseason(e):
+            try:  # one malformed event must not fail the whole refresh
+                if not e.get("competitions") or is_postseason(e):
+                    continue
+                summ = summarize_game(e, sport, league)
+                if not summ:
+                    continue
+                state, matchup, detail = summ
+                comp = e["competitions"][0]
+                parts = score_parts(e)
+                out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail, "logos": comp_logos(comp),
+                            "teams": comp_teams(comp), "tv": tv_channels(comp) if state in ("in", "pre") else "",
+                            "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
+                            "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
+                            "url": event_url(e, sport, league),
+                            "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
+                            "info": situation_text(sport, comp) if state == "in" else "",
+                            "graphic": situation_graphic(sport, comp, league) if state == "in" else None})
+            except Exception:
                 continue
-            summ = summarize_game(e, sport, league)
-            if not summ:
-                continue
-            state, matchup, detail = summ
-            comp = e["competitions"][0]
-            parts = score_parts(e)
-            out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail, "logos": comp_logos(comp),
-                        "teams": comp_teams(comp), "tv": tv_channels(comp) if state in ("in", "pre") else "",
-                        "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
-                        "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
-                        "url": event_url(e, sport, league),
-                        "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
-                        "info": situation_text(sport, comp) if state == "in" else "",
-                        "graphic": situation_graphic(sport, comp, league) if state == "in" else None})
     order = {"in": 0, "pre": 1, "post": 2}
     out.sort(key=lambda r: (order.get(r["state"], 3), r["_date"]))
     return out
@@ -3223,10 +3259,17 @@ def run_gui():
         canvas.create_line(x, mid, x + w, mid, fill=blend(bgc, DIM, 0.45), dash=(2, 3))
         n = len(vals)
         pts = [(x + w * i / (n - 1), mid - v_ * H / 2) for i, v_ in enumerate(vals)]
-        for (x0_, y0_), (x1_, y1_), v0_, v1_ in zip(pts, pts[1:], vals, vals[1:]):
+        run_, rcol = [pts[0]], None  # consecutive stretches of one colour make one polyline
+        for p1_, v0_, v1_ in zip(pts[1:], vals, vals[1:]):
             m_ = (v0_ + v1_) / 2
             col = ca if m_ > 0 else cb if m_ < 0 else DIM
-            canvas.create_line(x0_, y0_, x1_, y1_, fill=col, width=2, capstyle="round")
+            if col != rcol and len(run_) > 1:
+                canvas.create_line(*[c_ for p_ in run_ for c_ in p_], fill=rcol, width=2, capstyle="round", joinstyle="round")
+                run_ = [run_[-1]]
+            run_.append(p1_)
+            rcol = col
+        if len(run_) > 1:
+            canvas.create_line(*[c_ for p_ in run_ for c_ in p_], fill=rcol, width=2, capstyle="round", joinstyle="round")
         ex_, ey_ = pts[-1]
         canvas.create_oval(ex_ - 2.5, ey_ - 2.5, ex_ + 2.5, ey_ + 2.5, fill=ca if vals[-1] > 0 else cb if vals[-1] < 0 else DIM, outline="")
         return 4 + h + 2 + H + 4
@@ -3371,11 +3414,12 @@ def run_gui():
             y += 4
         return y - y0
 
-    def fetch_details(g):
+    def fetch_details(g, details):
+        """(In a worker thread.) `details` is the session's store, taken on the UI thread: `session` may be the Settings dummy's by now."""
         try:
-            session["details"][gkey(g)] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=5), sport=g["sport"], league=g["league"])
+            details[gkey(g)] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=5), sport=g["sport"], league=g["league"])
         except Exception as ex:
-            session["details"][gkey(g)] = {"error": str(ex)[:60]}
+            details[gkey(g)] = {"error": str(ex)[:60]}
 
     def new_hit(payload):
         tag = f"hit{len(session['hits'])}"
@@ -3504,6 +3548,7 @@ def run_gui():
                     del cache[k_]
 
     pill_imgs = {}
+    pill_masks = {}  # (w, h, r) -> each pixel's anti-aliased coverage in 16ths: a new colour only needs a lookup per pixel
     pill_of = {}  # (canvas, image id) -> (w, h, colour) of the pills drawn, so a fading card can re-tint them (ids repeat across canvases)
 
     def pill_image(w, h, color, bg):
@@ -3513,21 +3558,25 @@ def run_gui():
         img = pill_imgs.get(key)
         if img is None:
             import base64
-            r = 4
+            r, ss = 4, 4
+            mask = pill_masks.get((w, h, r))
+            if mask is None:
+                mask = bytearray()
+                for py in range(h):
+                    for px in range(w):
+                        hit = 0
+                        for sy in range(ss):
+                            for sx in range(ss):
+                                x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
+                                dx, dy = max(r - x, x - (w - r), 0), max(r - y, y - (h - r), 0)
+                                hit += dx * dx + dy * dy <= r * r
+                        mask.append(hit)
+                mask = pill_masks[(w, h, r)] = bytes(mask)
             fr, fg_, fb = _rgb(color)
             br, bgg, bb = _rgb(bg)
-            ss, out = 4, bytearray()
-            for py in range(h):
-                for px in range(w):
-                    hit = 0
-                    for sy in range(ss):
-                        for sx in range(ss):
-                            x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
-                            dx, dy = max(r - x, x - (w - r), 0), max(r - y, y - (h - r), 0)
-                            hit += dx * dx + dy * dy <= r * r
-                    a = hit / (ss * ss)
-                    out += bytes((round(br + (fr - br) * a), round(bgg + (fg_ - bgg) * a), round(bb + (fb - bb) * a), 255))
-            img = pill_imgs[key] = tk.PhotoImage(data=base64.b64encode(_png_bytes(w, h, out)))
+            lut = [bytes((round(br + (fr - br) * a), round(bgg + (fg_ - bgg) * a), round(bb + (fb - bb) * a), 255))
+                   for a in (hit / (ss * ss) for hit in range(ss * ss + 1))]  # the pixel for each coverage
+            img = pill_imgs[key] = tk.PhotoImage(data=base64.b64encode(_png_bytes(w, h, b"".join(map(lut.__getitem__, mask)))))
         return img
 
     def pill_faded(spec, bgc, f):
@@ -3542,8 +3591,6 @@ def run_gui():
         x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
         w, h = x2 - x1, y2 - y1
         i_ = canvas.create_image(x1, y1, image=pill_image(w, h, color, session.get("card_bg") or BG), anchor="nw", tags=tags)
-        if len(pill_of) > 4000:
-            pill_of.clear()
         pill_of[(str(canvas), i_)] = (w, h, color)
         return [i_]
 
@@ -3669,6 +3716,8 @@ def run_gui():
         canvas.delete("all")
         for k_ in [k_ for k_ in grad_of if k_[0] is canvas]:
             del grad_of[k_]
+        for k_ in [k_ for k_ in pill_of if k_[0] == str(canvas)]:  # its pills went with everything else
+            del pill_of[k_]
         for key in ("hits", "roll_cells", "clock_items", "pulse_items", "layers", "gcount", "hcards", "hseen"):
             session[key].clear()
         session["actx"] = None
@@ -3782,17 +3831,31 @@ def run_gui():
             c_.itemconfigure(d_, fill=blend(off_, FG, a) if k_ == slot % n else off_)  # the lit dot fades with the stats
         cyc["shown"] = slot % n
 
-    stat_on = {"on": False}
+    stat_on = {"on": False, "job": None}
 
     def stat_tick():
+        now = time.time()
+        wait = STAT_SECS
         for cyc in list(stat_cycles):
             try:
-                stat_apply(cyc)
+                stat_apply(cyc, now)
             except tk.TclError:
                 stat_cycles.remove(cyc)  # its canvas was redrawn
+                continue
+            t = (now - cyc["t0"]) % STAT_SECS
+            wait = min(wait, 0 if t < STAT_IN or t >= STAT_SECS - STAT_OUT else STAT_SECS - STAT_OUT - t)
         stat_on["on"] = bool(stat_cycles)
+        stat_on["job"] = None
         if stat_cycles:  # idle with nothing cycling: the next card that needs it starts it again
-            root.after(FRAME_MS, stat_tick)
+            # every frame while a page fades; between fades, sleep until the next one starts
+            stat_on["job"] = root.after(max(FRAME_MS, int(wait * 1000)), stat_tick)
+
+    def stat_kick():
+        """(Re)start the stats ticks now: a page was just drawn or picked, and may be mid-fade."""
+        if stat_on["job"]:
+            root.after_cancel(stat_on["job"])
+        stat_on["on"] = True
+        stat_on["job"] = root.after(FRAME_MS, stat_tick)
 
     def clock_tick():
         """Run the game clocks on live cards once a second between refreshes."""
@@ -3814,12 +3877,13 @@ def run_gui():
             for k_ in [k_ for k_ in session["stats"] if brk and k_.startswith(gkey(g) + "|ht|")]:
                 del session["stats"][k_]  # an earlier break's stats are stale now
             session["stats"][k] = None
+            stats = session["stats"]  # this session's: the thread must not read `session`, which run_in may have swapped
 
             def work():
                 try:
-                    session["stats"][k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=60 if brk else 600), sport=g["sport"], league=g["league"])
+                    stats[k] = game_detail_data(fetch_summary_cached(g["sport"], g["league"], g["id"], max_age=60 if brk else 600), sport=g["sport"], league=g["league"])
                 except Exception:
-                    session["stats"][k] = {"stats": []}
+                    stats[k] = {"stats": []}
                 root.after(0, stats_loaded)
             threading.Thread(target=work, daemon=True).start()
         return session["stats"].get(k)
@@ -3937,9 +4001,7 @@ def run_gui():
                 if len(pages) > 1 and not (ce and ce.get("banner")):
                     stat_cycles.append(cyc)
                     stat_apply(cyc)
-                    if not stat_on["on"]:
-                        stat_on["on"] = True
-                        root.after(FRAME_MS, stat_tick)
+                    stat_kick()
         lines = info.split("\n") if info else []
         if at_half and inning_break:
             lines = []  # between innings the diamond, count and batter give way to the stats
@@ -4272,7 +4334,8 @@ def run_gui():
     def make_event(r, k, side, head, color, secs, mode, detail="", banner=True, grand=False, run=False, tag="", sound=None,
                    chained_in=False, chained_out=False, field=None, out=None):
         """Start a celebration (animation + optional sound) on card k. `field`: a baseball run's (head, men on, runs), drawn as
-        a little diamond instead of text; `out`: how long its fade-out takes."""
+        a little diamond instead of text; `out`: how long its fade-out takes. `sound` only names the kind of event: every
+        banner plays the same chord (none for a chained-in step or a base run's diamond)."""
         now = _time.perf_counter()
         if secs < 6 and banner and not field:  # one set of ripples: hold the text about 2.7 s at full strength so it can be read
             secs = max(secs, 5.0)
@@ -4353,6 +4416,8 @@ def run_gui():
     def chain_event(k, args, kw):
         """Play an event on card k once its current one ends, the card's own info staying hidden in between."""
         queue = session["celeb_next"].setdefault(k, [])
+        if len(queue) >= 4:
+            queue.pop(0)  # a backlog: the oldest queued event is the stalest
         if queue:
             queue[-1][1]["chained_out"] = True
         elif k in session["celebs"]:
@@ -4391,7 +4456,7 @@ def run_gui():
                         a_, b_ = float(r["score"][0]), float(r["score"][1])
                     except ValueError:
                         a_ = b_ = 0
-                    win = 0 if a_ >= b_ else 1
+                    win = None if a_ == b_ else 0 if a_ > b_ else 1  # a draw is nobody's
                     teams = r.get("teams") or []
                     nm = [t_["abbr"] for t_ in teams] if len(teams) == 2 else ["", ""]
                     chain_event(k, (r, k, win, "FINAL", None, BANNER_SECS, mode, f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}"),
@@ -4411,10 +4476,16 @@ def run_gui():
             sport = (r.get("game") or {}).get("sport", "")
             loaded = any(g_["kind"] == "baseball" and all(g_["bases"]) for g_ in gl)
             prev = session["score_prev"].get(k)
-            seen[k] = (cur[0], cur[1], loaded)
+            # never lower: a feed that briefly goes back a score must not replay it when the score returns
+            seen[k] = (max(cur[0], prev[0]), max(cur[1], prev[1]), loaded) if prev else (cur[0], cur[1], loaded)
             ptext = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
             ptid = next((g_.get("team", "") for g_ in gl if g_["kind"] == "lastplay"), "")
-            plays[k] = ptext
+            old = session["play_prev"].get(k)
+            plays[k] = ptext or old or ""  # an empty last play is a gap in the feed, not a new play
+            recent = session.setdefault("play_seen", {}).setdefault(k, deque(maxlen=6))  # a play the feed flips back to is not new
+            fresh = bool(old is not None and ptext and ptext != old and ptext not in recent)
+            if ptext and ptext not in recent:
+                recent.append(ptext)
             bb_ = next((tuple(g_["bases"]) for g_ in gl if g_["kind"] == "baseball"), None)
             if bb_ is not None:
                 bases[k] = bb_  # the men on base now: the next hit starts from them
@@ -4441,7 +4512,6 @@ def run_gui():
             if m4 and downs[k] == 4 and session["down_prev"].get(k, 4) != 4:
                 fourth = ((r, k, acting_side(r, "4TH DOWN"), "4TH DOWN", None, 3.5, mode, (r.get("info") or "").split("\n")[0].replace(" \u00b7 ", "  \u00b7  ")),
                           {"sound": "fourth"})
-            old = session["play_prev"].get(k)
             tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
             d = (cur[0] - prev[0], cur[1] - prev[1])
             if max(d) > 0:  # somebody scored
@@ -4454,9 +4524,11 @@ def run_gui():
                 if sport == "basketball" and banner and not (tag or dag or swing):
                     continue  # a basket only plays as the lead-in to a Then animation
                 if banner or tag:  # a free throw has neither: no empty flash
+                    if session["celeb_next"].pop(k, None):  # the score plays now: what was queued behind the old event is stale
+                        session["run_hold"].pop(k, None)  # (and so is a dropped base run's held score)
                     make_event(r, k, side, head if banner else tag, None, GRAND_SECS if grand else BANNER_SECS, mode, ptext,
                                banner=banner or bool(tag), grand=grand, run=sport == "baseball", sound="grand" if grand else "score")
-                ch = challenge_of(ptext) if old is not None and ptext and ptext != old else None
+                ch = challenge_of(ptext) if fresh else None
                 if ch and ch[0]:  # the score came from an overturned call: the challenge's result follows it
                     cside = tm_.index(ch[1].upper()) if ch[1] and ch[1].upper() in tm_ else acting_side(r, "CHALLENGE", ptid)
                     chain_event(k, (r, k, cside, "SUCCESSFUL CHALLENGE!", "#34d399", 3.5, mode, ptext), {"sound": None})
@@ -4474,9 +4546,9 @@ def run_gui():
                     chain_event(k, *swing)
                 continue
             # nobody scored: a big play? (each plays after whatever is still playing on the card)
-            ch = challenge_of(ptext) if old is not None and ptext and ptext != old else None
+            ch = challenge_of(ptext) if fresh else None
             called = lambda t_: bool(re.search(r"\bchallenge", t_, re.I) or (sport == "soccer" and re.search(r"\bVAR\b", t_)))
-            if not ch and old is not None and ptext and ptext != old and called(ptext) and not called(old):
+            if not ch and fresh and called(ptext) and not called(old):
                 # a challenge was just called, no ruling yet (once: later plays still naming it are the same challenge): red for football (the red flag), VAR blue for soccer, else the team's colour
                 who_ = challenger_of(ptext).upper()
                 cside = tm_.index(who_) if who_ and who_ in tm_ else acting_side(r, "CHALLENGE", ptid)
@@ -4494,7 +4566,7 @@ def run_gui():
                 if swing:
                     chain_event(k, *swing)
                 continue
-            big = classify_play(sport, ptext) if old is not None and ptext and ptext != old else None
+            big = classify_play(sport, ptext) if fresh else None
             if (not big and m4 and fb_ and session["down_prev"].get(k) == 4 and downs.get(k) == 1 and session["poss_prev"].get(k)
                     and session["poss_prev"][k] != fb_["off"] and not re.search(r"punt|field goal|kick|intercept|fumble", ptext.lower())):
                 big = ("TURNOVER ON DOWNS!", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
@@ -4521,8 +4593,8 @@ def run_gui():
                 if swing:
                     chain_event(k, *swing)
                 continue
-            if fourth and k not in session["celebs"]:
-                make_event(*fourth[0], **fourth[1])
+            if fourth:  # on its own, or after an animation still playing from the last refresh
+                chain_event(k, *fourth)
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -4549,7 +4621,7 @@ def run_gui():
         if not items:
             session["pulse_on"] = False
             return
-        k = 0.5 + 0.5 * math.sin(_time.perf_counter() * 4)
+        k = round((0.5 + 0.5 * math.sin(_time.perf_counter() * 4)) * 128) / 128  # in 1/128 steps: a frame that changes no colour configures nothing
         shown = session.setdefault("pulse_shown", {})  # item -> the outline it has now
         if len(shown) > 4 * len(items) + 64:
             shown.clear()  # forget items from earlier redraws
@@ -5047,6 +5119,8 @@ def run_gui():
         live = {k: e for k, e in session["celebs"].items() if now - e["t0"] < e["secs"]}
         finished = len(live) != len(session["celebs"])
         session["celebs"] = live
+        for k in [k for k, q_ in session["celeb_next"].items() if not q_ or k not in session["hseen"]]:
+            del session["celeb_next"][k]  # nothing queued, or the card is no longer drawn: its queue would only go stale
         for k in [k for k, q_ in session["celeb_next"].items() if q_ and k not in live]:  # the next chained event starts as this one ends
             args, kw = session["celeb_next"][k].pop(0)
             make_event(*args, **kw)
@@ -5621,11 +5695,9 @@ def run_gui():
                 y = draw_card(n["row"], x, y, w, final)
                 a_ = move_alpha(card_key(n["row"]))
                 if a_ < 1:  # leaving one section or arriving in the next: the whole card fades
-                    ids_ = items_since(m_)
-                    fade_items(ids_, BG, a_)
-                    for i_ in ids_:
-                        if canvas.type(i_) == "image" and (str(canvas), i_) not in pill_of:  # logos can't be tinted: hide them for the dark half
-                            canvas.itemconfigure(i_, state="hidden" if a_ < 0.5 else "normal")
+                    mf_ = session["mfade"][card_key(n["row"])]
+                    mf_["items"] = move_items(items_since(m_))  # move_tick recolours these until the card is placed
+                    move_recolor(mf_["items"], a_)
             elif t == "group":
                 y = draw_group(n, x, y, w, final)
         return y
@@ -5636,6 +5708,35 @@ def run_gui():
             return 1.0
         t = _time.perf_counter() - m["t0"]
         return max(0.0, 1 - t / MOVE_FADE) if t < MOVE_FADE else min(1.0, (t - MOVE_FADE) / MOVE_FADE)
+
+    def move_items(ids):
+        """A fading card's items and their drawn colours: [(id, "fill" / "outline" / "pill" / "logo", colour or pill spec)]."""
+        out = []
+        for i_ in ids:
+            pk_ = (str(canvas), i_)
+            if pk_ in pill_of:
+                out.append((i_, "pill", pill_of[pk_]))
+            elif canvas.type(i_) == "image":
+                out.append((i_, "logo", None))
+            else:
+                for opt in ("fill", "outline"):
+                    try:
+                        c_ = canvas.itemcget(i_, opt)
+                    except tk.TclError:
+                        continue
+                    if len(c_) == 7 and c_.startswith("#"):
+                        out.append((i_, opt, c_))
+        return out
+
+    def move_recolor(items, a_):
+        """Blend a fading card's items toward the background (a_ = 1: as drawn); logos can't be tinted: hidden for the dark half."""
+        for i_, opt, c_ in items:
+            if opt == "pill":
+                canvas.itemconfigure(i_, image=pill_faded(c_, BG, a_))
+            elif opt == "logo":
+                canvas.itemconfigure(i_, state="hidden" if a_ < 0.5 else "normal")
+            else:
+                canvas.itemconfigure(i_, **{opt: blend(BG, c_, a_)})
 
     def move_tick():
         now, busy, placed = _time.perf_counter(), False, False
@@ -5654,11 +5755,19 @@ def run_gui():
                         if card_key(r) == k:
                             r["linger"] = False
         if not session["anims"]:
-            draw_all()
-            if not busy:  # the cards have settled: the signature only needs taking once
-                session["sig"] = compute_sig()
-            if placed or not busy:  # the layout changes only as a card takes its new place
-                fit()
+            fading = [m for m in session["mfade"].values() if "items" in m]
+            if placed or not busy or len(fading) != len(session["mfade"]):  # a full redraw as a card takes its new place
+                draw_all()
+                if not busy:  # the cards have settled: the signature only needs taking once
+                    session["sig"] = compute_sig()
+                if placed or not busy:  # the layout changes only as a card takes its new place
+                    fit()
+            else:  # in between, only the fading cards' colours change
+                try:
+                    for k, m in session["mfade"].items():
+                        move_recolor(m["items"], move_alpha(k))
+                except tk.TclError:  # an item went (a redraw elsewhere): the next draw_all stores the new ones
+                    draw_all()
         if busy:
             root.after(FRAME_MS, run_in, session.get("view"), move_tick)
 
@@ -5692,6 +5801,14 @@ def run_gui():
                 del store_[k]
         for k in [k for k in session["stats"] if k.split("|")[0] not in games_]:
             del session["stats"][k]
+        for k in [k for k in session["details"] if k not in games_]:
+            del session["details"][k]
+        for k in [k for k in session["shown"] if k[0] not in shown_]:  # tween targets: (card key, kind, label, n)
+            del session["shown"][k]
+        for k in [k for k in session.get("play_seen", {}) if k not in shown_]:
+            del session["play_seen"][k]
+        session["move_sched"] &= shown_
+        session["daggers"] = {d_ for d_ in session["daggers"] if d_[0] in shown_}
 
     def group_node(key, text, color, indent, persist, default, children):
         store = ui_state if persist else session
@@ -5832,6 +5949,8 @@ def run_gui():
         canvas.delete("all")
         for k_ in [k_ for k_ in grad_of if k_[0] is canvas]:
             del grad_of[k_]
+        for k_ in [k_ for k_ in pill_of if k_[0] == str(canvas)]:  # its pills went with everything else
+            del pill_of[k_]
         session["hits"].clear()
         session["roll_cells"].clear()
         session["clock_items"].clear()
@@ -5847,7 +5966,7 @@ def run_gui():
         total = int(y + 4)
         canvas.configure(scrollregion=(0, 0, cw, total))
         session["total"] = total
-        prune_imgs(pill_imgs, 400)  # after drawing, so the images just drawn stay cached
+        prune_imgs(pill_imgs, 1000)  # after drawing, so the images just drawn stay cached
         prune_imgs(logo_imgs, 200)
         ctx = session["actx"]
         if ctx:  # tag everything drawn after the animated block so a frame can move it with one call
@@ -6053,7 +6172,7 @@ def run_gui():
         session["opening"].add(k)
         session["games"][k] = g
         session["details"].pop(k, None)
-        started = {"on": False}
+        started, details = {"on": False}, session["details"]
 
         def begin():  # grow once to the full details, or to "Loading" when ESPN is slow
             if started["on"]:
@@ -6064,7 +6183,7 @@ def run_gui():
             start_anim(key, True)
 
         def work():
-            fetch_details(g)
+            fetch_details(g, details)
 
             def arrived():
                 if not started["on"]:
@@ -6131,14 +6250,16 @@ def run_gui():
 
     def load_standings():
         """Fetch all five leagues' standings in the background (cached for 10 minutes)."""
+        store = session["standings"]  # taken here, on the UI thread
+
         def one(lg):
             abbr, sport, league = lg
             try:
-                session["standings"][abbr] = parse_standings_tree(standings_json(sport, league), abbr)
+                store[abbr] = parse_standings_tree(standings_json(sport, league), abbr)
             except Exception:
-                session["standings"].setdefault(abbr, "error")
-                if session["standings"][abbr] is None:
-                    session["standings"][abbr] = "error"
+                store.setdefault(abbr, "error")
+                if store[abbr] is None:
+                    store[abbr] = "error"
 
         def work():
             pmap(one, STANDINGS_LEAGUES)
@@ -6203,14 +6324,15 @@ def run_gui():
             busy["again"] = True  # a refresh is still running: run one more when it finishes
             return
         busy["on"] = True
+        ses = MAIN  # the thread must not read `session`: run_in may swap in the Settings dummy's while it runs
 
         def work():
             try:
                 pin_list = list(pins)
-                expanded = [session["games"][k] for k in list(session["expanded"]) if k in session["games"]]
+                expanded = [ses["games"][k] for k in list(ses["expanded"]) if k in ses["games"]]
                 res, pres, po, lg, _ = pmap(lambda f: f(), [lambda: fetch_all(entries), lambda: fetch_pinned(pin_list),
                                                             playoff_games, league_games,
-                                                            lambda: pmap(fetch_details, expanded)], workers=5)
+                                                            lambda: pmap(lambda g: fetch_details(g, ses["details"]), expanded)], workers=5)
                 shown = {r["_key"] for r in res + pres if r.get("_key")}
                 po = [r for r in po if r.get("_key") not in shown]  # already listed above
                 lg = [r for r in lg if r.get("_key") not in shown]
@@ -6581,6 +6703,7 @@ def run_gui():
             logo_imgs.clear()
             logo_pending.clear()
             logo_done.clear()
+            logo_failed.clear()  # retry the ones that were unavailable too
             session["sig"] = None
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
@@ -6751,6 +6874,7 @@ def run_gui():
         elif h[0] == "statpage":  # a page dot: show that page now, and carry on cycling from it
             h[1]["t0"], h[1]["base"] = time.time(), h[2]
             stat_apply(h[1])
+            stat_kick()  # its fade-in runs now, not at the old schedule's next fade
         elif h[0] == "boxside":  # box score: show the other team
             if session["box_side"].get(h[1], 0) != h[2]:
                 session["box_side"][h[1]] = h[2]
