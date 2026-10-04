@@ -3976,7 +3976,7 @@ def run_gui():
                 x_ = tk.Label(f, text="\u2715", bg=BG, fg=COLORS["err"], font=("Segoe UI", 10, "bold"))
                 x_.place(in_=btn, relx=1.0, x=2, rely=0.5, anchor="w")
                 marks.append(x_)
-        for i, (label, *_rest) in enumerate(TESTS):
+        for i, (label, *_rest) in enumerate(sorted(TESTS, key=lambda t_: t_[0].lower())):  # alphabetical, across the rows
             b_ = styled_button(f, label, lambda: None)
             b_.bind("<ButtonRelease-1>", lambda e, lb=label, b2=b_: run_test(lb, b2) if 0 <= e.x <= b2.winfo_width() and 0 <= e.y <= 28 else None)
             b_.grid(row=2 + i // 3, column=i % 3, padx=(4, 16), pady=3, sticky="w")
