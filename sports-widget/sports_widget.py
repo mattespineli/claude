@@ -1488,7 +1488,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
-SCORE_ANIM_CHOICES = [("Ripple", "pulse"), ("Flash", "flash"), ("Off", "off")]
+SCORE_ANIM_CHOICES = [("Ripple", "pulse"), ("Off", "off")]  # (a saved "flash" from older versions plays as Ripple)
 LAYOUT_CHOICES = [("Scoreboard", "scoreboard"), ("List", "list")]  # "default" in an older state.json means List
 DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
@@ -3396,6 +3396,7 @@ def run_gui():
         """Compare live games with the last refresh and start an animation for each card where something happened:
         a score, a big play, a swing in win probability, or the final whistle."""
         mode = ui_state.get("score_anim", "pulse")
+        mode = "pulse" if mode == "flash" else mode  # the Flash option is gone: Ripple flashes the card too
         if ui_state.get("anim_scope", "all") == "mine":
             groups = groups[:2]  # My Teams and tracked games only
         now, seen, plays, wins, live_keys = _time.perf_counter(), {}, {}, {}, set()
@@ -3577,7 +3578,7 @@ def run_gui():
             root.after(8200, lambda: (session.update(sig=None), draw_all()))
             return
         mode = ui_state.get("score_anim", "pulse")
-        mode = "pulse" if mode == "off" else mode
+        mode = "pulse" if mode in ("off", "flash") else mode
         scoring = kind in ("score", "run", "grand")
         import random
         side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
@@ -3738,7 +3739,7 @@ def run_gui():
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and ce["mode"] == "flash" and ct < FLASH_SECS and ce["side"] is not None
+        flashing = bool(ce) and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None
         if flashing:
             bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
         cx0, cw_ = x + 2, w - 4
