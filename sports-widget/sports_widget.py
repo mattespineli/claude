@@ -4422,7 +4422,7 @@ def run_gui():
             if 0 <= age < 0.5:
                 rr_ = 5 + age * 26
                 canvas.create_oval(spot[0][0] - rr_, spot[0][1] - rr_, spot[0][0] + rr_, spot[0][1] + rr_, tags=lay["tag"],
-                                   outline=blend(bg, GOLD, a * (1 - age / 0.5)), width=2)
+                                   outline=blend(bg, fill, a * (1 - age / 0.5)), width=2)
         for delay, path in runners:
             p = (u - delay) / LEG
             if p < 0 or (path[-1] == 0 and p >= len(path) - 1):
@@ -4436,9 +4436,9 @@ def run_gui():
             moving = p < len(path) - 1
             for k in range(5, 0, -1) if moving else ():  # a short fading trail
                 x, y = at(path, p - k * 0.14)
-                canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=blend(bg, GOLD, a * (1 - k / 6) * 0.7), outline="", tags=lay["tag"])
+                canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=blend(bg, fill, a * (1 - k / 6) * 0.7), outline="", tags=lay["tag"])
             x, y = at(path, p)
-            canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, GOLD, a), tags=lay["tag"])
+            canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, fill, a), tags=lay["tag"])
         if total >= 2 and scored:  # runs count up in the middle
             canvas.create_text(cx, cy, text=str(scored), font=("Segoe UI", 16, "bold"), fill=blend(bg, fill, a), tags=lay["tag"])
 
