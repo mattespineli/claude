@@ -2243,11 +2243,28 @@ def run_gui():
         return c
 
     def styled_option(parent, var, values, command=None, width=None):
-        om = tk.OptionMenu(parent, var, *values, **({"command": command} if command else {}))
-        om.config(bg=PANEL, fg=FG, activebackground=HOVER, activeforeground=FG, relief="flat", bd=0,
-                  highlightthickness=0, font=UI_FONT, indicatoron=True, **({"width": width} if width else {}))
-        style_menu(om["menu"])
-        return om
+        """A rounded dropdown button; clicking it opens the app's own dark context menu under it."""
+        w = max(text_width(UI_FONT, v) for v in values) + 52
+        c = tk.Canvas(parent, width=w, height=28, bg=parent.cget("bg"), highlightthickness=0, cursor="hand2")
+        shape = c.create_polygon(rr_points(1, 1, w - 1, 27, 8), smooth=True, fill=PANEL, outline=PANEL)
+        label = c.create_text(12, 14, text=var.get(), fill=FG, font=UI_FONT, anchor="w")
+        c.create_line(w - 20, 12, w - 15, 17, w - 10, 12, fill=DIM, width=2)  # the chevron
+
+        def pick(v):
+            var.set(v)
+            c.itemconfigure(label, text=v)
+            if command:
+                command(v)
+
+        def open_menu(e):
+            if not (0 <= e.x <= w and 0 <= e.y <= 28):
+                return
+            c.itemconfigure(label, text=var.get())
+            popup_menu(c.winfo_rootx(), c.winfo_rooty() + 30, [(v, lambda v_=v: pick(v_), v == var.get()) for v in values])
+        c.bind("<Enter>", lambda e: c.itemconfigure(shape, fill=HOVER, outline=HOVER))
+        c.bind("<Leave>", lambda e: c.itemconfigure(shape, fill=PANEL, outline=PANEL))
+        c.bind("<ButtonRelease-1>", open_menu)
+        return c
 
     if sys.platform == "win32":
         try:
@@ -2631,7 +2648,7 @@ def run_gui():
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
-               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_next": {}, "celeb_on": False,
+               "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
                "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
@@ -3704,6 +3721,59 @@ def run_gui():
             session["celeb_on"] = True
             root.after(0, celeb_tick)
 
+    def game_time(sport, status):
+        """What ESPN's status text says about the clock: {"period", "secs"} (OT counts as a late period), {"inning"}, or {"minute"}."""
+        t = {}
+        s_ = status or ""
+        m = re.search(r"\b[QPH](\d)\s+(\d+):(\d\d)", s_) or re.search(r"(\d+):(\d\d)\s*-\s*(\d)(?:st|nd|rd|th)", s_)
+        if m:
+            g_ = m.groups()
+            per, mm, ss = (int(g_[0]), int(g_[1]), int(g_[2])) if re.match(r"[QPH]", m.group(0)) else (int(g_[2]), int(g_[0]), int(g_[1]))
+            t.update(period=per, secs=mm * 60 + ss)
+        if re.search(r"\bOT\b|\dOT", s_):
+            mm_ = re.search(r"(\d+):(\d\d)", s_)
+            t.update(period=99, secs=int(mm_.group(1)) * 60 + int(mm_.group(2)) if mm_ else 300)
+        m = re.search(r"\b(Top|Bot|Mid|End)\s+(\d+)", s_)
+        if m:
+            t["inning"] = int(m.group(2))
+        m = re.search(r"(\d+)'(?:\+(\d+))?", s_)
+        if m and sport == "soccer":
+            t["minute"] = int(m.group(1)) + int(m.group(2) or 0)
+        return t
+
+    def out_of_reach(sport, league, t, lead):
+        """Is a lead of `lead` safe at this point of the game? Late in the game and more than the trailing team can usually
+        make up in the time left."""
+        if lead <= 0:
+            return False
+        secs, per = t.get("secs"), t.get("period")
+        if sport == "basketball":
+            reg = 2 if "college" in (league or "") else 4
+            return per is not None and secs is not None and per >= reg and secs <= 240 and lead > 2.5 * secs / 60 + 3
+        if sport == "football":
+            return per is not None and secs is not None and per >= 4 and any(secs <= s_ and lead >= need for s_, need in ((480, 17), (300, 14), (180, 9)))
+        if sport == "hockey":
+            return per is not None and secs is not None and per >= 3 and ((secs <= 600 and lead >= 3) or (secs <= 150 and lead >= 2))
+        if sport == "soccer":
+            m = t.get("minute")
+            return m is not None and ((m >= 70 and lead >= 3) or (m >= 80 and lead >= 2))
+        if sport == "baseball":
+            inn = t.get("inning")
+            return inn is not None and inn >= 7 and lead >= {7: 6, 8: 5}.get(inn, 4)
+        return False
+
+    def is_dagger(r, side, prev, cur):
+        """A score that has just put the game out of reach: the lead was still catchable before it and is not now (and, when
+        ESPN has win probability, the scoring team is now 95% or better)."""
+        g_ = r.get("game") or {}
+        sport, league = g_.get("sport", ""), g_.get("league", "")
+        t = game_time(sport, r.get("status", ""))
+        before, after = prev[side] - prev[1 - side], cur[side] - cur[1 - side]
+        if not out_of_reach(sport, league, t, after) or out_of_reach(sport, league, t, before):
+            return False
+        wa = (r.get("win") or {}).get("a")
+        return wa is None or (wa if side == 0 else 100 - wa) >= 95
+
     def recovery_side(r, text):
         """Index of the team that recovered a fumble ("... RECOVERED by DAL-J.Doe"), or None when the play names nobody."""
         m = re.search(r"recovered by ([A-Za-z]{2,4})\b", text, re.I)
@@ -3804,6 +3874,9 @@ def run_gui():
                     tm_ = [t_.get("abbr", "") for t_ in r.get("teams") or []]
                     line = f"{tm_[0]} {cur[0]:g} \u2013 {tm_[1]} {cur[1]:g}" if len(tm_) == 2 else ""
                     chain_event(k, (r, k, side, tag, None, FOLLOW_SECS, mode, line), {})
+                if (k, side) not in session["daggers"] and is_dagger(r, side, prev, cur):  # late and out of reach now, once per team per game
+                    session["daggers"].add((k, side))
+                    chain_event(k, (r, k, side, "DAGGER!", None, FOLLOW_SECS, mode, ptext), {})
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -3997,7 +4070,7 @@ def run_gui():
                 c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
                 c_.itemconfigure(txt_, fill=FG if on else DIM, text=(f"{chosen.index(v_) + 1}  " if on else "") + base_)
         for val, label in (("TAKES THE LEAD", "Takes the lead"), ("TIES IT UP", "Ties it up"),
-                           ("MOMENTUM SWING", "Momentum swing"), ("FUMBLE RECOVERED", "Fumble recovery")):
+                           ("MOMENTUM SWING", "Momentum swing"), ("FUMBLE RECOVERED", "Fumble recovery"), ("DAGGER!", "Dagger")):
             pw = text_width(FONTS["smallb"], "1  " + label) + 20
             c_ = tk.Canvas(then, width=pw, height=24, bg=BG, highlightthickness=0, cursor="hand2")
             shape_ = c_.create_polygon(rr_points(1, 2, pw - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
@@ -5025,10 +5098,15 @@ def run_gui():
         dark_titlebar(win)
         tk.Label(win, text="Opacity", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, padx=16, pady=(16, 4), sticky="w")
         pct = tk.StringVar()
-        val = tk.Spinbox(win, from_=30, to=100, width=4, textvariable=pct, justify="right", bg=PANEL, fg=FG,
-                         insertbackground=FG, buttonbackground=PANEL, relief="flat", highlightthickness=1,
-                         highlightbackground=PANEL, highlightcolor=DIM, font=UI_FONT)
-        val.grid(row=0, column=1, padx=16, pady=(16, 4), sticky="e", ipady=2)
+        box = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground=PANEL, highlightcolor=DIM)  # entry with its own arrows
+        box.grid(row=0, column=1, padx=16, pady=(16, 4), sticky="e")
+        val = tk.Entry(box, width=4, textvariable=pct, justify="right", bg=PANEL, fg=FG, insertbackground=FG, relief="flat",
+                       bd=0, highlightthickness=0, font=UI_FONT)
+        val.pack(side="left", padx=(8, 2), ipady=3)
+        arrows = tk.Canvas(box, width=22, height=26, bg=PANEL, highlightthickness=0, cursor="hand2")
+        arrows.pack(side="left", padx=(0, 4))
+        up = arrows.create_polygon(6, 11, 11, 5, 16, 11, fill=DIM, outline=DIM)
+        down = arrows.create_polygon(6, 15, 11, 21, 16, 15, fill=DIM, outline=DIM)
 
         def on_scale(v):
             n = int(float(v))
@@ -5050,7 +5128,20 @@ def run_gui():
 
         val.bind("<Return>", on_entry)
         val.bind("<FocusOut>", on_entry)
-        val.config(command=on_entry)
+
+        def step(d):
+            try:
+                n = int(float(pct.get().strip().rstrip("%")))
+            except ValueError:
+                n = scale.get()
+            pct.set(str(max(30, min(100, n + d))))
+            on_entry()
+        for item, d in ((up, 1), (down, -1)):
+            arrows.tag_bind(item, "<Enter>", lambda e, i=item: arrows.itemconfigure(i, fill=FG, outline=FG))
+            arrows.tag_bind(item, "<Leave>", lambda e, i=item: arrows.itemconfigure(i, fill=DIM, outline=DIM))
+            arrows.tag_bind(item, "<Button-1>", lambda e, d_=d: step(d_))
+        val.bind("<Up>", lambda e: step(1))
+        val.bind("<Down>", lambda e: step(-1))
 
         scale = tk.Scale(win, from_=30, to=100, orient="horizontal", showvalue=False, length=240, command=on_scale,
                          bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0, sliderrelief="flat",
@@ -5136,25 +5227,36 @@ def run_gui():
         win_ref[0] = win
         tests = test_buttons(win)
         shown = [False]
-        moved = [None]  # where the window was, if showing the tests had to nudge it to stay on screen
+        board_shown = [False]
+        moved = [None]  # where the window was, if showing a side panel had to nudge it to stay on screen
+        board = tk.Frame(win, bg=BG)  # one button per sound; plays even while muted
 
-        def toggle_tests():
-            shown[0] = not shown[0]
-            if shown[0]:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
-                tests.grid(row=0, column=2, rowspan=15, padx=(0, 16), pady=16, sticky="n")
+        def set_side(which):
+            """Show the tests or the soundboard beside the options (None hides both); opening one closes the other."""
+            shown[0], board_shown[0] = which == "tests", which == "board"
+            panel = tests if shown[0] else board if board_shown[0] else None
+            for p_ in (tests, board):
+                if p_ is not panel:
+                    p_.grid_remove()
+            if panel is not None:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
+                panel.grid(row=0, column=2, rowspan=15, padx=(0, 16), pady=16, sticky="n")
                 win.update_idletasks()
                 l, _t, r, _b = screen_bounds()
                 if win.winfo_x() + win.winfo_reqwidth() > r:
-                    moved[0] = (win.winfo_x(), win.winfo_y())
+                    if not moved[0]:
+                        moved[0] = (win.winfo_x(), win.winfo_y())
                     win.geometry(f"+{max(l, r - win.winfo_reqwidth())}+{win.winfo_y()}")
-            else:
-                tests.grid_remove()
-                if moved[0]:  # put it back where it was
-                    win.geometry(f"+{moved[0][0]}+{moved[0][1]}")
-                    moved[0] = None
+            elif moved[0]:  # put it back where it was
+                win.geometry(f"+{moved[0][0]}+{moved[0][1]}")
+                moved[0] = None
             test_btn.itemconfigure(2, text="Hide" if shown[0] else "Test...")
+            board_btn.itemconfigure(2, text="Hide" if board_shown[0] else "Test...")
             ui_state["settings_tests"] = shown[0]
+            ui_state["settings_sounds"] = board_shown[0]
             save_state(ui_state)
+
+        def toggle_tests():
+            set_side(None if shown[0] else "tests")
         test_btn = styled_button(win, "Test...", toggle_tests)
         test_btn.grid(row=10, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
@@ -5170,20 +5272,12 @@ def run_gui():
             session["sig"] = compute_sig()
         styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
         tk.Label(win, text="Soundboard", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
-        board = tk.Frame(win, bg=BG)  # one button per sound, below the options; plays even while muted
+        tk.Label(board, text="Soundboard", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=0, column=0, columnspan=2, padx=4, pady=(0, 4), sticky="w")
         for i, (label, kind) in enumerate(SOUNDBOARD):
-            styled_button(board, label, lambda k_=kind: play_sound(k_, force=True)).grid(row=i // 3, column=i % 3, padx=4, pady=3, sticky="w")
-        board_shown = [False]
+            styled_button(board, label, lambda k_=kind: play_sound(k_, force=True)).grid(row=1 + i // 2, column=i % 2, padx=4, pady=3, sticky="w")
 
         def toggle_board():
-            board_shown[0] = not board_shown[0]
-            if board_shown[0]:
-                board.grid(row=13, column=0, columnspan=2, padx=12, pady=(0, 4), sticky="w")
-            else:
-                board.grid_remove()
-            board_btn.itemconfigure(2, text="Hide" if board_shown[0] else "Test...")
-            ui_state["settings_sounds"] = board_shown[0]
-            save_state(ui_state)
+            set_side(None if board_shown[0] else "board")
         board_btn = styled_button(win, "Test...", toggle_board)
         board_btn.grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
         styled_button(win, "Close", close).grid(row=14, column=1, padx=16, pady=(10, 16), sticky="e")
@@ -5194,10 +5288,10 @@ def run_gui():
         else:
             sx, sy = root.winfo_x() + 30, root.winfo_y() + 30
         win.geometry(f"+{sx}+{sy}")
-        if ui_state.get("settings_tests"):  # the test buttons were showing last time
-            toggle_tests()
-        if ui_state.get("settings_sounds"):
-            toggle_board()
+        if ui_state.get("settings_tests"):  # a side panel was showing last time
+            set_side("tests")
+        elif ui_state.get("settings_sounds"):
+            set_side("board")
         pos_save = {"id": None}
 
         def on_move(e):
