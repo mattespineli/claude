@@ -771,8 +771,9 @@ def _situation_graphic(sport, comp):
         dist = sit.get("distance")
         first = min(100, x + int(dist)) if dist not in (None, "") else None
         off_c = next((c for c in comp.get("competitors", []) if str(c.get("id", c.get("team", {}).get("id", ""))) == poss), {})
+        def_c = next((c for c in comp.get("competitors", []) if c is not off_c), {})
         return {"kind": "football", "x": max(0, min(100, x)), "first": first, "off": off, "def": defn,
-                "color": team_colors(off_c, "#34d399"),
+                "color": team_colors(off_c, "#34d399"), "def_color": team_colors(def_c, "#52526a"),
                 "red": bool(sit.get("isRedZone")) or x >= 80}
     return None
 
@@ -2305,10 +2306,16 @@ def run_gui():
             return 44
         if kind == "football":
             px = lambda yd: W * (yd + 10) / 120  # yards from the offense's goal line, with an end zone at each end
-            seg = W / 12
-            for i in range(12):  # two end zones and ten 10-yard segments
-                col = "#52526a" if i in (0, 11) else "#7f3b3b" if g["red"] and i in (9, 10) else TRACK
-                c.create_line(i * seg + 4.5, 17, (i + 1) * seg - 4.5, 17, fill=col, width=6, capstyle="round")
+            c.create_line(3, 17, W - 3, 17, fill=TRACK, width=6, capstyle="round")
+            if g["red"]:
+                c.create_line(px(80), 17, px(100), 17, fill="#7f3b3b", width=6)
+            ez = px(0)  # end zones in the team colors: the offense's own on the left, the one it attacks on the right
+            c.create_oval(0, 14, 6, 20, fill=g.get("color", "#52526a"), outline="")
+            c.create_rectangle(3, 14, ez, 20, fill=g.get("color", "#52526a"), outline="")
+            c.create_oval(W - 6, 14, W, 20, fill=g.get("def_color", "#52526a"), outline="")
+            c.create_rectangle(px(100), 14, W - 3, 20, fill=g.get("def_color", "#52526a"), outline="")
+            for yd in range(0, 101, 10):  # goal lines and a line every 10 yards
+                c.create_line(px(yd), 14, px(yd), 20, fill=FG if yd in (0, 100) else "#7a7a88")
             if g["first"] is not None:
                 c.create_line(px(g["first"]), 11, px(g["first"]), 23, fill="#fbbf24", width=2)
             bx = px(g["x"])
