@@ -1,7 +1,7 @@
 # Sports Widget (Windows)
 
 Small always-on-top desktop widget showing live score / next game / last result for your teams.
-Data: ESPN public API. Requires Python 3.8+ (tkinter is included in the python.org installer). Optional: `pip install resvg-py` renders team logos from the leagues' SVGs (NFL, NBA, MLB, NCAA) at the exact size; without it, or for other leagues, ESPN's PNG logos are used.
+Data: ESPN public API. Requires Python 3.8+ (tkinter is included in the python.org installer). No other packages.
 
 ## Run
 Double-click `run.bat`, or `python sports_widget.py`. `python sports_widget.py --print` prints to the console.
