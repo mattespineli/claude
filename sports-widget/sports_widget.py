@@ -4068,6 +4068,7 @@ def run_gui():
         side_.grid(row=0, column=1, sticky="nw")
         opts_ = tk.Frame(head_, bg=BG)
         opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
+        relayout = [lambda: None]  # re-lists the test buttons for the chosen sport (set once they exist)
         sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
         LEAD_ = ("Lead", "lead", (("Tied", "tied"), ("Close", "close"), ("Blowout", "blowout")))
         QTR_ = lambda title, n: (title, "q", tuple((str(i), i) for i in range(1, n + 1)))
@@ -4153,6 +4154,7 @@ def run_gui():
             ui_state["test_sport"] = v_
             save_state(ui_state)
             draw_options()
+            relayout[0]()
             show_dummy()
         tk.Label(side_, text="Dummy card", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
         styled_option(side_, sport_var, [n_ for n_, _ in sports_], command=on_sport, width=12).pack(anchor="w")
@@ -4206,8 +4208,16 @@ def run_gui():
             shape_ = c_.create_polygon(rr_points(1, 2, pw - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
             txt_ = c_.create_text(pw / 2, 12, text=label, font=FONTS["smallb"], fill=DIM)
             c_.bind("<ButtonRelease-1>", lambda e, v_=val: toggle_then(v_))
-            c_.pack(side="left", padx=2)
             then_pills[val] = (c_, shape_, txt_, label)
+        def relist_then():
+            """Only the follow-ups that make sense for the sport (a fumble recovery is football's)."""
+            for v_, (c_, *_r) in then_pills.items():
+                c_.pack_forget()
+                if v_ != "FUMBLE RECOVERED" or sport_var.get() == "Football":
+                    c_.pack(side="left", padx=2)
+                elif v_ in session["test_follow"]:
+                    toggle_then(v_)
+        relist_then()
         for v_ in list(session["test_follow"]):  # picks from earlier in the session
             session["test_follow"].remove(v_)
             toggle_then(v_)
@@ -4225,10 +4235,35 @@ def run_gui():
                 x_ = tk.Label(f, text="\u2715", bg=BG, fg=COLORS["err"], font=("Segoe UI", 10, "bold"))
                 x_.place(in_=btn, relx=1.0, x=2, rely=0.5, anchor="w")
                 marks.append(x_)
-        for i, (label, *_rest) in enumerate(sorted(TESTS, key=lambda t_: t_[0].lower())):  # alphabetical, across the rows
+        # which animations each sport can show (Final and Clutch border suit every sport)
+        by_sport = {"Football": ("Touchdown", "Field goal", "Interception", "Pick six", "Fumble", "Sack", "Penalty", "Kickoff", "4th down",
+                                 "Turnover on downs", "Safety", "Blocked FG", "Blocked punt", "Onside recovery", "Extra point", "2-pt conversion",
+                                 "Blocked punt touchdown", "Blocked field goal touchdown", "Blocked PAT", "Onside kick", "Punt", "Red zone"),
+                    "Baseball": ("Home run", "Inside-the-park HR", "Grand slam", "Strikeout", "Double play", "Out", "Single", "Double", "Triple",
+                                 "Run scores", "Triple play", "Caught stealing", "Picked off"),
+                    "Basketball": ("Three-pointer", "Block", "Steal"), "Hockey": ("Goal", "Penalty"), "Soccer": ("Goal",)}
+        everywhere = ("Final", "Clutch border")
+        btns = []
+        for label, *_rest in sorted(TESTS, key=lambda t_: t_[0].lower()):  # alphabetical, across the rows
             b_ = styled_button(f, label, lambda: None)
             b_.bind("<ButtonRelease-1>", lambda e, lb=label, b2=b_: run_test(lb, b2) if 0 <= e.x <= b2.winfo_width() and 0 <= e.y <= 28 else None)
-            b_.grid(row=3 + i // 3, column=i % 3, padx=(4, 16), pady=3, sticky="w")
+            btns.append((label, b_))
+
+        def relayout_tests():
+            sport_ = sport_var.get()
+            n_ = 0
+            for m_ in marks:
+                m_.destroy()
+            marks.clear()
+            for label, b_ in btns:
+                if label in everywhere or label in by_sport[sport_]:
+                    b_.grid(row=3 + n_ // 3, column=n_ % 3, padx=(4, 16), pady=3, sticky="w")
+                    n_ += 1
+                else:
+                    b_.grid_remove()
+            relist_then()
+        relayout[0] = relayout_tests
+        relayout_tests()
         return f
 
     def celeb_frame():
