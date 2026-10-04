@@ -4072,7 +4072,7 @@ def run_gui():
         opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
         relayout = [lambda: None]  # re-lists the test buttons for the chosen sport (set once they exist)
         sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
-        MINE_ = ("My team", "mine", (("Away", 0), ("Home", 1)))  # which side of the dummy card is the user's team
+        MINE_ = ("Trigger for", "mine", (("Away", 0), ("Home", 1)))  # which side of the dummy card is the user's team
         LEAD_ = ("Lead", "lead", (("Tied", "tied"), ("Close", "close"), ("Blowout", "blowout")))
         QTR_ = lambda title, n: (title, "q", tuple((str(i), i) for i in range(1, n + 1)))
         OPTS_ = {  # what each sport's dummy card can be set to: (title, key, ((label, value), ...))
@@ -4119,7 +4119,7 @@ def run_gui():
             sport_ = sport_var.get()
             st_ = dstate_[sport_]
             for r_, (title_, key_, choices_) in enumerate(OPTS_[sport_]):
-                tk.Label(opts_, text=title_, bg=BG, fg=DIM, font=("Segoe UI", 9), width=9, anchor="w").grid(row=r_, column=0, padx=(2, 4), pady=2, sticky="w")
+                tk.Label(opts_, text=title_, bg=BG, fg=DIM, font=("Segoe UI", 9), width=11, anchor="w").grid(row=r_, column=0, padx=(2, 4), pady=2, sticky="w")
                 line_ = tk.Frame(opts_, bg=BG)
                 line_.grid(row=r_, column=1, sticky="w")
                 multi_ = key_ == "bases"  # men on base: any combination; the rest are one choice each
