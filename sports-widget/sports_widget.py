@@ -2749,9 +2749,13 @@ def run_gui():
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
             c.create_polygon(18, 31, 24, 31, 24, 34, 21, 37, 18, 34, fill=bg, outline=DIM)  # home plate
             ce_, ct_ = session["cur_celeb"]
-            if ce_ and ce_.get("run") and ct_ < 1.6:  # a run scores: light the bases in turn, 1st to home
-                for j, (bx_, by_) in enumerate(((29, 23), (21, 15), (13, 23), (21, 34))[:min(int(ct_ / 0.35), 3) + 1]):
-                    c.create_oval(bx_ - 7, by_ - 7, bx_ + 7, by_ + 7, outline=GOLD, width=2 if j == min(int(ct_ / 0.35), 3) else 1)
+            path = run_path(ce_["head"]) if ce_ and ce_.get("run") else []
+            if path and ct_ < 0.35 * len(path) + 0.5:  # light the bases in turn: the batter's path, then home when a run scores
+                spots = ((29, 23), (21, 15), (13, 23), (21, 34))
+                last = min(int(ct_ / 0.35), len(path) - 1)
+                for j, b_ in enumerate(path[:last + 1]):
+                    bx_, by_ = spots[b_]
+                    c.create_oval(bx_ - 7, by_ - 7, bx_ + 7, by_ + 7, outline=GOLD, width=2 if j == last else 1)
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
                                                             ("O", min(g["outs"], 3), 3, "#f87171"))):
@@ -3134,7 +3138,8 @@ def run_gui():
                 canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d),
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
-    TEST_POINTS = {"TOUCHDOWN": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2}
+    TEST_POINTS = {"TOUCHDOWN": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
+                   "RUN SCORES": 1, "RBI SINGLE": 1, "RBI DOUBLE": 1, "RBI TRIPLE": 1, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD": 6}
 
     def test_score(r, k, side, head):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
@@ -3143,7 +3148,10 @@ def run_gui():
         except (ValueError, TypeError, IndexError):
             return
         mine, other = (a_, b_) if side == 0 else (b_, a_)
-        new = mine + (TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
+        if head == "TIES IT UP":
+            new = max(mine, other)
+        else:
+            new = mine + (TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
         session["test_scores"][k] = {"side": side, "text": f"{new:g}", "ce": session["celebs"].get(k)}
 
     def test_view(r):
@@ -3415,7 +3423,12 @@ def run_gui():
         if sport == "baseball":
             if "grand slam" in low or (n == 4 and prev[2]):
                 return "GRAND SLAM!", True
-            return ("HOME RUN" if "homer" in low or "home run" in low else "RUN SCORES" if n == 1 else f"{n} RUNS SCORE"), True
+            if "homer" in low or "home run" in low:
+                return "HOME RUN", True
+            hit = next((h_ for h_, w_ in (("TRIPLE", "tripled"), ("DOUBLE", "doubled"), ("SINGLE", "singled")) if re.search(rf"\b{w_}\b(?! off)", low)), None)
+            if hit:  # runs batted in on a hit: RBI SINGLE, 2-RUN DOUBLE
+                return ("RBI " + hit if n == 1 else f"{n}-RUN {hit}"), True
+            return ("RUN SCORES" if n == 1 else f"{n} RUNS SCORE"), True
         if sport == "football":
             if n == 2 and "safety" not in low and ("two-point" in low or "conversion" in low):
                 return "2-PT CONVERSION", True
@@ -3432,6 +3445,14 @@ def run_gui():
                 return "TAKES THE LEAD", True
             return "", False
         return "SCORE", True
+
+    def run_path(head):
+        """Bases a baseball animation lights in turn (0-2 = 1st-3rd, 3 = home): a hit runs the batter to the base
+        it reached, a run-scoring hit then lights home, anything else that scores goes all the way round."""
+        hit = next((n_ for w_, n_ in (("SINGLE", 1), ("DOUBLE", 2), ("TRIPLE", 3)) if head.endswith(w_)), None)
+        if hit is None:
+            return [0, 1, 2, 3]
+        return list(range(hit)) + ([3] if "RBI" in head or "-RUN" in head else [])
 
     def classify_play(sport, text):
         """(headline, color, seconds) for a big play named in ESPN's last-play text, or None."""
@@ -3467,6 +3488,12 @@ def run_gui():
                 return "TRIPLE PLAY", "#fbbf24", 4.0
             if "double play" in low:
                 return "DOUBLE PLAY", "#34d399", 3.5
+            if re.search(r"\btripled\b", low):
+                return "TRIPLE", "#fbbf24", 3.5
+            if re.search(r"\bdoubled\b(?! off)", low):  # "doubled off first" is an out
+                return "DOUBLE", "#34d399", 3.0
+            if re.search(r"\bsingled\b", low):
+                return "SINGLE", "#38bdf8", 2.5
             if "strikes out" in low or "struck out" in low or "strikeout" in low:
                 return "STRIKEOUT", "#60a5fa", 3.0
             if "caught stealing" in low:
@@ -3657,7 +3684,7 @@ def run_gui():
                     tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
                     if pm and pm.group(1).upper() in tm_:
                         side = tm_.index(pm.group(1).upper())
-                make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, sound="turnover" if big[0] in (
+                make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, run=big[0] in ("SINGLE", "DOUBLE", "TRIPLE"), sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") + KICK_PLAYS else None)
                 continue
             old_w = session["win_prev"].get(k)  # or a big swing in win probability
@@ -3726,6 +3753,15 @@ def run_gui():
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Momentum swing", "MOMENTUM SWING", "swing", None),
+             ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
+             ("Run scores", "RUN SCORES", "run", None), ("RBI single", "RBI SINGLE", "run", None),
+             ("RBI double", "RBI DOUBLE", "run", None), ("RBI triple", "RBI TRIPLE", "run", None),
+             ("Triple play", "TRIPLE PLAY", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
+             ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
+             ("Ties it up", "TIES IT UP", "score", None), ("Extra point", "EXTRA POINT", "score", None),
+             ("2-pt conversion", "2-PT CONVERSION", "score", None), ("Blocked punt TD", "BLOCKED PUNT TD", "score", None),
+             ("Blocked PAT", "BLOCKED PAT", "turnover", "#a78bfa"), ("Onside kick", "ONSIDE KICK", "play", "#9aa0a6"),
+             ("Punt", "PUNT", "play", "#9aa0a6"),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None),
              ("Red zone", "", "redzone", None)]
 
@@ -3768,7 +3804,7 @@ def run_gui():
         import random
         side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
         make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
-                   mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
+                   mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand") or head in ("SINGLE", "DOUBLE", "TRIPLE"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
         session["test_scores"].pop(k, None)
@@ -3779,9 +3815,9 @@ def run_gui():
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
         f = tk.Frame(parent, bg=BG)
         tk.Label(f, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
-            row=0, column=0, columnspan=2, pady=(0, 6), sticky="w")
+            row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
         for i, (label, *_rest) in enumerate(TESTS):
-            styled_button(f, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 2, column=i % 2, padx=4, pady=3, sticky="w")
+            styled_button(f, label, lambda lb=label: fire_test(lb)).grid(row=1 + i // 3, column=i % 3, padx=4, pady=3, sticky="w")
         return f
 
     def celeb_frame():
