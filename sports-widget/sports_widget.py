@@ -76,7 +76,48 @@ def _record(c):
     return f" ({summ})" if isinstance(summ, str) and summ else ""
 
 
-def _rank(c):
+STANDINGS = "https://site.api.espn.com/apis/v2/sports/{sport}/{league}/standings"
+_seed_cache = {}
+
+
+def seed_map(sport, league):
+    """{team id: playoff seed} from ESPN's standings (cached for an hour; {} if unavailable)."""
+    key = (sport, league)
+    hit = _seed_cache.get(key)
+    now = datetime.now().timestamp()
+    if hit and now - hit[0] < hit[2]:
+        return hit[1]
+    seeds, ttl = {}, 3600
+    try:
+        req = urllib.request.Request(STANDINGS.format(sport=sport, league=league), headers={"User-Agent": "sports-widget/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.load(r)
+
+        def walk(node):
+            if isinstance(node, dict):
+                team, stats = node.get("team"), node.get("stats")
+                if isinstance(team, dict) and isinstance(stats, list):
+                    for st in stats:
+                        if st.get("name") in ("playoffSeed", "seed") and float(st.get("value") or 0) > 0:
+                            seeds[str(team.get("id"))] = int(float(st["value"]))
+                for v in node.values():
+                    walk(v)
+            elif isinstance(node, list):
+                for v in node:
+                    walk(v)
+        walk(data)
+    except Exception:
+        ttl = 600  # don't hammer ESPN if the standings request fails
+    _seed_cache[key] = (now, seeds, ttl)
+    return seeds
+
+
+def seeds_for(event, sport, league):
+    """Playoff seeds for a postseason game's teams (None for regular-season games)."""
+    return seed_map(sport, league) if sport and league and is_postseason(event) else None
+
+
+def _rank(c, seeds=None):
     """'#5 ' for a ranked college team, '(3) ' for a playoff seed, or ''."""
     r = (c.get("curatedRank") or {}).get("current")
     if isinstance(r, int) and 1 <= r <= 25:  # ESPN uses 99 for unranked
@@ -84,6 +125,10 @@ def _rank(c):
     seed = c.get("seed") or (c.get("team") or {}).get("seed")
     if seed not in (None, "", 0, "0") and str(seed).isdigit():
         return f"({seed}) "
+    if seeds:
+        tid = str((c.get("team") or {}).get("id", c.get("id", "")))
+        if tid in seeds:
+            return f"({seeds[tid]}) "
     return ""
 
 
@@ -95,7 +140,7 @@ def _find_me(comp, team_abbr):
     return None
 
 
-def summarize_event(event, team_abbr):
+def summarize_event(event, team_abbr, sport=None, league=None):
     comp = event["competitions"][0]
     state = comp.get("status", {}).get("type", {}).get("state") or \
         event.get("status", {}).get("type", {}).get("state", "pre")
@@ -115,7 +160,8 @@ def summarize_event(event, team_abbr):
         me, opp = cs
     sep = "vs" if me.get("homeAway") == "home" else "@"
     ot = opp.get("team", {})
-    opp_name = _rank(opp) + (ot.get("displayName") or ot.get("abbreviation", "?")) + _record(opp)
+    seeds = seeds_for(event, sport, league)
+    opp_name = _rank(opp, seeds) + (ot.get("displayName") or ot.get("abbreviation", "?")) + _record(opp)
     when = _parse_date(event.get("date"))
     if state == "pre":
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
@@ -552,16 +598,16 @@ def team_status(entry):
         if recent:  # a game that just ended: show the result and when the next one is
             event = recent
             nxt = next_event(events)
-            s_next = summarize_event(nxt, entry["team"]) if nxt else None
+            s_next = summarize_event(nxt, entry["team"], entry["sport"], entry["league"]) if nxt else None
             next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "No upcoming game scheduled"
     if not event:
         return None
-    s = summarize_event(event, entry["team"])
+    s = summarize_event(event, entry["team"], entry["sport"], entry["league"])
     if not s:
         return None
     state, line, detail = s
     me = _find_me(event["competitions"][0], entry["team"]) or {}
-    name = _rank(me) + base_name + (f" ({own})" if own else "")
+    name = _rank(me, seeds_for(event, entry["sport"], entry["league"])) + base_name + (f" ({own})" if own else "")
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
     return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
@@ -593,7 +639,9 @@ _POST_WORDS = ("wild card", "division series", "championship series", "world ser
 
 def is_postseason(e):
     season = e.get("season", {})
-    if season.get("type") == 3 or "post" in str(season.get("slug", "")).lower():
+    st = e.get("seasonType") or {}
+    if (season.get("type") == 3 or "post" in str(season.get("slug", "")).lower()
+            or st.get("type") == 3 or str(st.get("id")) == "3"):
         return True
     comp = (e.get("competitions") or [{}])[0]
     note = " ".join(n.get("headline", "") for n in comp.get("notes", [])).lower()
@@ -617,7 +665,7 @@ def playoff_games(debug=False, days=7):
         for e in events:
             if not e.get("competitions") or not is_postseason(e):
                 continue
-            summ = summarize_game(e)
+            summ = summarize_game(e, sport, league)
             if not summ:
                 continue
             state, matchup, detail = summ
@@ -697,7 +745,7 @@ def league_games():
         for e in events:
             if not e.get("competitions") or is_postseason(e):
                 continue
-            summ = summarize_game(e)
+            summ = summarize_game(e, sport, league)
             if not summ:
                 continue
             state, matchup, detail = summ
@@ -768,7 +816,7 @@ def fetch_scoreboard(sport, league, date):
     return events
 
 
-def summarize_game(event):
+def summarize_game(event, sport=None, league=None):
     """Neutral summary (away @ home) for a pinned game."""
     comp = event["competitions"][0]
     status = comp.get("status", {}).get("type", {})
@@ -780,10 +828,12 @@ def summarize_game(event):
         home, away = comps[1], comps[0]
     if not home or not away:
         return None
+    seeds = seeds_for(event, sport, league)
+
     def ab(c):
         a = c.get("athlete", {})
         t = c.get("team", {})
-        return _rank(c) + (t.get("displayName") or t.get("abbreviation") or a.get("displayName") or a.get("shortName", "?")) + _record(c)
+        return _rank(c, seeds) + (t.get("displayName") or t.get("abbreviation") or a.get("displayName") or a.get("shortName", "?")) + _record(c)
     if state == "pre":
         when = _parse_date(event.get("date"))
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
@@ -797,7 +847,7 @@ def summarize_game(event):
 def pinned_status(pin):
     for e in fetch_scoreboard(pin["sport"], pin["league"], pin["date"]):
         if str(e.get("id")) == str(pin["id"]):
-            s = summarize_game(e)
+            s = summarize_game(e, pin["sport"], pin["league"])
             if s:
                 return {"name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
@@ -2159,6 +2209,25 @@ if __name__ == "__main__":
                 stats = sorted({st.get("name") for c in comp.get("competitors", []) for st in c.get("statistics", []) or []})
                 print(f"{sp}/{lg} {e.get('shortName')}: situation keys={sorted((comp.get('situation') or {}).keys())} stats={stats}")
                 print("  ->", situation_text(sp, comp).replace("\n", " | ") or "(nothing)")
+    elif "--debug-seeds" in sys.argv:  # where does ESPN put playoff seeds right now?
+        today = datetime.now().astimezone().date()
+        for name, sport, league in PLAYOFF_LEAGUES:
+            sm = seed_map(sport, league)
+            print(f"{name}: standings seeds for {len(sm)} teams {dict(list(sm.items())[:6])}")
+            try:
+                events = [e for e in fetch_scoreboard(sport, league, f"{today:%Y%m%d}") if is_postseason(e)]
+            except Exception as ex:
+                print("   scoreboard error:", ex)
+                continue
+            for e in events[:2]:
+                comp = e["competitions"][0]
+                print("   game:", summarize_game(e, sport, league)[1] if summarize_game(e, sport, league) else e.get("name"))
+                for c in comp.get("competitors", []):
+                    keys = sorted(c.keys())
+                    print("     competitor keys:", keys, "| seed/rank fields:",
+                          {k: c[k] for k in keys if "seed" in k.lower() or "rank" in k.lower()},
+                          {k: c.get("team", {})[k] for k in c.get("team", {}) if "seed" in k.lower() or "rank" in k.lower()})
+                print("     series:", json.dumps(comp.get("series"), default=str)[:300])
     elif "--debug-playoffs" in sys.argv:
         for r in playoff_games(debug=True):
             print(f'  {r["name"]} | {r["line"]} | {r["detail"]}')
