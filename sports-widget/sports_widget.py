@@ -6271,6 +6271,11 @@ def run_gui():
         if e.widget is not canvas:
             return None
         x, y = canvas.canvasx(e.x), canvas.canvasy(e.y)
+        for cyc in stat_cycles:  # the page dots: a generous target around each, wider than the dot itself
+            for k_, d_ in enumerate(cyc.get("dots", ())):
+                x0_, y0_, x1_, y1_ = canvas.coords(d_)
+                if abs(x - (x0_ + x1_) / 2) <= 6 and abs(y - (y0_ + y1_) / 2) <= 10:
+                    return ("statpage", cyc, k_)
         for i in reversed(canvas.find_overlapping(x, y, x, y)):
             for t in canvas.gettags(i):
                 if t in session["hits"]:
