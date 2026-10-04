@@ -3208,14 +3208,33 @@ def run_gui():
             threading.Thread(target=work, daemon=True).start()
         return None
 
+    pill_imgs = {}
+
     def crisp_rr(x1, y1, x2, y2, r, color, tags=()):
-        """A rounded rectangle from whole-pixel rectangles and corner discs: sharp edges, none of the stray pixels a smoothed polygon leaves."""
+        """A rounded pill as an anti-aliased image, its edge pixels blended into the card's colour (Tk draws
+        partial transparency all-or-nothing, and its own rounded shapes have jagged corners)."""
         x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
-        ids = [canvas.create_rectangle(x1 + r, y1, x2 - r, y2, fill=color, outline="", tags=tags),
-               canvas.create_rectangle(x1, y1 + r, x2, y2 - r, fill=color, outline="", tags=tags)]
-        for cx_, cy_ in ((x1, y1), (x2 - 2 * r, y1), (x1, y2 - 2 * r), (x2 - 2 * r, y2 - 2 * r)):
-            ids.append(canvas.create_oval(cx_, cy_, cx_ + 2 * r, cy_ + 2 * r, fill=color, outline="", tags=tags))
-        return ids
+        w, h, r = x2 - x1, y2 - y1, 4
+        bg = session.get("card_bg") or BG
+        key = (w, h, r, color, bg)
+        img = pill_imgs.get(key)
+        if img is None:
+            import base64
+            fr, fg_, fb = _rgb(color)
+            br, bgg, bb = _rgb(bg)
+            ss, out = 4, bytearray()
+            for py in range(h):
+                for px in range(w):
+                    hit = 0
+                    for sy in range(ss):
+                        for sx in range(ss):
+                            x, y = px + (sx + 0.5) / ss, py + (sy + 0.5) / ss
+                            dx, dy = max(r - x, x - (w - r), 0), max(r - y, y - (h - r), 0)
+                            hit += dx * dx + dy * dy <= r * r
+                    a = hit / (ss * ss)
+                    out += bytes((round(br + (fr - br) * a), round(bgg + (fg_ - bgg) * a), round(bb + (fb - bb) * a), 255))
+            img = pill_imgs[key] = tk.PhotoImage(data=base64.b64encode(_png_bytes(w, h, out)))
+        return [canvas.create_image(x1, y1, image=img, anchor="nw", tags=tags)]
 
     def tv_badges(x, y, text, tags=(), center=False, limit=3):
         """Channel names as small badges in each network's colors (ESPN gives names, not logos); returns the width used."""
