@@ -60,6 +60,9 @@ def logo_path(url, size):
     return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full4".encode()).hexdigest()[:16] + ".png")
 
 
+LINGER_SECS = 120  # a game that just ended stays in the live section this long, so its final animation can play out
+MOVE_FADE = 0.35  # seconds to fade a card out of its section, and again to fade it into the next
+
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
 
 
@@ -2678,7 +2681,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "bases_prev": {}, "run_hold": {}, "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "ended_at": {}, "state_prev": {}, "moved": set(), "mfade": {}, "move_sched": set(), "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -4954,19 +4957,84 @@ def run_gui():
                     ctext(canvas.bbox(nid)[2] + 5, y + 4, mark, FONTS["smallb"], DIM if mark == "e" else "#34d399")
                 y += 18
             elif t == "card":
+                m_ = item_mark()
                 y = draw_card(n["row"], x, y, w, final)
+                a_ = move_alpha(card_key(n["row"]))
+                if a_ < 1:  # leaving one section or arriving in the next: the whole card fades
+                    ids_ = items_since(m_)
+                    fade_items(ids_, BG, a_)
+                    for i_ in ids_:
+                        if canvas.type(i_) == "image" and i_ not in pill_of:  # logos can't be tinted: hide them for the dark half
+                            canvas.itemconfigure(i_, state="hidden" if a_ < 0.5 else "normal")
             elif t == "group":
                 y = draw_group(n, x, y, w, final)
         return y
+
+    def move_alpha(k):
+        m = session["mfade"].get(k)
+        if not m:
+            return 1.0
+        t = _time.perf_counter() - m["t0"]
+        return max(0.0, 1 - t / MOVE_FADE) if t < MOVE_FADE else min(1.0, (t - MOVE_FADE) / MOVE_FADE)
+
+    def move_tick():
+        now, busy = _time.perf_counter(), False
+        for k, m in list(session["mfade"].items()):
+            t = now - m["t0"]
+            if t >= 2 * MOVE_FADE:
+                del session["mfade"][k]
+                continue
+            busy = True
+            if t >= MOVE_FADE and not m.get("done"):  # faded out: now it takes its place in the new section
+                m["done"] = True
+                session["moved"].add(k)
+                for grp in (last.get("args") or ()):
+                    for r in grp:
+                        if card_key(r) == k:
+                            r["linger"] = False
+        if not session["anims"]:
+            draw_all()
+            session["sig"] = compute_sig()
+            fit()
+        if busy:
+            root.after(max(FRAME_MS, 40), run_in, session.get("view"), move_tick)
+
+    def begin_move(k):
+        if k in session["moved"] or k in session["mfade"] or not last.get("args"):
+            return
+        session["mfade"][k] = {"t0": _time.perf_counter()}
+        move_tick()
+
+    def update_linger(groups):
+        """Mark games that just ended (live on the previous refresh) so they stay in the live section for LINGER_SECS."""
+        now = _time.time()
+        for grp in groups:
+            for r in grp:
+                k = card_key(r)
+                if r["state"] == "in":
+                    session["ended_at"].pop(k, None)
+                    session["moved"].discard(k)
+                elif r["state"] == "post" and session["state_prev"].get(k) == "in" and k not in session["ended_at"]:
+                    session["ended_at"][k] = now
+                session["state_prev"][k] = r["state"]
+                t0 = session["ended_at"].get(k)
+                r["linger"] = bool(r["state"] == "post" and t0 is not None and now - t0 < LINGER_SECS and k not in session["moved"])
+                if r["linger"] and k not in session["move_sched"]:
+                    session["move_sched"].add(k)
+                    root.after(int((LINGER_SECS - (now - t0)) * 1000) + 50, run_in, None, begin_move, k)
 
     def group_node(key, text, color, indent, persist, default, children):
         store = ui_state if persist else session
         return {"t": "group", "key": key, "text": text, "color": color, "indent": indent, "persist": persist,
                 "default": default, "open": bool(store.get(key, default)), "children": children}
 
+    def eff(r):
+        """The state a card is placed by: a game that just ended still counts as live until its linger time is up."""
+        return "in" if r.get("linger") else r["state"]
+
     def sort_key(r):
         """Live games first and quiet (off-season) teams last, then alphabetical (ignoring a leading '#12 ' rank or '(3) ' seed)."""
-        return ({"in": 0, "none": 2}.get(r["state"], 1), re.sub(r"^(#\d+|\(\d+\))\s+", "", r["name"]).lower())
+        return ({"in": 0, "none": 2}.get(eff(r), 1), re.sub(r"^(#\d+|\(\d+\))\s+", "", r["name"]).lower())
 
     def cards(rows, extra_line=False):
         rows = sorted(rows, key=sort_key)
@@ -4976,10 +5044,10 @@ def run_gui():
         out = []
         order = {n: i for i, n in enumerate(["MLB", "NFL", "NBA", "WNBA", "NHL"])}
         names = sorted(dict.fromkeys(r["league"] for r in rows),
-                       key=lambda L: (0 if any(r["league"] == L and r["state"] == "in" for r in rows) else 1, order.get(L, 9)))
+                       key=lambda L: (0 if any(r["league"] == L and eff(r) == "in" for r in rows) else 1, order.get(L, 9)))
         for league in names:
             games = [r for r in rows if r["league"] == league]
-            live_n = sum(r["state"] == "in" for r in games)
+            live_n = sum(eff(r) == "in" for r in games)
             is_leagues = prefix == "leagues"
             out.append(group_node(
                 f"{prefix}:{league}",
@@ -5057,10 +5125,10 @@ def run_gui():
         results, pin_results, playoffs, leagues = last["args"]
         live_view = ui_state.get("view", "full") == "live"
         if live_view:
-            results = [r for r in results if r["state"] == "in"]
-            pin_results = [r for r in pin_results if r["state"] == "in"]
-            playoffs = [r for r in playoffs if r["state"] == "in"]
-            leagues = [r for r in leagues if r["state"] == "in"]
+            results = [r for r in results if eff(r) == "in"]
+            pin_results = [r for r in pin_results if eff(r) == "in"]
+            playoffs = [r for r in playoffs if eff(r) == "in"]
+            leagues = [r for r in leagues if eff(r) == "in"]
         nodes = []
         if live_view and not (results or pin_results or playoffs or leagues):
             nodes.append({"t": "text", "text": "No live games"})
@@ -5079,11 +5147,11 @@ def run_gui():
             nodes += [{"t": "section", "text": "Leagues"}] + league_nodes(leagues, "leagues", indent=0)
         if playoffs:
             nodes.append({"t": "section", "text": "Playoffs"})
-            live = [r for r in playoffs if r["state"] == "in"]
+            live = [r for r in playoffs if eff(r) == "in"]
             if live:
                 nodes.append(group_node("live", f"Live · {len(live)}", COLORS["in"], 0, False, True, cards(live, True)))
             for title, state, key in (("Upcoming Today", "pre", "upcoming"), ("Previous", "post", "previous")):
-                rows = [r for r in playoffs if r["state"] == state]
+                rows = [r for r in playoffs if eff(r) == state]
                 if rows:
                     nodes.append(group_node(key, f"{title} · {len(rows)}", FG, 0, True, False, league_nodes(rows, key)))
         return nodes
@@ -5356,6 +5424,7 @@ def run_gui():
 
     def render(results, pin_results, playoffs, leagues=()):
         loading["on"] = False
+        update_linger((results, pin_results, playoffs, leagues))
         detect_scores((results, pin_results, playoffs, leagues))
         last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
         stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
