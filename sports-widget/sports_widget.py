@@ -3505,6 +3505,7 @@ def run_gui():
 
     # ---- scoring celebrations: a ring pulse or card flash, plus a banner with the play ----------------
     BANNER_SECS, GRAND_SECS, RING_SECS, FLASH_SECS = 6.5, 8.5, 1.3, 1.2
+    FOLLOW_SECS = 5.0  # how long a follow-up (takes the lead, ties it up, momentum swing) stays up after the play that caused it
     GOLD = "#fbbf24"
 
     def card_key(r):
@@ -3771,7 +3772,7 @@ def run_gui():
                 w_ = r["win"]
                 up_away = wv > old_w
                 gain, pct = (w_["a_name"], wv) if up_away else (w_["b_name"], 100 - wv)
-                swing = ((r, k, 0 if up_away else 1, "MOMENTUM SWING", None, 4.0, mode, f"{gain} win probability now {pct:g}%"),
+                swing = ((r, k, 0 if up_away else 1, "MOMENTUM SWING", None, FOLLOW_SECS, mode, f"{gain} win probability now {pct:g}%"),
                          {"sound": "swing"})
             if m4:
                 if downs[k] == 4 and session["down_prev"].get(k, 4) != 4 and k not in session["celebs"]:
@@ -3792,7 +3793,7 @@ def run_gui():
                 if banner and tag and head != tag:  # the lead changing hands follows the score that did it
                     tm_ = [t_.get("abbr", "") for t_ in r.get("teams") or []]
                     line = f"{tm_[0]} {cur[0]:g} \u2013 {tm_[1]} {cur[1]:g}" if len(tm_) == 2 else ""
-                    chain_event(k, (r, k, side, tag, None, 3.5, mode, line), {})
+                    chain_event(k, (r, k, side, tag, None, FOLLOW_SECS, mode, line), {})
                 if swing:
                     chain_event(k, *swing)
                 continue
@@ -3931,9 +3932,9 @@ def run_gui():
         session["celeb_next"].pop(k, None)
         follow = session.get("test_follow", "")
         if follow == "MOMENTUM SWING":  # what the play caused, played after it
-            chain_event(k, (r, k, side, follow, None, 4.0, mode, "Test animation"), {"sound": "swing"})
+            chain_event(k, (r, k, side, follow, None, FOLLOW_SECS, mode, "Test animation"), {"sound": "swing"})
         elif follow:
-            chain_event(k, (r, k, side, follow, None, 3.5, mode, "Test animation"), {})
+            chain_event(k, (r, k, side, follow, None, FOLLOW_SECS, mode, "Test animation"), {})
         session["test_scores"].pop(k, None)
         if scoring and side is not None and r.get("score"):
             test_score(r, k, side, follow if follow in ("TAKES THE LEAD", "TIES IT UP") else head)
