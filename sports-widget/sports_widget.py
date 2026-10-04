@@ -57,6 +57,38 @@ def _parse_date(s):
         return None
 
 
+def _record(c):
+    """' (50-32)' for a competitor, or '' when ESPN sends no record."""
+    recs = c.get("records") or c.get("record") or []
+    if isinstance(recs, str):
+        return f" ({recs})" if recs else ""
+    if isinstance(recs, dict):
+        recs = [recs]
+    pick = next((r for r in recs if isinstance(r, dict) and (r.get("type") == "total" or r.get("name") == "overall")),
+                next((r for r in recs if isinstance(r, dict)), None))
+    summ = (pick or {}).get("summary") or (pick or {}).get("displayValue")
+    return f" ({summ})" if isinstance(summ, str) and summ else ""
+
+
+def _rank(c):
+    """'#5 ' for a ranked college team, '(3) ' for a playoff seed, or ''."""
+    r = (c.get("curatedRank") or {}).get("current")
+    if isinstance(r, int) and 1 <= r <= 25:  # ESPN uses 99 for unranked
+        return f"#{r} "
+    seed = c.get("seed") or (c.get("team") or {}).get("seed")
+    if seed not in (None, "", 0, "0") and str(seed).isdigit():
+        return f"({seed}) "
+    return ""
+
+
+def _find_me(comp, team_abbr):
+    for c in comp.get("competitors", []):
+        t = c.get("team", {})
+        if team_abbr.lower() in (t.get("abbreviation", "").lower(), str(t.get("id", c.get("id", ""))).lower()):
+            return c
+    return None
+
+
 def summarize_event(event, team_abbr):
     comp = event["competitions"][0]
     state = comp.get("status", {}).get("type", {}).get("state") or \
@@ -77,7 +109,7 @@ def summarize_event(event, team_abbr):
         me, opp = cs
     sep = "vs" if me.get("homeAway") == "home" else "@"
     ot = opp.get("team", {})
-    opp_name = ot.get("displayName") or ot.get("abbreviation", "?")
+    opp_name = _rank(opp) + (ot.get("displayName") or ot.get("abbreviation", "?")) + _record(opp)
     when = _parse_date(event.get("date"))
     if state == "pre":
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
@@ -445,6 +477,30 @@ def pick_event(events, days=7):
     return None
 
 
+def _state_of(e):
+    return e["competitions"][0].get("status", {}).get("type", {}).get("state", "pre")
+
+
+def recent_result(events, hours=24 * 7):
+    """Most recent completed game that started within the last `hours` hours (default: a week)."""
+    now = datetime.now(timezone.utc)
+    best = None
+    for e in events:
+        d = _parse_date(e.get("date"))
+        if e.get("competitions") and _state_of(e) == "post" and d and now - timedelta(hours=hours + 4) <= d <= now:
+            if best is None or e["date"] > best["date"]:
+                best = e
+    return best
+
+
+def next_event(events):
+    """The next game that has not started yet (any distance away), or None."""
+    now = datetime.now(timezone.utc)
+    ups = [e for e in events if e.get("competitions") and _state_of(e) == "pre"
+           and (_parse_date(e.get("date")) or now) >= now]
+    return min(ups, key=lambda e: e["date"]) if ups else None
+
+
 def _same_day(event, now_iso):
     d, n = _parse_date(event.get("date")), _parse_date(now_iso)
     return bool(d and n and d.astimezone().date() == n.astimezone().date())
@@ -453,16 +509,29 @@ def _same_day(event, now_iso):
 def team_status(entry):
     data = fetch_schedule(entry)
     team = data.get("team", {})
-    name = entry.get("label") or team.get("displayName") or entry["team"].upper()
-    event = pick_event(data.get("events", []))
+    base_name = entry.get("label") or team.get("displayName") or entry["team"].upper()
+    own = team.get("recordSummary") or ((team.get("record") or {}).get("items") or [{}])[0].get("summary")
+    events = data.get("events", [])
+    event = pick_event(events)  # live game, else next game within a week
+    next_line = ""
+    if not event or _state_of(event) != "in":
+        recent = recent_result(events)
+        if recent:  # a game that just ended: show the result and when the next one is
+            event = recent
+            nxt = next_event(events)
+            s_next = summarize_event(nxt, entry["team"]) if nxt else None
+            next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "No upcoming game scheduled"
     if not event:
         return None
     s = summarize_event(event, entry["team"])
     if not s:
         return None
     state, line, detail = s
+    me = _find_me(event["competitions"][0], entry["team"]) or {}
+    name = _rank(me) + base_name + (f" ({own})" if own else "")
     info, graphic = live_info(entry, event) if state == "in" else ("", None)
     return {"name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
+            "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
             "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
@@ -683,7 +752,7 @@ def summarize_game(event):
     def ab(c):
         a = c.get("athlete", {})
         t = c.get("team", {})
-        return t.get("displayName") or t.get("abbreviation") or a.get("displayName") or a.get("shortName", "?")
+        return _rank(c) + (t.get("displayName") or t.get("abbreviation") or a.get("displayName") or a.get("shortName", "?")) + _record(c)
     if state == "pre":
         when = _parse_date(event.get("date"))
         text = when.astimezone().strftime("%a %b %d %I:%M %p").replace(" 0", " ") if when else detail
@@ -697,7 +766,7 @@ def pinned_status(pin):
         if str(e.get("id")) == str(pin["id"]):
             s = summarize_game(e)
             if s:
-                return {"name": pin["label"], "state": s[0], "line": s[1], "detail": s[2],
+                return {"name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
                         "game": {"sport": pin["sport"], "league": pin["league"], "id": str(pin["id"])},
@@ -1468,6 +1537,9 @@ def run_gui():
         if r.get("info"):
             _, h = ctext(ix, yy, r["info"], FONTS["line"], DIM, width=ww, tags=tags)
             yy += h
+        if r.get("next"):
+            _, h = ctext(ix, yy + 3, r["next"], FONTS["small"], DIM, width=ww, tags=tags)
+            yy += 3 + h
         g = r.get("game")
         ctx = None
         if g and gkey(g) in session["expanded"]:
@@ -1986,8 +2058,9 @@ def demo_data():
     st = lambda n, v: {"name": n, "displayValue": str(v)}
     team = lambda i, ha, a, score, stats=(): {"id": i, "homeAway": ha, "score": str(score), "statistics": list(stats),
                                               "team": {"id": i, "abbreviation": a, **TEAM_COLORS.get(a, {})}}
-    def row(name, sport, league, line, detail, comp, tint=None):
-        return {"name": name, "state": "in", "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/",
+    def row(name, sport, league, line, detail, comp, tint=None, state="in", next_line=""):
+        return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/",
+                "next": next_line,
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
            "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
@@ -2007,11 +2080,14 @@ def demo_data():
                        {"redCard": True, "clock": {"displayValue": "62'"}, "team": {"id": "2"}}],
            "competitors": [team("1", "home", "ARS", 1, [st("possessionPct", 61), st("totalShots", 12)]),
                            team("2", "away", "CHE", 1, [st("possessionPct", 39), st("totalShots", 6)])]}
-    return [row("San Francisco 49ers", "football", "nfl", "@ Dallas Cowboys", "21-17  Q3 5:12", nfl, tint="#aa0000"),
-            row("San Francisco Giants", "baseball", "mlb", "@ Los Angeles Dodgers", "3-2  Top 7th", mlb, tint="#fd5a1e"),
-            row("Golden State Warriors", "basketball", "nba", "@ Boston Celtics", "78-74  Q3 5:12", nba, tint="#1d428a"),
-            row("New Jersey Devils", "hockey", "nhl", "@ Boston Bruins", "2-1  P2 6:47", nhl, tint="#ce1126"),
-            row("Arsenal", "soccer", "eng.1", "vs Chelsea", "1-1  67'", soc, tint="#ef0107")]
+    return [row("San Francisco 49ers (4-1)", "football", "nfl", "@ Dallas Cowboys (3-2)", "21-17  Q3 5:12", nfl, tint="#aa0000"),
+            row("San Francisco Giants (85-77)", "baseball", "mlb", "@ Los Angeles Dodgers (98-64)", "3-2  Top 7th", mlb, tint="#fd5a1e"),
+            row("(4) Golden State Warriors (48-34)", "basketball", "nba", "@ (1) Boston Celtics (64-18)", "78-74  Q3 5:12", nba, tint="#1d428a"),
+            row("New Jersey Devils (3-1-0)", "hockey", "nhl", "@ Boston Bruins (2-2-0)", "2-1  P2 6:47", nhl, tint="#ce1126"),
+            row("Arsenal (6-1-2)", "soccer", "eng.1", "vs Chelsea (5-2-2)", "1-1  67'", soc, tint="#ef0107"),
+            row("#12 San Diego State Aztecs Football (7-2)", "football", "college-football", "vs Boise State (8-1)",
+                "W 31-24  Final", {}, tint="#c41230", state="post",
+                next_line="Next: @ #7 Boise State (8-1) \u00b7 Sat Oct 10 6:00 PM")]
 
 
 def demo_leagues():
