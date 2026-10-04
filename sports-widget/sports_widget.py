@@ -55,7 +55,105 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|aa".encode()).hexdigest()[:16] + ".png")
+
+
+LOGO_SS = 4  # logos are fetched this many times larger and averaged down, which antialiases the edges
+
+
+def _png_rgba(data):
+    """Decode an 8-bit RGB/RGBA/palette PNG to (w, h, RGBA bytes), or None for anything else."""
+    import struct
+    import zlib
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return None
+    pos, idat, plte, trns, hdr = 8, [], b"", b"", None
+    while pos + 8 <= len(data):
+        n, kind = struct.unpack(">I4s", data[pos:pos + 8])
+        body = data[pos + 8:pos + 8 + n]
+        pos += 12 + n
+        if kind == b"IHDR":
+            hdr = struct.unpack(">IIBBBBB", body)
+        elif kind == b"IDAT":
+            idat.append(body)
+        elif kind == b"PLTE":
+            plte = body
+        elif kind == b"tRNS":
+            trns = body
+    if not hdr:
+        return None
+    w, h, depth, ctype, _c, _f, interlace = hdr
+    if depth != 8 or interlace or ctype not in (2, 3, 6):
+        return None
+    bpp = {2: 3, 3: 1, 6: 4}[ctype]
+    raw = zlib.decompress(b"".join(idat))
+    stride = w * bpp
+    rows, prev = [], bytearray(stride)
+    for y in range(h):
+        ft, line = raw[y * (stride + 1)], bytearray(raw[y * (stride + 1) + 1:(y + 1) * (stride + 1)])
+        for i in range(stride):
+            left = line[i - bpp] if i >= bpp else 0
+            up, ul = prev[i], (prev[i - bpp] if i >= bpp else 0)
+            if ft == 1:
+                line[i] = (line[i] + left) & 255
+            elif ft == 2:
+                line[i] = (line[i] + up) & 255
+            elif ft == 3:
+                line[i] = (line[i] + (left + up) // 2) & 255
+            elif ft == 4:
+                pa, pb, pc = abs(up - ul), abs(left - ul), abs(left + up - 2 * ul)
+                line[i] = (line[i] + (left if pa <= pb and pa <= pc else up if pb <= pc else ul)) & 255
+        rows.append(line)
+        prev = line
+    out = bytearray()
+    for line in rows:
+        if ctype == 6:
+            out += line
+        elif ctype == 2:
+            for i in range(0, stride, 3):
+                out += line[i:i + 3] + b"\xff"
+        else:
+            for v in line:
+                out += plte[v * 3:v * 3 + 3] + bytes([trns[v] if v < len(trns) else 255])
+    return w, h, out
+
+
+def _png_bytes(w, h, rgba):
+    import struct
+    import zlib
+
+    def chunk(kind, body):
+        return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
+    raw = b"".join(b"\x00" + bytes(rgba[y * w * 4:(y + 1) * w * 4]) for y in range(h))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(raw, 9)) + chunk(b"IEND", b""))
+
+
+def _shrink_png(data, f):
+    """Average f x f blocks of a PNG down to one pixel (alpha-weighted, so edges don't pick up a dark fringe)."""
+    dec = _png_rgba(data)
+    if not dec:
+        return None
+    w, h, px = dec
+    ow, oh = w // f, h // f
+    out = bytearray()
+    for oy in range(oh):
+        for ox in range(ow):
+            r = g = b = a = 0
+            for dy in range(f):
+                base = ((oy * f + dy) * w + ox * f) * 4
+                for dx in range(f):
+                    i = base + dx * 4
+                    al = px[i + 3]
+                    r += px[i] * al
+                    g += px[i + 1] * al
+                    b += px[i + 2] * al
+                    a += al
+            if a:
+                out += bytes((r // a, g // a, b // a, a // (f * f)))
+            else:
+                out += b"\x00\x00\x00\x00"
+    return _png_bytes(ow, oh, out)
 
 
 def _fetch_logo(src, size):
@@ -64,6 +162,17 @@ def _fetch_logo(src, size):
     with urllib.request.urlopen(req, timeout=10) as r:
         body = r.read()
     return body if body.startswith(b"\x89PNG") else None
+
+
+def _smooth_logo(src, size):
+    """The logo at size x size: fetched at LOGO_SS times the size and averaged down; plain fetch if that can't be decoded."""
+    big = _fetch_logo(src, size * LOGO_SS)
+    if not big:
+        return None
+    try:
+        return _shrink_png(big, LOGO_SS) or _fetch_logo(src, size)
+    except Exception:
+        return _fetch_logo(src, size)
 
 
 def logo_file(url, size):
@@ -78,7 +187,7 @@ def logo_file(url, size):
     body = None
     for cand in ([src.replace("/500/", "/500-dark/")] if "/500/" in src else []) + [src]:
         try:
-            body = _fetch_logo(cand, size)
+            body = _smooth_logo(cand, size)
         except Exception:
             body = None
         if body:
