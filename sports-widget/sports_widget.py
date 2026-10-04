@@ -2598,6 +2598,7 @@ def run_gui():
         my += h + 4
         lines = info.split("\n") if info else []
         bb = [g_ for g_ in gl if g_["kind"] == "baseball"]
+        fb = next((g_ for g_ in gl if g_["kind"] == "football"), None)
         if bb and live:
             my += graphics(mx - 52, my, bb, bgc, BB_W)
             for l_ in [l_ for l_ in lines if l_.startswith("AB:")]:
@@ -2606,8 +2607,15 @@ def run_gui():
                     my += h
             lines = [l_ for l_ in lines if not l_.startswith(("Runners:", "Bases empty", "AB:"))]
             gl = [g_ for g_ in gl if g_ not in bb]
-        elif any(g_["kind"] == "football" for g_ in gl) and live and lines:
+        elif live and lines and (fb or (r.get("game") or {}).get("sport") == "football"):
             parts = lines[0].split(" \u00b7 ")
+            m_ = re.search(r"(\w+) ball", lines[0])
+            poss = fb["off"] if fb else (m_.group(1) if m_ else "")
+            for i, t in enumerate(teams):  # possession arrow beside the score of the team with the ball
+                if poss and t["abbr"].upper() == poss.upper():
+                    ax, ay = (ix + COL - 4, top + 62) if i == 0 else (ix + ww - COL + 4, top + 62)
+                    d_ = 1 if i == 0 else -1
+                    canvas.create_polygon(ax - 6 * d_, ay - 7, ax + 4 * d_, ay, ax - 6 * d_, ay + 7, fill="#fbbf24", outline="", tags=tags)
             _, h = ctext(mx, my, parts[0], FONTS["detb"], FG, width=mw, anchor="n", tags=tags, justify="center")
             my += h
             if parts[1:]:
