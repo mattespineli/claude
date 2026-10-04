@@ -2711,7 +2711,7 @@ def run_gui():
             p = min((time.perf_counter() - t0) / duration, 1.0)
             setter(h0 + (h1 - h0) * p * p * (3 - 2 * p))
             if p < 1.0:
-                root.after(6, step)
+                root.after(FRAME_MS, step)
             elif done:
                 done()
         step()
@@ -3792,7 +3792,7 @@ def run_gui():
                 stat_cycles.remove(cyc)  # its canvas was redrawn
         stat_on["on"] = bool(stat_cycles)
         if stat_cycles:  # idle with nothing cycling: the next card that needs it starts it again
-            root.after(40, stat_tick)
+            root.after(FRAME_MS, stat_tick)
 
     def clock_tick():
         """Run the game clocks on live cards once a second between refreshes."""
@@ -3936,7 +3936,7 @@ def run_gui():
                     stat_apply(cyc)
                     if not stat_on["on"]:
                         stat_on["on"] = True
-                        root.after(40, stat_tick)
+                        root.after(FRAME_MS, stat_tick)
         lines = info.split("\n") if info else []
         if at_half and inning_break:
             lines = []  # between innings the diamond, count and batter give way to the stats
@@ -4514,7 +4514,7 @@ def run_gui():
             session["pulse_on"] = True
             root.after(PULSE_MS, run_in, session.get("view"), pulse_tick)
 
-    PULSE_MS = 33  # a slow breath: 30 frames a second is plenty
+    PULSE_MS = FRAME_MS  # 120 frames a second, like every other animation
 
     def pulse_tick():
         """Breathe the outline of the clutch border / red-zone glow items (no redraw: only their colors change)."""
@@ -4522,7 +4522,7 @@ def run_gui():
         if not items:
             session["pulse_on"] = False
             return
-        k = round((0.5 + 0.5 * math.sin(_time.perf_counter() * 4)) * 32) / 32  # 32 levels: most frames change nothing
+        k = 0.5 + 0.5 * math.sin(_time.perf_counter() * 4)
         shown = session.setdefault("pulse_shown", {})  # item -> the outline it has now
         if len(shown) > 4 * len(items) + 64:
             shown.clear()  # forget items from earlier redraws
@@ -4883,10 +4883,11 @@ def run_gui():
             t = now - ce["t0"]
             if t >= ce["secs"]:
                 continue
-            bgc = lay["bgc"]
+            bgc = pbgc = lay["bgc"]
             fk = flash_k(ce, t) if lay["flash"] else None
             if lay["flash"]:  # text fades toward the card as it is right now, flash included, so hidden text stays hidden
-                bgc = blend(lay["flash"][2], flash_color(ce), round(fk * 16) / 16)  # in 1/16 steps, so pills reuse their images
+                bgc = blend(lay["flash"][2], flash_color(ce), fk)
+                pbgc = blend(lay["flash"][2], flash_color(ce), round(fk * 16) / 16)  # pills in 1/16 steps, so they reuse their images
             a = banner_alpha(ce, t)
             ia = info_alpha(ce, t)
             seen = lay.setdefault("seen", {})  # what each part was last recoloured for: unchanged parts are left alone
@@ -4907,7 +4908,7 @@ def run_gui():
                     seen["fade"] = (ia, bgc)
                     for i_, opt, base in lay["fade"]:
                         if opt == "pill":
-                            canvas.itemconfigure(i_, image=pill_faded(base, bgc, ia))
+                            canvas.itemconfigure(i_, image=pill_faded(base, pbgc, ia))
                         else:
                             canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
                 if lay["flash"] and seen.get("flash") != fk:
@@ -5551,7 +5552,7 @@ def run_gui():
             if placed or not busy:  # the layout changes only as a card takes its new place
                 fit()
         if busy:
-            root.after(max(FRAME_MS, 40), run_in, session.get("view"), move_tick)
+            root.after(FRAME_MS, run_in, session.get("view"), move_tick)
 
     def begin_move(k):
         if k in session["moved"] or k in session["mfade"] or not last.get("args"):
