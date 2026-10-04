@@ -679,6 +679,13 @@ def game_detail_data(data, max_plays=14, max_stats=14):
     wp = data.get("winprobability") or []
     if wp and wp[-1].get("homeWinPercentage") is not None:
         out["home_win"] = float(wp[-1]["homeWinPercentage"])
+    if wp and wp[0].get("homeWinPercentage") is not None:
+        out["home_win_start"] = float(wp[0]["homeWinPercentage"])  # at the start of the game
+    else:  # ESPN's pregame projection, when the game has no win-probability series
+        try:
+            out["home_win_start"] = float(((data.get("predictor") or {}).get("homeTeam") or {}).get("gameProjection")) / 100
+        except (TypeError, ValueError):
+            pass
     def periods(c):
         return [str(l.get("displayValue") if l.get("displayValue") not in (None, "") else int(float(l.get("value") or 0)))
                 for l in c.get("linescores") or []]
@@ -2485,7 +2492,7 @@ def run_gui():
                 c.create_line(3, 20, split - 2, 20, fill=g.get("a_color", "#60a5fa"), width=6, capstyle="round")
             if W - 3 > split + 2:
                 c.create_line(split + 2, 20, W - 3, 20, fill=g.get("b_color", "#f59e0b"), width=6, capstyle="round")
-            unit = "%" if g["label"] == "Win probability" else ""
+            unit = "%" if "win probability" in g["label"].lower() else ""
             fmt = lambda v: f"{v:g}{unit}"
             c.create_text(0, 6, text=f'{g["a_name"]} {fmt(g["a"])}', anchor="w", fill=FG, font=FONTS["small"])
             c.create_text(W / 2, 6, text=g["label"], fill=DIM, font=FONTS["small"])
@@ -2612,7 +2619,12 @@ def run_gui():
         y += 11
         if d.get("linescore") and d.get("state") != "pre":
             y += draw_linescore(x, y, w, d, g) + 4
-        if d.get("home_win") is not None and not win_shown:  # a card already showing it keeps it where it was
+        if d.get("state") == "post" and d.get("home_win_start") is not None:  # the final is 100-0: show where the game began
+            hw = round(d["home_win_start"] * 100)
+            ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
+            y += graphics(x, y, {"kind": "versus", "label": "Pregame win probability", "a_name": d["away_abbr"], "a": 100 - hw,
+                                 "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc, w)
+        elif d.get("home_win") is not None and not win_shown:  # a card already showing it keeps it where it was
             hw = round(d["home_win"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
             y += graphics(x, y, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
@@ -2636,7 +2648,8 @@ def run_gui():
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 y += h
-        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("linescore") or d.get("home_win") is not None and not win_shown):
+        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("linescore") or d.get("home_win_start") is not None
+                or d.get("home_win") is not None and not win_shown):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
             y += h
         return y - y0
@@ -2895,6 +2908,7 @@ def run_gui():
             c = [hi if lead >= 0 else DIM, hi if lead <= 0 else DIM]
         rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
         my = top + 2
+        n0 = len(canvas.find_all())  # everything drawn from here on belongs to the middle section
         live = r["state"] == "in"
         if live:  # the LIVE flag with the channel(s) beside it, centred together
             import tkinter.font as tkfont
@@ -2925,7 +2939,7 @@ def run_gui():
             d_ = ensure_stats(r["game"])
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
-                room = 46 + (30 if sc else 0) + 14 - (my - top)  # as many stats as it takes to fill the teams' height
+                room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
                 for label, a_, h_ in pick_stats(r["game"]["sport"], d_.get("all_stats", []), max(4, min(6, -(-int(room) // 14)))):
                     vl, vr = (h_, a_) if flip else (a_, h_)
                     ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
@@ -2972,7 +2986,12 @@ def run_gui():
             my += 4 + h
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
-        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)  # natural height of a team column
+        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
+        if mh < nat - 2:  # a short middle is centred against the teams
+            for i_ in canvas.find_all()[n0:]:
+                canvas.move(i_, 0, (nat - mh) / 2)
+            my += (nat - mh) / 2
+            mh = nat  # natural height of a team column
         lg = max(44, min(64, 44 + int(max(mh - nat, 0) // 4) * 4))  # a bigger logo, in steps so few sizes are cached
         gap = max(0, min(10, (mh - nat - (lg - 44)) / 3))  # what is left over is spread between the rows
         colb = top
