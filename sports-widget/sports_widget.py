@@ -142,8 +142,7 @@ def _find_me(comp, team_abbr):
 
 def summarize_event(event, team_abbr, sport=None, league=None):
     comp = event["competitions"][0]
-    state = comp.get("status", {}).get("type", {}).get("state") or \
-        event.get("status", {}).get("type", {}).get("state", "pre")
+    state = _state_of(event)
     detail = comp.get("status", {}).get("type", {}).get("shortDetail", "")
     me = opp = None
     for c in comp.get("competitors", []):
@@ -541,9 +540,7 @@ def live_info(entry, event):
 
 def pick_event(events, days=7):
     """Live game, else the next game within `days`; None if neither."""
-    def state_of(e):
-        return e["competitions"][0].get("status", {}).get("type", {}).get("state", "pre")
-
+    state_of = _state_of
     events = sorted((e for e in events if e.get("competitions")), key=lambda e: e.get("date", ""))
     live = [e for e in events if state_of(e) == "in"]
     if live:
@@ -557,7 +554,14 @@ def pick_event(events, days=7):
 
 
 def _state_of(e):
-    return e["competitions"][0].get("status", {}).get("type", {}).get("state", "pre")
+    """pre / in / post for an event. Schedule data sometimes lacks `state` but says `completed`."""
+    for st in ((e["competitions"][0].get("status") or {}).get("type"), (e.get("status") or {}).get("type")):
+        if st:
+            if st.get("state"):
+                return st["state"]
+            if st.get("completed"):
+                return "post"
+    return "pre"
 
 
 def recent_result(events, hours=24 * 7):
@@ -585,6 +589,36 @@ def _same_day(event, now_iso):
     return bool(d and n and d.astimezone().date() == n.astimezone().date())
 
 
+_sb_cache = {}
+
+
+def scoreboard_event(sport, league, event):
+    """The same game from ESPN's scoreboard (whose competitors carry records), or None. Cached for 10 minutes."""
+    d = _parse_date(event.get("date"))
+    if not d:
+        return None
+    center = (d - timedelta(hours=5)).date()  # ESPN's day follows US Eastern time
+    rng = f"{center - timedelta(days=1):%Y%m%d}-{center + timedelta(days=1):%Y%m%d}"
+    key = (sport, league, rng)
+    now = datetime.now().timestamp()
+    hit = _sb_cache.get(key)
+    if not hit or now - hit[0] > 600:
+        try:
+            hit = (now, fetch_scoreboard(sport, league, rng))
+        except Exception:
+            hit = (now, [])
+        _sb_cache[key] = hit
+    return next((e for e in hit[1] if str(e.get("id")) == str(event.get("id")) and e.get("competitions")), None)
+
+
+def with_records(event, sport, league):
+    """Schedule data often lacks team records; borrow the scoreboard's copy of the game when it does."""
+    comp = event["competitions"][0]
+    if comp.get("competitors") and all(_record(c) for c in comp["competitors"]):
+        return event
+    return scoreboard_event(sport, league, event) or event
+
+
 def team_status(entry):
     data = fetch_schedule(entry)
     team = data.get("team", {})
@@ -598,10 +632,14 @@ def team_status(entry):
         if recent:  # a game that just ended: show the result and when the next one is
             event = recent
             nxt = next_event(events)
+            if nxt:
+                nxt = with_records(nxt, entry["sport"], entry["league"])
             s_next = summarize_event(nxt, entry["team"], entry["sport"], entry["league"]) if nxt else None
             next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "No upcoming game scheduled"
     if not event:
         return None
+    if _state_of(event) != "in":
+        event = with_records(event, entry["sport"], entry["league"])
     s = summarize_event(event, entry["team"], entry["sport"], entry["league"])
     if not s:
         return None
@@ -820,7 +858,7 @@ def summarize_game(event, sport=None, league=None):
     """Neutral summary (away @ home) for a pinned game."""
     comp = event["competitions"][0]
     status = comp.get("status", {}).get("type", {})
-    state, detail = status.get("state", "pre"), status.get("shortDetail", "")
+    state, detail = _state_of(event), status.get("shortDetail", "")
     comps = comp.get("competitors", [])
     cs = {c.get("homeAway"): c for c in comps}
     home, away = cs.get("home"), cs.get("away")
@@ -2305,6 +2343,23 @@ if __name__ == "__main__":
                 stats = sorted({st.get("name") for c in comp.get("competitors", []) for st in c.get("statistics", []) or []})
                 print(f"{sp}/{lg} {e.get('shortName')}: situation keys={sorted((comp.get('situation') or {}).keys())} stats={stats}")
                 print("  ->", situation_text(sp, comp).replace("\n", " | ") or "(nothing)")
+    elif "--debug-team" in sys.argv:  # --debug-team sdsu : why does this team show (or not show) a game?
+        q = sys.argv[sys.argv.index("--debug-team") + 1].lower()
+        for entry in load_config()["teams"]:
+            if q in json.dumps(entry).lower():
+                print(f'== {entry.get("label", entry["team"])}  ({entry["sport"]}/{entry["league"]}/{entry["team"]})')
+                try:
+                    evs = fetch_schedule(entry).get("events", [])
+                except Exception as ex:
+                    print("   schedule error:", ex)
+                    continue
+                print(f"   {len(evs)} events; now = {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC")
+                for e in sorted((e for e in evs if e.get("competitions")), key=lambda e: e.get("date", "")):
+                    stt = (e["competitions"][0].get("status") or {}).get("type") or {}
+                    print("   ", e.get("date"), "|", e.get("shortName") or e.get("name"), "| state:", stt.get("state"),
+                          "completed:", stt.get("completed"), "-> read as", _state_of(e))
+                r = team_status(entry)
+                print("   shows:", r and (r["name"], r["line"], r["detail"], r["next"]))
     elif "--debug-seeds" in sys.argv:  # where does ESPN put playoff seeds right now?
         today = datetime.now().astimezone().date()
         for name, sport, league in PLAYOFF_LEAGUES:
