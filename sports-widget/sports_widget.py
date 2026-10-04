@@ -1158,7 +1158,30 @@ def run_gui():
         except tk.TclError:
             pass
     set_alpha(ui_state.get("opacity", 0.95))
-    root.geometry("+40+40")
+
+    def screen_bounds():
+        """Virtual-desktop rectangle (all monitors on Windows) as (left, top, right, bottom)."""
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                gm = ctypes.windll.user32.GetSystemMetrics
+                x, y = gm(76), gm(77)
+                return x, y, x + gm(78), y + gm(79)
+            except Exception:
+                pass
+        return 0, 0, root.winfo_screenwidth(), root.winfo_screenheight()
+
+    def clamp_pos(x, y, w=200, h=60):
+        """Keep a remembered position on screen (e.g. after a monitor was unplugged)."""
+        l, t, r, b = screen_bounds()
+        return max(l - w + 80, min(x, r - 80)), max(t, min(y, b - h))
+
+    saved_pos, saved_size = ui_state.get("pos"), ui_state.get("size")
+    if isinstance(saved_pos, list) and len(saved_pos) == 2:
+        px, py = clamp_pos(int(saved_pos[0]), int(saved_pos[1]))
+    else:
+        px, py = 40, 40
+    root.geometry(f"+{px}+{py}")
 
     hbar = tk.Frame(root, bg=BG)
     hbar.pack(fill="x", padx=12, pady=(8, 2))
@@ -1273,6 +1296,9 @@ def run_gui():
     canvas.configure(yscrollcommand=sb_set)
     canvas.grid(row=0, column=0, sticky="nsew")
     user_sized = {"on": False}
+    if isinstance(saved_size, list) and len(saved_size) == 2:  # the user had resized the window: restore that too
+        user_sized["on"] = True
+        root.geometry(f"{max(240, int(saved_size[0]))}x{max(120, int(saved_size[1]))}+{px}+{py}")
     view_tween = {"on": False}
     MIN_W, MIN_H = 240, 120
     MIN_BODY_W = 330  # wide enough for an expanded game, so expanding never changes the window width
@@ -1347,11 +1373,28 @@ def run_gui():
         w = max(MIN_W, rs["w"] + e.x_root - rs["x"])
         h = max(MIN_H, rs["h"] + e.y_root - rs["y"])
         root.geometry(f"{w}x{h}+{root.winfo_x()}+{root.winfo_y()}")
+    def save_geometry():
+        """Remember where the window is (and its size, if the user resized it)."""
+        try:
+            ui_state["pos"] = [root.winfo_x(), root.winfo_y()]
+            if user_sized["on"] and ui_state.get("view", "full") != "title":
+                ui_state["size"] = [root.winfo_width(), root.winfo_height()]
+            elif not user_sized["on"]:
+                ui_state.pop("size", None)
+            save_state(ui_state)
+        except tk.TclError:
+            pass
+
+    def quit_app():
+        save_geometry()
+        root.destroy()
+
     def grip_reset(_):
         user_sized["on"] = False
         root.geometry("")
         root.geometry(f"+{root.winfo_x()}+{root.winfo_y()}")
         fit()
+        save_geometry()
     VIEWS = [("full", "Full"), ("live", "Live"), ("title", "Title")]
     layout = {}
 
@@ -1412,6 +1455,7 @@ def run_gui():
     grip.bind("<Button-1>", grip_start)
     grip.bind("<B1-Motion>", grip_move)
     grip.bind("<Double-Button-1>", grip_reset)
+    grip.bind("<ButtonRelease-1>", lambda e: save_geometry())
 
     topmost = tk.BooleanVar(value=True)
     pins = load_pinned()
@@ -2054,6 +2098,8 @@ def run_gui():
         return None
 
     def on_release(e):
+        if drag.get("moved") and e.widget not in (grip, scroll):
+            save_geometry()  # the window was dragged somewhere new
         h = hit_at(e)
         if not h or drag.get("moved"):
             return
@@ -2070,6 +2116,7 @@ def run_gui():
     def restart():
         """Start a fresh copy of this script (picks up code changes from git pull), then close this one."""
         import subprocess
+        save_geometry()
         subprocess.Popen([sys.executable, os.path.abspath(__file__)] + sys.argv[1:], cwd=HERE)
         root.destroy()
     def update_and_restart():
@@ -2111,7 +2158,7 @@ def run_gui():
         items += [("Track a game...", track_dialog), ("Untrack a game...", lambda: untrack_menu(e)),
                   ("Refresh", refresh), ("Settings...", settings_dialog),
                   ("Always on top", toggle_top, topmost.get()), None,
-                  ("Update & Restart", update_and_restart), ("Restart", restart), ("Quit", root.destroy)]
+                  ("Update & Restart", update_and_restart), ("Restart", restart), ("Quit", quit_app)]
         popup_menu(e.x_root, e.y_root, items)
 
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
