@@ -767,7 +767,7 @@ BOX_COLS = {
     "kickreturns": ["NO", "YDS", "AVG", "LONG"], "puntreturns": ["NO", "YDS", "AVG", "LONG"],
     "batting": ["AB", "R", "H", "RBI", "BB", "K"], "pitching": ["IP", "H", "R", "ER", "BB", "K"],
     "forwards": ["G", "A", "+/-", "S", "TOI"], "defenses": ["G", "A", "+/-", "S", "TOI"], "goalies": ["SA", "SV", "GA", "SV%"],
-    "": ["MIN", "PTS", "REB", "AST", "STL", "BLK"],  # basketball: one unnamed category
+    "": ["MIN", "PTS", "REB", "AST", "STL", "BLK", "+/-"],  # basketball: one unnamed category
 }
 # Column titles spelled out where the box score has the room (it falls back to ESPN's short form column by column)
 FULL_COLS = {"C/ATT": "Comp/Att", "YDS": "Yards", "CAR": "Carries", "REC": "Catches", "LONG": "Longest", "TOT": "Tackles", "SACKS": "Sacks",
