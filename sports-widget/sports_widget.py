@@ -18,6 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 API = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team}/schedule"
+SEASON_TYPE = "https://sports.core.api.espn.com/v2/sports/{sport}/leagues/{league}/seasons/{year}/types/2"  # 2 = regular season
 SCOREBOARD = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard?dates={date}"
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "teams.json")
@@ -854,9 +855,13 @@ def team_status(entry):
             if nxt:
                 nxt = with_records(nxt, entry["sport"], entry["league"])
             s_next = summarize_event(nxt, entry["team"], entry["sport"], entry["league"]) if nxt else None
-            next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "No upcoming game scheduled"
+            if s_next:
+                next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}"
+            else:  # e.g. eliminated while the league's playoffs go on: say when next season starts
+                start = season_start(entry, (data.get("season") or {}).get("year"))
+                next_line = season_label(start) if start else "No upcoming game scheduled"
     if not event:  # nothing live, soon or just played: still list the team, dimmed
-        return quiet_status(entry, events, base_name + (f" ({own})" if own else ""))
+        return quiet_status(entry, events, base_name + (f" ({own})" if own else ""), (data.get("season") or {}).get("year"))
     fresh = None
     if _state_of(event) == "in":
         fresh = fresh_event(entry, event)  # live scores, records and situation come from the scoreboard
@@ -881,8 +886,40 @@ def team_status(entry):
             "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
 
 
-def quiet_status(entry, events, name):
-    """Card for a team with no game soon: its last result, and its next game or "Out of season"."""
+def season_start(entry, season_year=None):
+    """When the team's next season starts (its first scheduled game, else the league's regular-season start date),
+    or None if ESPN doesn't know yet. Cached for 6 hours."""
+    def get():
+        now = datetime.now(timezone.utc)
+        year = int(season_year or now.year)
+        try:  # next season's schedule, once it is published: the exact first game
+            data = get_json(API.format(**entry) + f"?season={year + 1}")
+            starts = [d for d in (_parse_date(e.get("date")) for e in data.get("events", []) if e.get("competitions")) if d and d > now]
+            if starts:
+                return min(starts)
+        except Exception:
+            pass
+        for y in (year, year + 1):  # the league's announced regular-season start
+            try:
+                d = _parse_date(get_json(SEASON_TYPE.format(sport=entry["sport"], league=entry["league"], year=y)).get("startDate"))
+            except Exception:
+                continue
+            if d and d > now:
+                return d
+        return None
+    return cached(("season_start", entry["sport"], entry["league"], str(entry["team"])), 6 * 3600, get)
+
+
+def season_label(d):
+    """'Season starts Mar 25' (adds the year when it isn't this year), or 'Out of season' when unknown."""
+    if not d:
+        return "Out of season"
+    d = d.astimezone()
+    return f"Season starts {d:%b} {d.day}" + (f", {d.year}" if d.year != datetime.now().year else "")
+
+
+def quiet_status(entry, events, name, season_year=None):
+    """Card for a team with no game soon: its last result, and its next game or when its next season starts."""
     sport, league = entry["sport"], entry["league"]
     done = [e for e in events if e.get("competitions") and _state_of(e) == "post"]
     last = max(done, key=lambda e: e.get("date", ""), default=None)
@@ -890,7 +927,8 @@ def quiet_status(entry, events, name):
     nxt = next_event(events)
     s_next = summarize_event(nxt, entry["team"], sport, league) if nxt else None
     return {"name": name, "state": "none", "line": f"Last: {s_last[1]} \u00b7 {s_last[2]}" if s_last else "",
-            "detail": f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else "Out of season", "info": "", "graphic": None}
+            "detail": f"Next: {s_next[1]} \u00b7 {s_next[2]}" if s_next else season_label(season_start(entry, season_year)),
+            "info": "", "graphic": None}
 
 
 def fetch_all(entries):
@@ -1906,7 +1944,8 @@ def run_gui():
             root.update_idletasks()
             root.geometry(f"{width}x{root.winfo_reqheight()}")
         elif mode != "title" and not container.winfo_manager():
-            grip.pack(side="bottom", anchor="se", padx=2)
+            if not docked():  # no resizing while docked
+                grip.pack(side="bottom", anchor="se", padx=2)
             container.pack(fill="both", expand=True, padx=(12, 4), pady=(0, 0))
             if not user_sized["on"]:
                 root.geometry("")
@@ -3156,14 +3195,24 @@ def run_gui():
             x = dock_shown_x()
             dock.update(shown=True, leave=None)
         dock["x"] = x
+        sync_grip()
+        root.update_idletasks()  # apply the new geometry so it is what gets saved
         save_geometry()
 
     def dock_hold(on):
         dock["held"] = on
 
+    def sync_grip():
+        """The resize grip is hidden while docked (and in the Title view)."""
+        if docked() or ui_state.get("view", "full") == "title":
+            grip.pack_forget()
+        elif not grip.winfo_manager():
+            grip.pack(side="bottom", anchor="se", padx=2, **({"before": container} if container.winfo_manager() else {}))
+
     if docked():
         dock["x"] = dock_shown_x()
         dock["leave"] = _time.monotonic() + 1.0  # stay out briefly at startup, then tuck away
+        sync_grip()
 
     # Bound on the toplevel, so every child widget (rows, labels) drags/pops up too.
     root.bind("<Button-1>", start)
@@ -3246,7 +3295,7 @@ def demo_data():
                 "W 31-24  Final", {}, tint="#c41230", state="post",
                 next_line="Next: @ #7 Boise State (8-1) \u00b7 Sat Oct 10 6:00 PM"),
             {"name": "Las Vegas Aces (30-14)", "state": "none", "line": "Last: vs New York Liberty (32-12) \u00b7 L 76-84  Final \u00b7 Sat Sep 19",
-             "detail": "Out of season", "info": "", "graphic": None}]
+             "detail": "Season starts May 15, 2027", "info": "", "graphic": None}]
 
 
 def demo_leagues():
