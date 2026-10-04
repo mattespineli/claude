@@ -2985,7 +2985,7 @@ def run_gui():
         px0 = FONTS["score"][1] * session["px_per_pt"]
         for c in session["roll_cells"]:
             p = min((now - c["roll"]["t0"]) / c["roll"]["dur"], 1.0)
-            v = (1 - (1 - p) ** 3) * (len(c["seq"]) - 1)  # ease out: fast start, settles onto the new digit
+            v = ease_io(p) * (len(c["seq"]) - 1)  # ease in and out: spins up, then settles onto the new digit
             k = min(int(v), len(c["seq"]) - 1)
             frac = v - k
             ax, ay = canvas.coords(c["anchor"])[:2]
