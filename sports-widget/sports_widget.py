@@ -2198,7 +2198,7 @@ def run_gui():
                     keep.append(img)
                     view_btn.delete("all")
                     view_btn.create_image(17, 17, image=img)
-                    root.after(18, lambda: play(i + 1))
+                    root.after(8, lambda: play(i + 1))
                 else:
                     icon["busy"] = False
                     draw_view_icon(mode)
@@ -2475,6 +2475,19 @@ def run_gui():
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
+    FRAME_MS = 8  # every animation loop aims at 120 frames a second
+
+    def frame_delay(t0):
+        """ms to wait before the next frame, given when this frame began (so slow frames don't push the rate down further)."""
+        return max(1, FRAME_MS - int((_time.perf_counter() - t0) * 1000))
+
+    if sys.platform == "win32":  # Windows timers tick every 15.6 ms by default; ask for 1 ms so 120 fps is possible
+        try:
+            import ctypes
+            ctypes.windll.winmm.timeBeginPeriod(1)
+        except Exception:
+            pass
+
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
 
@@ -2533,7 +2546,7 @@ def run_gui():
             session["shown"][key] = target
             if not session["tween_on"]:
                 session["tween_on"] = True
-                root.after(8, tween_tick)
+                root.after(1, tween_tick)
         if tw:
             p = (now - tw["t0"]) / tw["dur"]
             if p >= 1:
@@ -2560,7 +2573,7 @@ def run_gui():
             if p >= 1:
                 session["tweens"].pop(key, None)
         if session["tweens"]:
-            root.after(max(1, 14 - int((_time.perf_counter() - now) * 1000)), tween_tick)  # ~60 frames a second where it can
+            root.after(frame_delay(now), tween_tick)
         else:
             session["tween_on"] = False
 
@@ -2963,7 +2976,7 @@ def run_gui():
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
     def roll_tick():
-        now = _time.perf_counter()
+        now = _time.perf_counter()  # (frame budget FRAME_MS: every animation loop aims at 120 frames a second)
         roll_frame()
         done = [k for k, r_ in session["rolls"].items() if now - r_["t0"] >= r_["dur"]]
         for k in done:
@@ -2971,7 +2984,7 @@ def run_gui():
         if done:
             draw_all()  # finished wheels go back to plain text
         if session["rolls"]:
-            root.after(16, roll_tick)
+            root.after(frame_delay(now), roll_tick)
         else:
             session["rolling"] = False
 
@@ -3408,7 +3421,7 @@ def run_gui():
     def start_pulse():
         if not session["pulse_on"]:
             session["pulse_on"] = True
-            root.after(60, pulse_tick)
+            root.after(FRAME_MS, pulse_tick)
 
     def pulse_tick():
         """Breathe the outline of the clutch border / red-zone glow items (no redraw: only their colors change)."""
@@ -3422,7 +3435,7 @@ def run_gui():
                 canvas.itemconfigure(i, outline=blend(bgc, col, 0.3 + 0.65 * k))
             except tk.TclError:
                 pass
-        root.after(60, pulse_tick)
+        root.after(FRAME_MS, pulse_tick)
 
     def clutch_of(r):
         """A close game in its closing minutes (or extra innings): the card gets a pulsing border."""
@@ -3538,7 +3551,7 @@ def run_gui():
         else:
             celeb_frame()
         if live:
-            root.after(25, celeb_tick)
+            root.after(frame_delay(now), celeb_tick)
         else:
             session["celeb_on"] = False
 
@@ -4136,13 +4149,12 @@ def run_gui():
             import math
             for i in range(n):
                 a_ = 2 * math.pi * i / n
-                shade = ((i - loading["phase"]) % n) / n  # the lead dot is brightest, the tail fades out
+                shade = ((i - _time.perf_counter() * 9) % n) / n  # the lead dot is brightest, the tail fades out; time-based, so smooth
                 col = blend(BG, FG, 0.15 + 0.85 * (1 - shade))
                 x, y = cx + 12 * math.cos(a_), cy + 12 * math.sin(a_)
                 canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=col, outline="", tags="loading")
             canvas.create_text(cx, cy + 30, text="Loading...", fill=DIM, font=FONTS["line"], tags="loading")
-            loading["phase"] = (loading["phase"] + 1) % n
-            root.after(90, spin)
+            root.after(FRAME_MS, spin)
         except tk.TclError:
             pass
 
@@ -4730,7 +4742,7 @@ def run_gui():
                     step = (target - x) * 0.3
                     x += int(step) if abs(step) >= 1 else (1 if target > x else -1)
                     dock["x"] = x
-                    delay = 12
+                    delay = FRAME_MS
                 if (root.winfo_x(), root.winfo_y(), root.winfo_width(), root.winfo_height()) != (x, top, w, h):
                     root.geometry(f"{w}x{h}+{x}+{top}")  # the full height of the edge
         except tk.TclError:
