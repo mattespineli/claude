@@ -2487,7 +2487,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None,
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -3925,9 +3925,10 @@ def run_gui():
                 draw_rings(*session["ring_center"], ce, ct, base_bgc, bounds, lay["tag"])
             session["layers"][card_key(r)] = lay
             session["cur_layer"] = None
+        border = None
         if clutch_of(r) or session["force_clutch"].get(card_key(r), 0) > _time.perf_counter():
-            pid = canvas.create_polygon(rr_points(cx0 + 1, y + 1, cx0 + cw_ - 1, bottom - 1, 10), smooth=True, fill="",
-                                        outline="#fb923c", width=2)
+            border = pid = canvas.create_polygon(rr_points(cx0 + 1, y + 1, cx0 + cw_ - 1, bottom - 1, 10), smooth=True, fill="",
+                                                 outline="#fb923c", width=2)
             session["pulse_items"].append((pid, "#fb923c", bgc))
             start_pulse()
         if bgid:
@@ -3937,6 +3938,11 @@ def run_gui():
         if ctx:
             ctx["bottom"] = bottom
             session["actx"] = ctx
+        k_ = card_key(r)  # (the n-th card with this key, in case a game is listed twice)
+        n_ = session["hseen"][k_] = session["hseen"].get(k_, -1) + 1
+        hcover = canvas.create_rectangle(0, 0, 0, 0, fill=BG, outline="", state="hidden")  # hides content not yet eased into view
+        session["hcards"].append({"k": (k_, n_), "top": y, "bottom": bottom, "x0": cx0, "x1": cx0 + cw_, "bg": bgid, "hit": hit,
+                                  "border": border, "cover": hcover, "end": item_mark()})
         return bottom + GAP
 
     def draw_group(n, x, y, w, final):
@@ -4140,6 +4146,8 @@ def run_gui():
         session["pulse_items"].clear()
         session["layers"].clear()
         session["gcount"].clear()
+        session["hcards"].clear()
+        session["hseen"].clear()
         session["actx"] = None
         cw = max(canvas.winfo_width(), MIN_BODY_W)
         y = draw_nodes(build_nodes(), 0, 2, cw, final)
@@ -4153,7 +4161,80 @@ def run_gui():
                 canvas.addtag_withtag("abelow", i)
             ctx["cw"] = cw
             apply_frame()
+        height_setup(cw, total)
         return total
+
+    # ---- a card whose height changes between redraws (new lines, a badge...) eases to its new height ----
+    HEIGHT_SECS = 0.35
+
+    def height_now(st, now):
+        p = (now - st["t0"]) / HEIGHT_SECS
+        return st["v1"] if p >= 1 else st["v0"] + (st["v1"] - st["v0"]) * ease_io(p)
+
+    def height_setup(cw, total):
+        """After a full redraw: start easing each card whose height changed, and group the items below each card."""
+        now, shows, recs = _time.perf_counter(), session["hshow"], session["hcards"]
+        live = {}
+        for rec in recs:
+            h = rec["bottom"] - rec["top"]
+            st = shows.get(rec["k"])
+            if st is None or session["anims"]:  # new card, or an expand/collapse is animating it already
+                st = {"v0": h, "v1": h, "t0": now - HEIGHT_SECS}
+            elif h != st["v1"]:
+                st = {"v0": height_now(st, now), "v1": h, "t0": now}
+            live[rec["k"]] = st
+        session["hshow"] = live  # cards no longer shown are forgotten
+        session["hgeo"] = {"cw": cw, "total": total, "moved": [0.0] * len(recs)}
+        if not any(now - live[rec["k"]]["t0"] < HEIGHT_SECS for rec in recs):
+            return
+        for i, rec in enumerate(recs):  # everything drawn after card i (up to the end of card i + 1) moves with card i's change
+            last = recs[i + 1]["end"] if i + 1 < len(recs) else item_mark()
+            canvas.tk.eval(f"for {{set j {rec['end'] + 1}}} {{$j < {last}}} {{incr j}} {{{canvas._w} addtag hs{i} withtag $j}}")
+        height_frame()
+        if not session["h_on"]:
+            session["h_on"] = True
+            root.after(FRAME_MS, height_tick)
+
+    def height_frame():
+        """Place the cards for the current moment of their height easing. Returns whether any is still easing."""
+        now, geo, recs = _time.perf_counter(), session.get("hgeo"), session["hcards"]
+        if not geo or session["anims"] or len(geo["moved"]) != len(recs):
+            return False
+        offs, D, easing = [], 0.0, False
+        for i, rec in enumerate(recs):
+            st = session["hshow"].get(rec["k"])
+            d = height_now(st, now) - (rec["bottom"] - rec["top"]) if st else 0.0
+            easing = easing or (st is not None and now - st["t0"] < HEIGHT_SECS)
+            offs.append((D, d))
+            D += d
+            canvas.move(f"hs{i}", 0, D - geo["moved"][i])
+            geo["moved"][i] = D
+        for rec, (above, d) in zip(recs, offs):  # the card itself: its background, border and click area end at the eased bottom
+            top, bot = rec["top"] + above, rec["bottom"] + above + d
+            if rec["bg"]:
+                canvas.coords(rec["bg"], *rr_points(rec["x0"], top, rec["x1"], bot, 10))
+            if rec["border"]:
+                canvas.coords(rec["border"], *rr_points(rec["x0"] + 1, top + 1, rec["x1"] - 1, bot - 1, 10))
+            if rec["hit"]:
+                canvas.coords(rec["hit"], rec["x0"] + 3, top + 3, rec["x1"] - 3, bot - 3)
+            if d < -0.5:  # growing: hide what lies below the eased bottom
+                canvas.coords(rec["cover"], rec["x0"] - 1, bot, rec["x1"] + 1, rec["bottom"] + above + GAP)
+                canvas.itemconfigure(rec["cover"], state="normal")
+            else:
+                canvas.itemconfigure(rec["cover"], state="hidden")
+        canvas.configure(scrollregion=(0, 0, geo["cw"], geo["total"] + int(D)))
+        return easing
+
+    def height_tick():
+        now = _time.perf_counter()
+        try:
+            easing = height_frame()
+        except tk.TclError:
+            easing = False
+        if easing:
+            root.after(frame_delay(now), height_tick)
+        else:
+            session["h_on"] = False
 
     def compute_sig():
         return json.dumps([last.get("args"), ui_state, sorted(session["expanded"]),

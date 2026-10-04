@@ -46,7 +46,7 @@ The window remembers its position (and size, if you resized it) between runs. If
 
 Switching views (Full/Live/Title) animates the window height and the circle icon fills smoothly.
 
-Use the refresh button (left of the view button) to refresh immediately. Everything that expands or collapses animates smoothly.
+Use the refresh button (left of the view button) to refresh immediately. Everything that expands or collapses animates smoothly, and a card whose height changes on a refresh eases to its new height.
 
 Click a game to expand it (win probability, recent plays, scoring, team stats from ESPN); click again to collapse.
 
