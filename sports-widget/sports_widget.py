@@ -3645,6 +3645,7 @@ def run_gui():
         if r["state"] == "pre" and r.get("tv"):  # upcoming: the channel(s) under the start time
             tv_badges(mx, my - 2, r["tv"], tags, center=True)
             my += 16
+        n_hdr, my_hdr = item_mark(), my  # the pills and status line stay at the top of every card; only what is below them is centred
         if r["state"] == "post" and r.get("game"):  # a finished game: its team stats fill the middle
             d_ = ensure_stats(r["game"])
             if isinstance(d_, dict) and d_.get("all_stats"):
@@ -3711,10 +3712,11 @@ def run_gui():
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         bon = [bool(((tos or {}).get("bonus") or {}).get(t["ha"])) and r["state"] == "in" for t in teams]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (15 if any(bon) else 0) + (13 if any(t.get("record") for t in teams) else 0)
-        if mh < nat - 2:  # a short middle is centred against the teams
-            for i_ in items_since(n0):
-                canvas.move(i_, 0, (nat - mh) / 2)
-            my += (nat - mh) / 2
+        if mh < nat - 2:  # a short middle: what is below the status line is centred against the teams
+            if my > my_hdr:
+                for i_ in items_since(n_hdr):
+                    canvas.move(i_, 0, (nat - mh) / 2)
+                my += (nat - mh) / 2
             mh = nat
         if banner:
             draw_banner(mx, top, top + max(nat, mh), mw, ce, ct, bgc)  # natural height of a team column
