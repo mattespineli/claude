@@ -48,7 +48,7 @@ Switching views (Full/Live/Title) animates the window height and the circle icon
 
 Use the refresh button (left of the view button) to refresh immediately. Everything that expands or collapses animates smoothly, and a card whose height changes on a refresh eases to its new height.
 
-Click a game to expand it (win probability, recent plays, scoring, team stats from ESPN); click again to collapse.
+Click a game to expand it (win probability, scoring, recent plays for games not yet finished, a box score with a button per team to switch between them, and team stats from ESPN); click again to collapse.
 
 While any game is live the widget refreshes faster (default 15 seconds; change under Settings → While games are live).
 

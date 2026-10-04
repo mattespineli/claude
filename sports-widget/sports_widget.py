@@ -664,6 +664,55 @@ def _flat_stats(team_entry):
     return out
 
 
+# Box score columns worth a narrow window, per ESPN stat category (the first ones ESPN sends otherwise)
+BOX_COLS = {
+    "passing": ["C/ATT", "YDS", "TD", "INT"], "rushing": ["CAR", "YDS", "TD", "LONG"], "receiving": ["REC", "YDS", "TD", "LONG"],
+    "defensive": ["TOT", "SACKS", "TFL", "PD"], "interceptions": ["INT", "YDS", "TD"], "fumbles": ["FUM", "LOST", "REC"],
+    "kicking": ["FG", "PCT", "LONG", "XP", "PTS"], "punting": ["NO", "YDS", "AVG", "LONG"],
+    "kickreturns": ["NO", "YDS", "AVG", "LONG"], "puntreturns": ["NO", "YDS", "AVG", "LONG"],
+    "batting": ["AB", "R", "H", "RBI", "BB", "K"], "pitching": ["IP", "H", "R", "ER", "BB", "K"],
+    "forwards": ["G", "A", "+/-", "S", "TOI"], "defenses": ["G", "A", "+/-", "S", "TOI"], "goalies": ["SA", "SV", "GA", "SV%"],
+    "": ["MIN", "PTS", "REB", "AST", "STL", "BLK"],  # basketball: one unnamed category
+}
+BOX_SHOW = ("passing", "rushing", "receiving", "defensive", "kicking", "batting", "pitching", "forwards", "defenses", "goalies", "")
+
+
+def box_score(data, away_id="", home_id=""):
+    """[away, home] box scores from an ESPN summary: each a list of {"title", "cols", "rows": [(name, values)], "totals"};
+    None when ESPN has no player stats (e.g. most soccer)."""
+    players = (data.get("boxscore") or {}).get("players") or []
+    if len(players) != 2:
+        return None
+    by_id = {str((p.get("team") or {}).get("id")): p for p in players}
+    sides = [by_id.get(str(away_id), players[0]), by_id.get(str(home_id), players[1])]
+    out = []
+    for side in sides:
+        cats = []
+        for st in side.get("statistics") or []:
+            name = str(st.get("name") or st.get("type") or "").lower()
+            if name not in BOX_SHOW:
+                continue
+            labels = [str(l) for l in (st.get("labels") or st.get("names") or [])]
+            want = [c for c in BOX_COLS.get(name, []) if c in labels] or labels[:5]
+            idx = [labels.index(c) for c in want]
+            rows = []
+            for a in st.get("athletes") or []:
+                vals = a.get("stats") or []
+                if a.get("didNotPlay") or not vals:
+                    continue
+                ath = a.get("athlete") or {}
+                nm = ath.get("shortName") or ath.get("displayName") or "?"
+                rows.append((nm, [str(vals[i]) if i < len(vals) else "" for i in idx]))
+            if not rows:
+                continue
+            tot = st.get("totals") or []
+            title = str(st.get("text") or "").split(" ")[-1] if st.get("text") else name.title()
+            cats.append({"title": title if name else "", "cols": want, "rows": rows,
+                         "totals": [str(tot[i]) if i < len(tot) else "" for i in idx] if tot else None})
+        out.append(cats)
+    return out if any(out) else None
+
+
 def game_detail_data(data, max_plays=14, max_stats=14):
     """Boil an ESPN summary response down to what the details window shows."""
     comp = ((data.get("header") or {}).get("competitions") or [{}])[0]
@@ -705,6 +754,7 @@ def game_detail_data(data, max_plays=14, max_stats=14):
         if text:
             lines.append((_play_label(p), text))
     out["plays"] = lines
+    out["box"] = box_score(data, (away.get("team") or {}).get("id", ""), (home.get("team") or {}).get("id", ""))
     out["scoring"] = [((_play_label(p)), p.get("text") or p.get("shortText", "")) for p in (data.get("scoringPlays") or [])][-8:]
     teams = (data.get("boxscore") or {}).get("teams") or []
     if len(teams) == 2:
@@ -2487,7 +2537,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "celebs": {}, "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "hseen": {}, "h_on": False,
+               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -2803,13 +2853,16 @@ def run_gui():
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
             y += graphics(x, y, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
                                  "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc, w)
-        for title, items in (("Scoring", d["scoring"]), ("Recent plays", d["plays"][:8])):
+        recent = d["plays"][:8] if d.get("state") != "post" else []  # a finished game has its box score instead
+        for title, items in (("Scoring", d["scoring"]), ("Recent plays", recent)):
             if items:
                 _, h = ctext(x, y + 4, title, FONTS["smallb"], DIM)
                 y += 4 + h
                 for when, text in items:
                     _, h = ctext(x, y, (f"{when} · " if when else "") + text, FONTS["small"], FG, width=w)
                     y += h
+        if d.get("box"):
+            y += draw_box(x, y, w, d, g)
         if d["stats"]:
             _, h = ctext(x, y + 4, "Team stats", FONTS["smallb"], DIM)
             y += 4 + h
@@ -2822,10 +2875,55 @@ def run_gui():
                 ctext(mid, y, label, FONTS["small"], DIM, anchor="n")
                 _, h = ctext(x + w, y, h_, FONTS["small"], FG, anchor="ne")
                 y += h
-        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("linescore") or d.get("home_win_start") is not None
+        if not (d["plays"] or d["scoring"] or d["stats"] or d.get("box") or d.get("linescore") or d.get("home_win_start") is not None
                 or d.get("home_win") is not None and not win_shown):
             _, h = ctext(x, y, "No extra details from ESPN for this game", FONTS["small"], DIM)
             y += h
+        return y - y0
+
+    def draw_box(x, y, w, d, g):
+        """Box score of one team, with a pill per team to switch between them. Returns its height."""
+        y0 = y
+        gk = gkey(g) if g else None
+        side = session["box_side"].get(gk, 0) if gk else 0
+        _, h = ctext(x, y + 6, "Box score", FONTS["smallb"], DIM)
+        px = x + w
+        for i in (1, 0):  # team pills at the right of the heading: away, then home
+            label = (d["away_abbr"], d["home_abbr"])[i] or ("Away", "Home")[i]
+            pw = text_width(FONTS["smallb"], label) + 16
+            px -= pw
+            on = i == side
+            tag = new_hit(("boxside", gk, i)) if gk else ()
+            fill = PANEL if on else BG
+            canvas.create_polygon(rr_points(px, y + 4, px + pw, y + 22, 7), smooth=True, fill=fill, outline=HOVER if on else PANEL,
+                                  tags=tag)
+            canvas.create_text(px + pw / 2, y + 13, text=label, font=FONTS["smallb"], fill=FG if on else DIM, tags=tag)
+            px -= 4
+        y += max(6 + h, 24) + 2
+        for cat in d["box"][side]:
+            cols = cat["cols"]
+            vals = [r_[1] for r_ in cat["rows"]] + ([cat["totals"]] if cat["totals"] else [])
+            cw = [max([text_width(FONTS["smallb"], c)] + [text_width(FONTS["small"], v[j]) for v in vals if j < len(v)]) + 8
+                  for j, c in enumerate(cols)]
+            name_w = w - sum(cw)
+            ctext(x, y + 2, cat["title"], FONTS["smallb"], FG)
+            xr = x + w
+            for c, wd in zip(reversed(cols), reversed(cw)):
+                ctext(xr, y + 2, c, FONTS["smallb"], DIM, anchor="ne")
+                xr -= wd
+            y += 18
+            rows = [(nm, v, FONTS["small"], FG) for nm, v in cat["rows"]] + (
+                [("Team", cat["totals"], FONTS["smallb"], DIM)] if cat["totals"] and any(cat["totals"]) else [])
+            for nm, v, font, col in rows:
+                while len(nm) > 3 and text_width(font, nm) > name_w - 4:  # long names lose letters, not columns
+                    nm = nm.rstrip("\u2026")[:-1] + "\u2026"
+                ctext(x, y, nm, font, col)
+                xr = x + w
+                for val, wd in zip(reversed(v), reversed(cw)):
+                    ctext(xr, y, val, font, col, anchor="ne")
+                    xr -= wd
+                y += 15
+            y += 4
         return y - y0
 
     def fetch_details(g):
@@ -4830,6 +4928,11 @@ def run_gui():
                 view_tween["next"] = True  # ease the window to the new height
                 draw_all()
                 session["sig"] = compute_sig()
+                fit()
+        elif h[0] == "boxside":  # box score: show the other team
+            if session["box_side"].get(h[1], 0) != h[2]:
+                session["box_side"][h[1]] = h[2]
+                draw_all()
                 fit()
         elif h[1].get("game"):
             toggle_expand(h[1]["game"])
