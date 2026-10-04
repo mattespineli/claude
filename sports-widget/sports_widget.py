@@ -3237,7 +3237,7 @@ def run_gui():
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
     TEST_POINTS = {"TOUCHDOWN": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
-                   "RUN SCORES": 1, "1-RUN SINGLE": 1, "1-RUN DOUBLE": 1, "1-RUN TRIPLE": 1, "PICK SIX": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD": 6}
+                   "RUN SCORES": 1, "PICK SIX": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD": 6}
 
     def test_score(r, k, side, head):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
@@ -3249,7 +3249,8 @@ def run_gui():
         if head == "TIES IT UP":
             new = max(mine, other)
         else:
-            new = mine + (TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
+            runs = re.match(r"(\d+)-RUN ", head)  # N-RUN SINGLE / DOUBLE / TRIPLE score N
+            new = mine + (int(runs.group(1)) if runs else TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
         session["test_scores"][k] = {"side": side, "text": f"{new:g}", "ce": session["celebs"].get(k)}
 
     def test_view(r):
@@ -3874,8 +3875,7 @@ def run_gui():
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
-             ("Run scores", "RUN SCORES", "run", None), ("1-run single", "1-RUN SINGLE", "run", None),
-             ("1-run double", "1-RUN DOUBLE", "run", None), ("1-run triple", "1-RUN TRIPLE", "run", None),
+             ("Run scores", "RUN SCORES", "run", None),
              ("Triple play", "TRIPLE PLAY", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
@@ -3902,6 +3902,9 @@ def run_gui():
         if not r:
             return "No game card is in view to play it on. Switch to the Games tab and scroll to a game."
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
+        runs = session.get("test_runs", 0)
+        if head in ("SINGLE", "DOUBLE", "TRIPLE") and runs:  # a hit that scores N runs
+            head, kind = f"{runs}-RUN {head}", "run"
         if kind == "redzone":  # needs a card with the football field strip
             def has_field(r_):
                 gl_ = r_.get("graphic") or []
@@ -3941,29 +3944,33 @@ def run_gui():
         tk.Label(f, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
             row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
         # what follows the animation (these only ever play after the play that caused them): one choice, like radio buttons
-        then = tk.Frame(f, bg=BG)
-        then.grid(row=1, column=0, columnspan=3, pady=(0, 8), sticky="w")
-        tk.Label(then, text="Then", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(side="left", padx=(4, 6))
-        pills = {}
+        def choice_row(row, title, key, options, default):
+            """A row of pills where exactly one is on, kept in session[key]."""
+            fr = tk.Frame(f, bg=BG)
+            fr.grid(row=row, column=0, columnspan=3, pady=(0, 6), sticky="w")
+            tk.Label(fr, text=title, bg=BG, fg=DIM, font=("Segoe UI", 9), width=5, anchor="w").pack(side="left", padx=(4, 6))
+            pills = {}
 
-        def pick(val):
-            session["test_follow"] = val
-            for v_, (c_, shape_, txt_) in pills.items():
-                on = v_ == val
-                c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
-                c_.itemconfigure(txt_, fill=FG if on else DIM)
-        for val, label in (("", "Nothing"), ("TAKES THE LEAD", "Takes the lead"), ("TIES IT UP", "Ties it up"),
-                           ("MOMENTUM SWING", "Momentum swing")):
-            pw = text_width(FONTS["smallb"], label) + 20
-            c_ = tk.Canvas(then, width=pw, height=24, bg=BG, highlightthickness=0, cursor="hand2")
-            shape_ = c_.create_polygon(rr_points(1, 2, pw - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
-            txt_ = c_.create_text(pw / 2, 12, text=label, font=FONTS["smallb"], fill=DIM)
-            c_.bind("<ButtonRelease-1>", lambda e, v_=val: pick(v_))
-            c_.pack(side="left", padx=2)
-            pills[val] = (c_, shape_, txt_)
-        pick(session.get("test_follow", ""))
+            def pick(val):
+                session[key] = val
+                for v_, (c_, shape_, txt_) in pills.items():
+                    on = v_ == val
+                    c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
+                    c_.itemconfigure(txt_, fill=FG if on else DIM)
+            for val, label in options:
+                pw = text_width(FONTS["smallb"], label) + 20
+                c_ = tk.Canvas(fr, width=pw, height=24, bg=BG, highlightthickness=0, cursor="hand2")
+                shape_ = c_.create_polygon(rr_points(1, 2, pw - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
+                txt_ = c_.create_text(pw / 2, 12, text=label, font=FONTS["smallb"], fill=DIM)
+                c_.bind("<ButtonRelease-1>", lambda e, v_=val: pick(v_))
+                c_.pack(side="left", padx=2)
+                pills[val] = (c_, shape_, txt_)
+            pick(session.get(key, default))
+        choice_row(1, "Then", "test_follow", (("", "Nothing"), ("TAKES THE LEAD", "Takes the lead"), ("TIES IT UP", "Ties it up"),
+                                              ("MOMENTUM SWING", "Momentum swing")), "")
+        choice_row(2, "Runs", "test_runs", ((0, "0"), (1, "1"), (2, "2"), (3, "3"), (4, "4")), 0)  # for single, double, triple
         err = tk.Label(f, text="", bg=BG, fg=COLORS["err"], font=("Segoe UI", 9), anchor="w", justify="left", wraplength=420)
-        err.grid(row=2 + (len(TESTS) + 2) // 3, column=0, columnspan=3, padx=4, pady=(6, 0), sticky="w")
+        err.grid(row=3 + (len(TESTS) + 2) // 3, column=0, columnspan=3, padx=4, pady=(6, 0), sticky="w")
         marks = []
 
         def run_test(label, btn):
@@ -3979,7 +3986,7 @@ def run_gui():
         for i, (label, *_rest) in enumerate(sorted(TESTS, key=lambda t_: t_[0].lower())):  # alphabetical, across the rows
             b_ = styled_button(f, label, lambda: None)
             b_.bind("<ButtonRelease-1>", lambda e, lb=label, b2=b_: run_test(lb, b2) if 0 <= e.x <= b2.winfo_width() and 0 <= e.y <= 28 else None)
-            b_.grid(row=2 + i // 3, column=i % 3, padx=(4, 16), pady=3, sticky="w")
+            b_.grid(row=3 + i // 3, column=i % 3, padx=(4, 16), pady=3, sticky="w")
         return f
 
     def celeb_frame():
