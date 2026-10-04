@@ -42,7 +42,7 @@ While the first data loads, a spinner is shown instead of a blank window. A team
 
 The gear button in the header opens the same menu as a right-click.
 
-The window remembers its position (and size, if you resized it) between runs. If Settings is open when the widget closes or restarts (including Update & Restart), it opens again on the next start, with the test buttons showing if they were.
+The window remembers its position (and size, if you resized it) between runs. If Settings is open when the widget closes or restarts (including Update & Restart), it opens again on the next start, with the test buttons showing if they were. Settings also opens where you last left it.
 
 Switching views (Full/Live/Title) animates the window height and the circle icon fills smoothly.
 

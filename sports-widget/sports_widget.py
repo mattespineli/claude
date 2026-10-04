@@ -4743,9 +4743,25 @@ def run_gui():
         styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
         styled_button(win, "Close", close).grid(row=12, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
-        win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
+        sp = ui_state.get("settings_pos")
+        if isinstance(sp, list) and len(sp) == 2:  # where it was last time (kept on screen)
+            sx, sy = clamp_pos(int(sp[0]), int(sp[1]), win.winfo_reqwidth(), win.winfo_reqheight())
+        else:
+            sx, sy = root.winfo_x() + 30, root.winfo_y() + 30
+        win.geometry(f"+{sx}+{sy}")
         if ui_state.get("settings_tests"):  # the test buttons were showing last time
             toggle_tests()
+        pos_save = {"id": None}
+
+        def on_move(e):
+            if e.widget is not win:
+                return
+            ui_state["settings_pos"] = [win.winfo_x(), win.winfo_y()]
+            if pos_save["id"]:
+                root.after_cancel(pos_save["id"])
+            pos_save["id"] = root.after(400, lambda: save_state(ui_state))  # once the window stops moving
+        win.update_idletasks()
+        win.bind("<Configure>", on_move)
 
     def untrack_menu(event):
         items = [(f"Untrack {p['label']} ({p['date']})", lambda p=p: untrack(p)) for p in list(pins)]
