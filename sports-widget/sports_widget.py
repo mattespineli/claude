@@ -2506,6 +2506,16 @@ def run_gui():
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
 
+    def item_mark():
+        """An id below every canvas item drawn after this call (item ids only grow)."""
+        i = canvas.create_line(0, 0, 0, 0)
+        canvas.delete(i)
+        return i
+
+    def items_since(m):
+        """Ids of the items drawn since item_mark() returned m, without listing the whole canvas."""
+        return range(m + 1, item_mark())
+
     def ctext(x, y, s_, font, fill, width=None, anchor="nw", tags=(), justify="left"):
         kw = {"text": s_, "font": font, "fill": fill, "anchor": anchor, "tags": tags, "justify": justify}
         if width:
@@ -3067,7 +3077,7 @@ def run_gui():
             c = [hi if lead >= 0 else DIM, hi if lead <= 0 else DIM]
         rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
         my = top + 2
-        n0 = len(canvas.find_all())  # everything drawn from here on belongs to the middle section
+        n0 = item_mark()  # everything drawn from here on belongs to the middle section
         live = r["state"] == "in"
         if live:  # the LIVE flag with the channel(s) beside it, centred together
             names_ = r["tv"].split(" \u00b7 ")[:2] if r.get("tv") else []
@@ -3143,12 +3153,12 @@ def run_gui():
             my += 4 + h
         banner = bool(ce and ce.get("banner"))
         if banner:  # the banner takes the middle for a few seconds (crossfading), without changing the card's height
-            fade_items(canvas.find_all()[n0:], bgc, 1 - banner_alpha(ce, ct))  # never deleted: the frames fade it back in
+            fade_items(items_since(n0), bgc, 1 - banner_alpha(ce, ct))  # never deleted: the frames fade it back in
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
         if mh < nat - 2:  # a short middle is centred against the teams
-            for i_ in canvas.find_all()[n0:]:
+            for i_ in items_since(n0):
                 canvas.move(i_, 0, (nat - mh) / 2)
             my += (nat - mh) / 2
             mh = nat
@@ -3220,6 +3230,10 @@ def run_gui():
                 return "GRAND SLAM!", True
             return ("HOME RUN" if "homer" in low or "home run" in low else "RUN SCORES" if n == 1 else f"{n} RUNS SCORE"), True
         if sport == "football":
+            if n == 2 and "safety" not in low and ("two-point" in low or "conversion" in low):
+                return "2-PT CONVERSION", True
+            if n >= 6 and "blocked" in low and ("punt" in low or "field goal" in low):
+                return ("BLOCKED PUNT TD" if "punt" in low else "BLOCKED FG TD"), True
             return {6: "TOUCHDOWN", 7: "TOUCHDOWN", 8: "TOUCHDOWN", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
         if sport in ("hockey", "soccer"):
             return "GOAL!", True
@@ -3236,6 +3250,17 @@ def run_gui():
         """(headline, color, seconds) for a big play named in ESPN's last-play text, or None."""
         low = text.lower()
         if sport == "football":
+            if "blocked" in low and "field goal" in low:
+                return "BLOCKED FG", "#a78bfa", 4.0
+            if "blocked" in low and "punt" in low:
+                return "BLOCKED PUNT", "#a78bfa", 4.0
+            if "blocked" in low and ("extra point" in low or "kick" in low):
+                return "BLOCKED PAT", "#a78bfa", 3.5
+            if "onside" in low:
+                k_, rec = onside_teams(text)
+                if k_ and rec and k_ == rec:
+                    return "ONSIDE KICK RECOVERED", "#fbbf24", 4.5
+                return "ONSIDE KICK", "#9aa0a6", 2.5
             if "intercept" in low:
                 return "INTERCEPTION", "#f87171", 3.5
             if "fumble" in low:
@@ -3244,8 +3269,6 @@ def run_gui():
                 return "SACK", "#fb923c", 3.0
             if "turnover on downs" in low:
                 return "TURNOVER ON DOWNS", "#f87171", 3.5
-            if "blocked" in low and ("punt" in low or "field goal" in low or "kick" in low):
-                return "BLOCKED KICK", "#a78bfa", 3.5
             if " punts" in low:
                 return "PUNT", "#9aa0a6", 2.5
             if "kicks off" in low or "kickoff" in low:
@@ -3271,6 +3294,31 @@ def run_gui():
         elif sport == "hockey" and "penalty" in low:
             return "PENALTY", "#fb923c", 3.0
         return None
+
+    def onside_teams(text):
+        """(kicking team, recovering team) abbreviations from an onside kick's play text, either '' when not named.
+        ESPN writes e.g. 'kicks onside 12 yards from DAL 35 to DAL 47. ... RECOVERED by DAL-J.Doe.'"""
+        kick = re.search(r"\bfrom ([A-Z]{2,4}) \d+", text)
+        rec = re.search(r"recovered by ([A-Z]{2,4})-", text, re.I)
+        return (kick.group(1).upper() if kick else ""), (rec.group(1).upper() if rec else "")
+
+    KICK_PLAYS = ("BLOCKED FG", "BLOCKED PUNT", "BLOCKED PAT", "ONSIDE KICK RECOVERED")
+
+    def kick_side(r, head, text, kicker):
+        """Index of the team that made a special-teams play: the kicking team for an onside recovery, the other team for
+        a block. `kicker` is who had the ball before the play (the kicking team), used when the text names nobody."""
+        tm = r.get("teams") or []
+        if len(tm) != 2:
+            return None
+        idx = lambda ab: next((i for i, t in enumerate(tm) if ab and t.get("abbr", "").upper() == str(ab).upper()), None)
+        if head == "ONSIDE KICK RECOVERED":
+            k_, _rec = onside_teams(text)
+            return idx(k_) if idx(k_) is not None else idx(kicker)
+        rec = re.search(r"recovered by ([A-Z]{2,4})-", text, re.I)  # a block recovered by the blocking team names it
+        i = idx(kicker)
+        if i is not None:
+            return 1 - i
+        return idx(rec.group(1)) if rec else None
 
     def play_sound(kind):
         """A short chime (Windows beeps; the system bell elsewhere), unless sounds are muted in Settings."""
@@ -3307,7 +3355,7 @@ def run_gui():
         if sport == "football" and fb_:
             off = next((i for i, t in enumerate(tm) if t.get("abbr", "").upper() == str(fb_["off"]).upper()), None)
             if off is not None:
-                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED KICK") else off
+                return 1 - off if head in ("INTERCEPTION", "FUMBLE", "SACK", "BLOCKED FG", "BLOCKED PUNT", "BLOCKED PAT") else off
         if sport == "baseball":
             m = re.match(r"\s*(Top|Bot)", str(r.get("status") or r.get("detail") or ""))
             bat = next((i for i, t in enumerate(tm) if m and t.get("ha") == ("away" if m.group(1) == "Top" else "home")), None)
@@ -3411,8 +3459,10 @@ def run_gui():
                     and session["poss_prev"][k] != fb_["off"] and not re.search(r"punt|field goal|kick|intercept|fumble", ptext.lower())):
                 big = ("TURNOVER ON DOWNS", "#f87171", 3.5)  # 4th down, now 1st down for the other team, and no kick or takeaway
             if big and k not in session["celebs"]:
-                make_event(r, k, acting_side(r, big[0], ptid), big[0], None, big[2], mode, ptext, sound="turnover" if big[0] in (
-                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") else None)
+                side = (kick_side(r, big[0], ptext, session["poss_prev"].get(k)) if big[0] in KICK_PLAYS
+                        else acting_side(r, big[0], ptid))
+                make_event(r, k, side, big[0], None, big[2], mode, ptext, sound="turnover" if big[0] in (
+                    "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") + KICK_PLAYS else None)
                 continue
             old_w = session["win_prev"].get(k)  # or a big swing in win probability
             if wv is not None and old_w is not None and abs(wv - old_w) >= 25 and k not in session["celebs"]:
@@ -3477,6 +3527,8 @@ def run_gui():
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
              ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("4th down", "4TH DOWN", "fourth", None),
              ("Turnover on downs", "TURNOVER ON DOWNS", "turnover", None),
+             ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
+             ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Momentum swing", "MOMENTUM SWING", "swing", None),
              ("Final", "FINAL", "final", None), ("Clutch border", "", "clutch", None)]
 
@@ -3715,7 +3767,7 @@ def run_gui():
                     canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
                 if ce and i == (ce["side"] if len(urls) == 2 else (0 if ce["side"] == 0 else -1)):
                     session["ring_center"] = (ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2)
-            n_head = len(canvas.find_all())
+            n_head = item_mark()
             _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
             y_head = yy
             yy += h
@@ -3724,7 +3776,7 @@ def run_gui():
                 yy += h
             if ce and ce.get("banner"):  # the banner covers the name and opponent for a few seconds
                 by1 = max(yy, y_head + 40)
-                fade_items(canvas.find_all()[n_head:], bgc, 1 - banner_alpha(ce, ct))
+                fade_items(items_since(n_head), bgc, 1 - banner_alpha(ce, ct))
                 draw_banner(tx + text_w / 2, y_head, by1, text_w, ce, ct, bgc)
             if sc:
                 yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
@@ -4068,7 +4120,7 @@ def run_gui():
             session["sig"] = compute_sig()
             draw_all()
         if session["anims"]:
-            root.after(4, anim_step)
+            root.after(frame_delay(now), anim_step)
         else:
             session["looping"] = False
             fit()
@@ -4152,19 +4204,22 @@ def run_gui():
         if not loading["on"]:
             return
         try:
-            canvas.delete("loading")
+            t0 = _time.perf_counter()
             cw = max(canvas.winfo_width(), MIN_BODY_W)
             ch = max(canvas.winfo_height(), 100)
             cx, cy, n = cw / 2, ch / 2 - 10, 8
-            import math
+            items = loading.get("items")
+            if not items or not canvas.find_withtag("loading"):  # first frame (or the canvas was cleared): make the dots once
+                items = loading["items"] = [canvas.create_oval(0, 0, 0, 0, outline="", tags="loading") for _ in range(n)] + [
+                    canvas.create_text(0, 0, text="Loading...", fill=DIM, font=FONTS["line"], tags="loading")]
             for i in range(n):
                 a_ = 2 * math.pi * i / n
-                shade = ((i - _time.perf_counter() * 9) % n) / n  # the lead dot is brightest, the tail fades out; time-based, so smooth
-                col = blend(BG, FG, 0.15 + 0.85 * (1 - shade))
+                shade = ((i - t0 * 9) % n) / n  # the lead dot is brightest, the tail fades out; time-based, so smooth
                 x, y = cx + 12 * math.cos(a_), cy + 12 * math.sin(a_)
-                canvas.create_oval(x - 3, y - 3, x + 3, y + 3, fill=col, outline="", tags="loading")
-            canvas.create_text(cx, cy + 30, text="Loading...", fill=DIM, font=FONTS["line"], tags="loading")
-            root.after(FRAME_MS, spin)
+                canvas.coords(items[i], x - 3, y - 3, x + 3, y + 3)
+                canvas.itemconfigure(items[i], fill=blend(BG, FG, 0.15 + 0.85 * (1 - shade)))
+            canvas.coords(items[n], cx, cy + 30)
+            root.after(frame_delay(t0), spin)
         except tk.TclError:
             pass
 
