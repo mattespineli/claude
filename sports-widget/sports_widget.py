@@ -1335,6 +1335,8 @@ def situation_graphic(sport, comp, league=""):
     core = _situation_graphic(sport, comp)
     if core:
         out.append(core)
+    elif sport == "football":  # no ball position (halftime, between plays): keep the field bar, with nothing on it
+        out.append({"kind": "fieldidle"})
     sit = comp.get("situation") or {}
     last = str((sit.get("lastPlay") or {}).get("text") or "").strip()  # what just happened (Scoreboard layout)
     if last and not _halftime(comp):
@@ -2816,6 +2818,9 @@ def run_gui():
     def graphic_one(ox, oy, g, bg, W):
         c = Off(ox, oy)
         kind = g["kind"]
+        if kind == "fieldidle":
+            g = {"kind": "football", "idle": True, "x": 50, "first": None, "off": "", "def": "", "red": False}
+            kind = "football"
         if kind == "periods":
             n, gap = len(g["fills"]), 4
             seg = (W - gap * (n - 1)) / n
@@ -2927,6 +2932,8 @@ def run_gui():
                 pid = c.create_rectangle(-2, 11, W + 2, 23, outline="#ef4444", fill="", width=2)
                 session["pulse_items"].append((pid, "#ef4444", bg))
                 start_pulse()
+            if g.get("idle"):
+                return 24
             if g["first"] is not None:  # the first-down marker and the ball ease along the field when they move
                 fk = tkey("first")
                 fx = px(tween_value(fk, g["first"]))
@@ -6113,7 +6120,7 @@ def demo_data(o=None):
            "situation": {"shortDownDistanceText": f"{ordn(o.get('down', 3))} & {o.get('dist', 4)}", "possession": "25" if offense == "SF" else "6",
                          "possessionText": f"{fside} {fyd}", "distance": o.get("dist", 4), "isRedZone": fside == defense and fyd <= 20,
                          "homeTimeouts": 2, "awayTimeouts": 3,
-                         "lastPlay": {"text": "J. Purdy pass complete to G. Kittle for 12 yards to the DAL 38"}}}
+                         "lastPlay": {"text": "J. Purdy pass complete to G. Kittle for 12 yards to the DAL 38"}} if not o.get("nofield") else {}}
     ba, bb = sc("baseball", (3, 2))
     bs = o.get("bases", (True, False, True))
     inning_txt = f"{o.get('half', 'Top')} {ordn(o.get('inning', 7))}"
