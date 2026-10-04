@@ -76,7 +76,7 @@ def _record(c):
     return f" ({summ})" if isinstance(summ, str) and summ else ""
 
 
-STANDINGS = "https://site.api.espn.com/apis/v2/sports/{sport}/{league}/standings"
+STANDINGS = "https://site.api.espn.com/apis/v2/sports/{sport}/{league}/standings?level=3"  # level 3 = by division
 STANDINGS_LEAGUES = [("NFL", "football", "nfl"), ("NBA", "basketball", "nba"), ("NHL", "hockey", "nhl"),
                      ("MLB", "baseball", "mlb"), ("WNBA", "basketball", "wnba")]
 _seed_cache = {}
@@ -122,6 +122,55 @@ def parse_standings(data):
             walk(ch)
     walk(data)
     return groups
+
+
+def _num_stat(stats, name):
+    try:
+        return float(stats.get(name, "") or 0)
+    except ValueError:
+        return 0.0
+
+
+def parse_standings_tree(data, league):
+    """{"overall": rows, "conference": groups | None, "division": groups | None}, each ranked.
+
+    ESPN nests conferences/leagues around divisions; the Overall and Conference views are built from the
+    division-level groups. A league with a single flat group (WNBA) only has Overall.
+    """
+    leaves = []
+
+    def walk(node, path):
+        if not isinstance(node, dict):
+            return
+        name = node.get("name") or node.get("abbreviation") or ""
+        one = parse_standings({"standings": node.get("standings"), "name": name}) if (node.get("standings") or {}).get("entries") else []
+        if one:
+            leaves.append((path + [name], one[0]["rows"]))
+        for ch in node.get("children") or []:
+            walk(ch, path + [name] if name else path)
+    for ch in data.get("children") or []:
+        walk(ch, [])
+    if not leaves:
+        leaves = [([data.get("name") or ""], g["rows"]) for g in parse_standings(data)]
+
+    def ranked(rows):
+        if league == "NHL":
+            return sorted(rows, key=lambda r: (-_num_stat(r["stats"], "points"), -_num_stat(r["stats"], "wins")))
+        return sorted(rows, key=lambda r: (-_num_stat(r["stats"], "winPercent"), -_num_stat(r["stats"], "wins")))
+
+    allrows = ranked([r for _, rows in leaves for r in rows])
+    out = {"overall": allrows, "conference": None, "division": None}
+    if all(len(path) == 1 for path, _ in leaves):  # only one level of grouping: call it the conference view
+        if len(leaves) > 1:
+            out["conference"] = [{"name": path[0], "rows": ranked(rows)} for path, rows in leaves]
+        return out
+    byconf = {}
+    for path, rows in leaves:
+        byconf.setdefault(path[0], []).extend(rows)
+    if len(byconf) > 1:
+        out["conference"] = [{"name": n, "rows": ranked(rows)} for n, rows in byconf.items()]
+    out["division"] = [{"name": path[-1], "rows": ranked(rows)} for path, rows in leaves]
+    return out
 
 
 def standing_cells(league, stats):
@@ -1966,6 +2015,19 @@ def run_gui():
             elif t == "text":
                 _, h = ctext(x + 2, y + 4, n["text"], FONTS["line"], DIM)
                 y += 4 + h + 4
+            elif t == "tabs":  # Overall / Conference / Division pills for one league's standings
+                import tkinter.font as tkfont
+                font = tkfont.Font(font=FONTS["smallb"])
+                px = x + 6
+                for key, label in n["options"]:
+                    pw = font.measure(label) + 20
+                    on = key == n["sel"]
+                    tag = new_hit(("stview", n["league"], key))
+                    canvas.create_polygon(rr_points(px, y + 3, px + pw, y + 23, 8), smooth=True,
+                                          fill=PANEL if on else BG, outline=PANEL if on else "#33333d", tags=(tag,))
+                    canvas.create_text(px + pw / 2, y + 13, text=label, font=FONTS["smallb"], fill=FG if on else DIM, tags=(tag,))
+                    px += pw + 6
+                y += 28
             elif t == "sub":  # standings sub-header: group name + column titles
                 _, h = ctext(x + 6, y + 6, n["text"], FONTS["smallb"], FG)
                 for k, title in enumerate(reversed(n["headers"])):
@@ -2034,15 +2096,21 @@ def run_gui():
             elif data == "error":
                 children = [{"t": "text", "text": "Standings unavailable"}]
             else:
+                options = [("overall", "Overall")] + [(k, k.title()) for k in ("conference", "division") if data.get(k)]
+                sel = ui_state.get(f"stview:{abbr}", "conference" if data.get("conference") else "overall")
+                if sel not in dict(options):
+                    sel = "overall"
                 children = []
-                for g in data:
-                    headers = ["W-L"] + STANDINGS_HEADERS.get(abbr, ["PCT", "GB"])
+                if len(options) > 1:
+                    children.append({"t": "tabs", "league": abbr, "options": options, "sel": sel})
+                groups = [{"name": "Overall", "rows": data["overall"]}] if sel == "overall" else data[sel]
+                headers = ["W-L"] + STANDINGS_HEADERS.get(abbr, ["PCT", "GB"])
+                for g in groups:
                     children.append({"t": "sub", "text": g["name"], "headers": headers})
                     for rank, r in enumerate(g["rows"], start=1):
                         rec, cols = standing_cells(abbr, r["stats"])
-                        name = r["name"]  # always the full city + team name
                         fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
-                        children.append({"t": "srow", "rank": rank, "name": name, "vals": [rec] + cols, "fav": fav})
+                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav})
             nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
         return nodes
 
@@ -2264,7 +2332,7 @@ def run_gui():
         def work():
             for abbr, sport, league in STANDINGS_LEAGUES:
                 try:
-                    session["standings"][abbr] = parse_standings(standings_json(sport, league))
+                    session["standings"][abbr] = parse_standings_tree(standings_json(sport, league), abbr)
                 except Exception:
                     session["standings"].setdefault(abbr, "error")
                     if session["standings"][abbr] is None:
@@ -2494,12 +2562,21 @@ def run_gui():
             return
         if h[0] == "group":
             toggle_group(h[1])
+        elif h[0] == "stview":
+            if ui_state.get(f"stview:{h[1]}") != h[2]:
+                ui_state[f"stview:{h[1]}"] = h[2]
+                save_state(ui_state)
+                session["sig"] = None
+                view_tween["next"] = True  # ease the window to the new height
+                draw_all()
+                session["sig"] = compute_sig()
+                fit()
         elif h[1].get("game"):
             toggle_expand(h[1]["game"])
 
     def on_motion(e):
         h = hit_at(e)
-        canvas.configure(cursor="hand2" if h and (h[0] == "group" or h[1].get("game")) else "")
+        canvas.configure(cursor="hand2" if h and (h[0] in ("group", "stview") or h[1].get("game")) else "")
     canvas.bind("<Motion>", on_motion)
 
     def restart():
