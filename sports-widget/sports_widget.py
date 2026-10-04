@@ -3905,25 +3905,39 @@ def run_gui():
             return 1 - i
         return idx(rec.group(1)) if rec else None
 
-    SOUND_TONES = {"score": [(660, 80), (880, 130)], "turnover": [(440, 100), (330, 170)],
-                   "grand": [(523, 90), (659, 90), (784, 90), (1047, 260)], "final": [(392, 280)],
-                   "swing": [(587, 90), (494, 130)], "fourth": [(330, 110), (330, 110), (392, 180)]}
-    SOUNDBOARD = [("4th down", "fourth"), ("Final", "final"), ("Grand slam", "grand"), ("Momentum swing", "swing"),
-                  ("Score", "score"), ("Turnover", "turnover")]  # (label, sound): what the Settings soundboard plays
+    SOUNDBOARD = [("Chord", "chord")]  # what the Settings soundboard plays: every animation uses this one sound
+    chord = {}
 
-    def play_sound(kind, force=False):
-        """A short chime (Windows beeps; the system bell elsewhere), unless sounds are muted in Settings (the soundboard forces it)."""
+    def chord_wav():
+        """One pleasant sound for everything: a C major chord (C5 E5 G5, with the root an octave down), soft attack, slow decay."""
+        if "wav" not in chord:
+            import io, struct, wave
+            rate, secs = 22050, 0.9
+            freqs = [(261.63, 0.5), (523.25, 1.0), (659.25, 0.85), (783.99, 0.75)]
+            frames = bytearray()
+            for n in range(int(rate * secs)):
+                t = n / rate
+                env = min(1.0, t / 0.02) * math.exp(-3.4 * t)
+                v = sum(a * math.sin(2 * math.pi * f * t) for f, a in freqs) / 3.1
+                frames += struct.pack("<h", int(max(-1.0, min(1.0, v * env)) * 20000))
+            buf = io.BytesIO()
+            with wave.open(buf, "wb") as w_:
+                w_.setnchannels(1)
+                w_.setsampwidth(2)
+                w_.setframerate(rate)
+                w_.writeframes(bytes(frames))
+            chord["wav"] = buf.getvalue()
+        return chord["wav"]
+
+    def play_sound(kind=None, force=False):
+        """The chord (Windows; the system bell elsewhere), unless sounds are muted in Settings (the soundboard forces it)."""
         if not force and not ui_state.get("sound", True):
-            return
-        tones = SOUND_TONES.get(kind)
-        if not tones:
             return
 
         def run():
             try:
                 import winsound
-                for f_, ms in tones:
-                    winsound.Beep(f_, ms)
+                winsound.PlaySound(chord_wav(), winsound.SND_MEMORY)
             except Exception:
                 try:
                     root.after(0, root.bell)
@@ -3967,8 +3981,8 @@ def run_gui():
             "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out,
             "field": field, "out": out}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
-        if sound:
-            play_sound(sound)
+        if banner and not field and not chained_in:  # every animation plays the same chord (the steps of a base run do not repeat it)
+            play_sound()
         if not session["celeb_on"]:
             session["celeb_on"] = True
             root.after(0, run_in, session.get("view"), celeb_tick)
