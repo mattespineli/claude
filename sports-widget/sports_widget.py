@@ -703,13 +703,22 @@ def game_detail_data(data, max_plays=14, max_stats=14):
     return out
 
 
+def _possession_id(sit):
+    """Id of the team with the ball. Some games (college) omit `possession`: the team that made the last play stands in."""
+    poss = sit.get("possession")
+    if poss in (None, ""):
+        lp = sit.get("lastPlay") or {}
+        poss = (lp.get("team") or {}).get("id") or lp.get("teamId") or ""
+    return str(poss)
+
+
 def situation_text(sport, comp):
     """Sport-specific live info: situation (down/possession, count/runners, power play) and team stats."""
     sit = comp.get("situation") or {}
     lines = []
     if sport == "football" and sit:
         parts = [sit.get("shortDownDistanceText") or sit.get("downDistanceText")]
-        poss = str(sit.get("possession", ""))
+        poss = _possession_id(sit)
         for c in comp.get("competitors", []):
             if poss and str(c.get("id", c.get("team", {}).get("id", ""))) == poss:
                 parts.append(f'{c.get("team", {}).get("abbreviation", "")} ball')
@@ -755,7 +764,7 @@ def _situation_graphic(sport, comp):
         for c in comp.get("competitors", []):
             t = c.get("team", {})
             teams[str(c.get("id", t.get("id", "")))] = t.get("abbreviation", "")
-        poss = str(sit.get("possession", ""))
+        poss = _possession_id(sit)
         off = teams.get(poss, "")
         defn = next((a for k, a in teams.items() if k != poss), "")
         x = None  # yards from the offense's own goal line (0-100), driving toward 100
@@ -765,7 +774,13 @@ def _situation_graphic(sport, comp):
             m = re.match(r"\s*([A-Za-z.]+)\s+(\d+)", str(sit.get("possessionText") or sit.get("downDistanceText") or ""))
             if m:
                 n = int(m.group(2))
-                x = n if off and m.group(1).upper() == off.upper() else 100 - n
+                side_ = m.group(1).upper()
+                if side_ == off.upper():
+                    x = n
+                elif side_ == defn.upper() or n > 50:  # the other team's side, or a name ESPN spells differently
+                    x = 100 - n
+                else:
+                    x = n
         if x is None or not off:
             return None
         dist = sit.get("distance")
