@@ -914,10 +914,6 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
         if len(vals) <= n:
             return vals
         return [vals[round(i * (len(vals) - 1) / (n - 1))] for i in range(n)]
-    try:
-        out["wp_series"] = thin([1 - float(p_["homeWinPercentage"]) for p_ in wp if p_.get("homeWinPercentage") is not None])  # the away (left) team's chance
-    except (TypeError, ValueError):
-        out["wp_series"] = []
 
     def periods(c):
         return [str(l.get("displayValue") if l.get("displayValue") not in (None, "") else int(float(l.get("value") or 0)))
@@ -930,13 +926,19 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
         drives = data.get("drives") or {}
         for d in (drives.get("previous") or []) + ([drives["current"]] if drives.get("current") else []):
             plays += d.get("plays") or []
-    flow = []  # (away, home) score after each play that has it
+    flow = []  # (away, home, period) after each play that has the score
     for p in plays:
         try:
-            flow.append((float(p["awayScore"]), float(p["homeScore"])))
+            flow.append((float(p["awayScore"]), float(p["homeScore"]), (p.get("period") or {}).get("number")))
         except (KeyError, TypeError, ValueError):
             pass
     out["flow"] = thin(flow) if len(flow) > 1 else []
+    per_of = {str(p.get("id")): (p.get("period") or {}).get("number") for p in plays}
+    try:  # (the away (left) team's chance, period) through the game
+        out["wp_series"] = thin([(1 - float(p_["homeWinPercentage"]), per_of.get(str(p_.get("playId"))))
+                                 for p_ in wp if p_.get("homeWinPercentage") is not None])
+    except (TypeError, ValueError):
+        out["wp_series"] = []
     lines = []
     for p in plays[-max_plays:][::-1]:
         text = p.get("text") or p.get("shortText")
@@ -3200,7 +3202,15 @@ def run_gui():
             yy += h + 1
         return yy - y
 
-    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note=""):
+    def period_marks(x, top, w, H, bgc, pers):
+        """Faint vertical lines where the period (quarter, inning...) changes along a chart."""
+        n = len(pers)
+        for i in range(1, n):
+            if pers[i] is not None and pers[i - 1] is not None and pers[i] != pers[i - 1]:
+                xm = x + w * (i - 0.5) / (n - 1)
+                canvas.create_line(xm, top, xm, top + H, fill=blend(bgc, DIM, 0.35))
+
+    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note="", pers=None):
         """A small line of how a game went: vals run from -1 (all right team) to 1 (all left team) through 0 (even). Each stretch
         takes the colour of the team ahead there. Returns the height used."""
         _, h = ctext(x, y + 4, label, FONTS["small"], DIM)
@@ -3208,6 +3218,8 @@ def run_gui():
             ctext(x + w, y + 4, note, FONTS["small"], DIM, anchor="ne")
         top, H = y + 4 + h + 2, 26
         mid = top + H / 2
+        if pers:
+            period_marks(x, top, w, H, bgc, pers)
         canvas.create_line(x, mid, x + w, mid, fill=blend(bgc, DIM, 0.45), dash=(2, 3))
         n = len(vals)
         pts = [(x + w * i / (n - 1), mid - v_ * H / 2) for i, v_ in enumerate(vals)]
@@ -3225,7 +3237,8 @@ def run_gui():
         if note:
             ctext(x + w, y + 4, note, FONTS["small"], DIM, anchor="ne")
         top, H = y + 4 + h + 2, 40
-        top_score = max(max(a_, h_) for a_, h_ in flow) or 1
+        top_score = max(max(f_[0], f_[1]) for f_ in flow) or 1
+        period_marks(x, top, w, H, bgc, [f_[2] for f_ in flow])
         canvas.create_line(x, top + H, x + w, top + H, fill=blend(bgc, DIM, 0.45))
         n = len(flow)
         for side, col in ((0, ca), (1, cb)):
@@ -3249,7 +3262,7 @@ def run_gui():
             y += draw_linescore(x, y, w, d, g) + 4
         ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
         if d.get("flow") and d.get("state") != "pre" and ui_state.get("sparklines", True):  # the score margin over the game, under the line score
-            big_ = max((a_ - h_ for a_, h_ in d["flow"]), key=abs)
+            big_ = max((f_[0] - f_[1] for f_ in d["flow"]), key=abs)
             lead_ = f"Largest lead {d['away_abbr'] if big_ > 0 else d['home_abbr']} {abs(big_):g}" if big_ else ""
             y += draw_flow(x, y, w, bgc, d["flow"], ca_, cb_, lead_)
         if d.get("state") == "post" and d.get("home_win_start") is not None:  # the final is 100-0: show where the game began
@@ -3264,7 +3277,8 @@ def run_gui():
                                  "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc, w)
         ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
         if len(d.get("wp_series") or []) > 1 and ui_state.get("sparklines", True):
-            y += draw_spark(x, y, w, bgc, [v_ * 2 - 1 for v_ in d["wp_series"]], ca_, cb_, "Win probability over the game")
+            y += draw_spark(x, y, w, bgc, [v_ * 2 - 1 for v_, _p in d["wp_series"]], ca_, cb_, "Win probability over the game",
+                            pers=[p_ for _v, p_ in d["wp_series"]])
         recent = d["plays"][:8] if d.get("state") != "post" else []  # a finished game has its box score instead
         for title, items in (("Scoring", d["scoring"]), ("Recent plays", recent)):
             if items:
