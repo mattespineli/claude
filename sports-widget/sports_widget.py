@@ -1990,12 +1990,20 @@ def run_gui():
         return {"t": "group", "key": key, "text": text, "color": color, "indent": indent, "persist": persist,
                 "default": default, "open": bool(store.get(key, default)), "children": children}
 
+    def sort_key(r):
+        """Live games first, then alphabetical (ignoring a leading '#12 ' rank or '(3) ' seed)."""
+        return (0 if r["state"] == "in" else 1, re.sub(r"^(#\d+|\(\d+\))\s+", "", r["name"]).lower())
+
     def cards(rows, extra_line=False):
+        rows = sorted(rows, key=sort_key)
         return [{"t": "card", "row": dict(r, line=r.get("extra", r.get("line", ""))) if extra_line else r} for r in rows]
 
     def league_nodes(rows, prefix, default_open=False, indent=14):
         out = []
-        for league in dict.fromkeys(r["league"] for r in rows):
+        order = {n: i for i, n in enumerate(["MLB", "NFL", "NBA", "WNBA", "NHL"])}
+        names = sorted(dict.fromkeys(r["league"] for r in rows),
+                       key=lambda L: (0 if any(r["league"] == L and r["state"] == "in" for r in rows) else 1, order.get(L, 9)))
+        for league in names:
             games = [r for r in rows if r["league"] == league]
             live_n = sum(r["state"] == "in" for r in games)
             is_leagues = prefix == "leagues"
