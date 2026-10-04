@@ -4689,10 +4689,11 @@ def run_gui():
                 for i_, col in lay["banner"]:
                     canvas.itemconfigure(i_, fill=blend(bgc, col, a))
                 if lay.get("shake"):  # the headline trembles as it lands, then settles
-                    hi_, bx_, by_, fs_ = lay["shake"]
+                    hi_, bx_, by_, fs_, ww_ = lay["shake"]
                     k_ = a * max(0.0, 1 - max(0.0, t - INFO_OUT) / 1.4)  # 1 as it lands, down to 0 as it settles
                     canvas.coords(hi_, bx_ + 3.0 * k_ * math.sin(t * 75), by_ + 3.0 * k_ * math.cos(t * 91))
-                    canvas.itemconfigure(hi_, font=("Segoe UI", max(fs_, round(fs_ * (1 + 0.3 * ease(k_)))), "bold"))  # it swells, then shrinks back
+                    sz_ = max(fs_, round(fs_ * (1 + 0.3 * ease(k_))))
+                    canvas.itemconfigure(hi_, font=("Segoe UI", sz_, "bold"), width=round(ww_ * sz_ / fs_))  # it swells, then shrinks back; the wrap grows with it so lines break the same
                 ia = info_alpha(ce, t)
                 for i_, opt, base in lay["fade"]:
                     if opt == "pill":
@@ -4991,7 +4992,7 @@ def run_gui():
         if lay:
             lay["banner"] += parts
             if shakes(ce):
-                lay["shake"] = (head_i, *canvas.coords(head_i)[:2], bfont[1])
+                lay["shake"] = (head_i, *canvas.coords(head_i)[:2], bfont[1], w)
 
     FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
 
