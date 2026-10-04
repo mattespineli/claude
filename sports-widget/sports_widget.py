@@ -5,13 +5,16 @@ JSON endpoints. Edit teams.json to choose teams.
 
 Drag to move, right-click for menu (refresh / always-on-top / quit).
 """
+import gzip
 import json
 import os
 import re
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 
 API = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams/{team}/schedule"
@@ -36,11 +39,52 @@ def load_config():
         return json.load(f)
 
 
+def get_json(url, timeout=10):
+    """GET an ESPN endpoint as JSON (gzip-compressed on the wire: ESPN payloads shrink ~10x)."""
+    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0", "Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        body = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+    return json.loads(body)
+
+
+_cache, _cache_lock, _key_locks = {}, threading.Lock(), {}
+
+
+def cached(key, max_age, fn):
+    """fn() cached under `key` for `max_age` seconds. Concurrent callers of the same key share one request."""
+    hit = _cache.get(key)
+    if hit and time.monotonic() - hit[0] < max_age:
+        return hit[1]
+    with _cache_lock:
+        lock = _key_locks.setdefault(key, threading.Lock())
+    with lock:
+        hit = _cache.get(key)
+        if hit and time.monotonic() - hit[0] < max_age:
+            return hit[1]
+        data = fn()
+        now = time.monotonic()
+        _cache[key] = (now, data)
+        if len(_cache) > 300:  # drop entries no caller would still accept (longest max_age is an hour)
+            with _cache_lock:
+                for k in [k for k, v in list(_cache.items()) if now - v[0] > 3600]:
+                    _cache.pop(k, None)
+                    _key_locks.pop(k, None)
+        return data
+
+
+def pmap(fn, items, workers=8):
+    """list(map(fn, items)) with the calls run concurrently (they are almost all waiting on HTTP)."""
+    items = list(items)
+    if len(items) < 2:
+        return [fn(i) for i in items]
+    with ThreadPoolExecutor(max_workers=min(workers, len(items))) as ex:
+        return list(ex.map(fn, items))
+
+
 def fetch_schedule(entry):
-    url = API.format(**entry)
-    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)
+    return get_json(API.format(**entry))
 
 
 def _score(competitor):
@@ -96,24 +140,14 @@ CONFERENCES = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/sc
 _conf_ids = {}
 RANKINGS = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/rankings"
 _seed_cache = {}
-_standings_raw = {}
 
 
 def standings_json(sport, league, max_age=600, group=None):
     """ESPN's standings response for a league (or one college conference via `group`), cached for `max_age` seconds."""
-    key = (sport, league, group)
-    now = datetime.now().timestamp()
-    hit = _standings_raw.get(key)
-    if hit and now - hit[0] < max_age:
-        return hit[1]
     url = STANDINGS.format(sport=sport, league=league)
     if group:
         url = url.split("?")[0] + f"?group={group}"
-    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.load(r)
-    _standings_raw[key] = (now, data)
-    return data
+    return cached(("standings", sport, league, group), max_age, lambda: get_json(url))
 
 
 def parse_standings(data):
@@ -144,16 +178,7 @@ def parse_standings(data):
 
 
 def rankings_json(sport, league, max_age=600):
-    key = ("rankings", sport, league)
-    now = datetime.now().timestamp()
-    hit = _standings_raw.get(key)
-    if hit and now - hit[0] < max_age:
-        return hit[1]
-    req = urllib.request.Request(RANKINGS.format(sport=sport, league=league), headers={"User-Agent": "sports-widget/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.load(r)
-    _standings_raw[key] = (now, data)
-    return data
+    return cached(("rankings", sport, league), max_age, lambda: get_json(RANKINGS.format(sport=sport, league=league)))
 
 
 def conference_group(cfg, label, pattern, fallback):
@@ -162,9 +187,7 @@ def conference_group(cfg, label, pattern, fallback):
     if key not in _conf_ids:
         ids = []
         try:
-            req = urllib.request.Request(CONFERENCES.format(**cfg), headers={"User-Agent": "sports-widget/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as r:
-                ids = json.load(r).get("conferences") or []
+            ids = get_json(CONFERENCES.format(**cfg)).get("conferences") or []
         except Exception:
             pass
         _conf_ids[key] = ids
@@ -414,21 +437,8 @@ def event_url(event, sport, league):
 SUMMARY = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/summary?event={id}"
 
 
-_sum_cache = {}
-
-
 def fetch_summary_cached(sport, league, event_id, max_age=20):
-    key = (sport, league, str(event_id))
-    now = datetime.now().timestamp()
-    hit = _sum_cache.get(key)
-    if hit and now - hit[0] < max_age:
-        return hit[1]
-    data = fetch_summary(sport, league, event_id)
-    _sum_cache[key] = (now, data)
-    if len(_sum_cache) > 60:  # keep the cache small
-        for k in sorted(_sum_cache, key=lambda k: _sum_cache[k][0])[:20]:
-            _sum_cache.pop(k, None)
-    return data
+    return cached(("summary", sport, league, str(event_id)), max_age, lambda: fetch_summary(sport, league, event_id))
 
 
 def win_bar(game):
@@ -446,10 +456,7 @@ def win_bar(game):
 
 
 def fetch_summary(sport, league, event_id):
-    url = SUMMARY.format(sport=sport, league=league, id=event_id)
-    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        return json.load(r)
+    return get_json(SUMMARY.format(sport=sport, league=league, id=event_id))
 
 
 def _play_label(p):
@@ -753,20 +760,6 @@ def fresh_event(entry, event):
     return None
 
 
-def live_info(entry, event):
-    """Fetch the scoreboard entry for a live game (schedule data lacks situation)."""
-    today = datetime.now().astimezone().date()
-    rng = f"{(today - timedelta(days=1)):%Y%m%d}-{today:%Y%m%d}"
-    try:
-        for e in fetch_scoreboard(entry["sport"], entry["league"], rng):
-            if str(e.get("id")) == str(event.get("id")) and e.get("competitions"):
-                comp = e["competitions"][0]
-                return situation_text(entry["sport"], comp), situation_graphic(entry["sport"], comp, entry["league"])
-    except Exception:
-        pass
-    return "", None
-
-
 def pick_event(events, days=7):
     """Live game, else the next game within `days`; None if neither."""
     state_of = _state_of
@@ -818,9 +811,6 @@ def _same_day(event, now_iso):
     return bool(d and n and d.astimezone().date() == n.astimezone().date())
 
 
-_sb_cache = {}
-
-
 def scoreboard_event(sport, league, event):
     """The same game from ESPN's scoreboard (whose competitors carry records), or None. Cached for 10 minutes."""
     d = _parse_date(event.get("date"))
@@ -828,16 +818,14 @@ def scoreboard_event(sport, league, event):
         return None
     center = (d - timedelta(hours=5)).date()  # ESPN's day follows US Eastern time
     rng = f"{center - timedelta(days=1):%Y%m%d}-{center + timedelta(days=1):%Y%m%d}"
-    key = (sport, league, rng)
-    now = datetime.now().timestamp()
-    hit = _sb_cache.get(key)
-    if not hit or now - hit[0] > 600:
+
+    def get():
         try:
-            hit = (now, fetch_scoreboard(sport, league, rng))
+            return fetch_scoreboard(sport, league, rng)
         except Exception:
-            hit = (now, [])
-        _sb_cache[key] = hit
-    return next((e for e in hit[1] if str(e.get("id")) == str(event.get("id")) and e.get("competitions")), None)
+            return []
+    events = cached(("sb_records", sport, league, rng), 600, get)
+    return next((e for e in events if str(e.get("id")) == str(event.get("id")) and e.get("competitions")), None)
 
 
 def with_records(event, sport, league):
@@ -894,16 +882,21 @@ def team_status(entry):
 
 
 def fetch_all(entries):
-    out = []
-    for e in entries:
+    def one(e):
         try:
-            r = team_status(e)
-            if r:
-                out.append(r)
+            return team_status(e)
         except Exception as ex:  # network / schema errors shouldn't kill the widget
-            out.append({"name": e.get("label", e["team"].upper()), "state": "err",
-                        "line": f'{e["sport"]}/{e["league"]}', "detail": str(ex)[:40]})
-    return out
+            return {"name": e.get("label", e["team"].upper()), "state": "err",
+                    "line": f'{e["sport"]}/{e["league"]}', "detail": str(ex)[:40]}
+    return [r for r in pmap(one, entries) if r]
+
+
+def _try_scoreboard(sport, league, date):
+    """fetch_scoreboard, returning the exception instead of raising (for pmap)."""
+    try:
+        return fetch_scoreboard(sport, league, date)
+    except Exception as ex:
+        return ex
 
 
 PLAYOFF_LEAGUES = [("NBA", "basketball", "nba"), ("NFL", "football", "nfl"), ("MLB", "baseball", "mlb"),
@@ -930,12 +923,11 @@ def playoff_games(debug=False, days=7):
     today = datetime.now().astimezone().date()
     rng = f"{(today - timedelta(days=days)):%Y%m%d}-{today:%Y%m%d}"
     best = {}  # matchup -> (priority, date, row); live > scheduled today > latest completed
-    for name, sport, league in PLAYOFF_LEAGUES:
-        try:
-            events = fetch_scoreboard(sport, league, rng)
-        except Exception as ex:
+    fetched = pmap(lambda l: _try_scoreboard(l[1], l[2], rng), PLAYOFF_LEAGUES)
+    for (name, sport, league), events in zip(PLAYOFF_LEAGUES, fetched):
+        if isinstance(events, Exception):
             if debug:
-                print(f"{name}: error {ex}")
+                print(f"{name}: error {events}")
             continue
         if debug:
             print(f"{name}: {len(events)} events, season types {sorted({str(e.get('season', {}).get('type')) for e in events})}")
@@ -960,10 +952,11 @@ def playoff_games(debug=False, days=7):
             note = (comp.get("notes") or [{}])[0].get("headline", "")
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
+            parts = score_parts(e)
             row = {"name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
-                   "league": name, "extra": extra, "score": score_parts(e)["score"], "status": score_parts(e)["status"],
+                   "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
                    "detail": detail, "_date": e.get("date", ""),
                    "info": situation_text(sport, comp) if state == "in" else "",
                    "graphic": situation_graphic(sport, comp, league) if state == "in" else None}
@@ -1014,10 +1007,9 @@ def league_games():
     """Today's regular games in MLB/NFL/NBA/WNBA (postseason games are shown under Playoffs)."""
     today = datetime.now().astimezone().date()
     out = []
-    for name, sport, league in LEAGUE_SECTION:
-        try:
-            events = fetch_scoreboard(sport, league, f"{today:%Y%m%d}")
-        except Exception:
+    fetched = pmap(lambda l: _try_scoreboard(l[1], l[2], f"{today:%Y%m%d}"), LEAGUE_SECTION)
+    for (name, sport, league), events in zip(LEAGUE_SECTION, fetched):
+        if isinstance(events, Exception):
             continue
         for e in events:
             if not e.get("competitions") or is_postseason(e):
@@ -1027,8 +1019,9 @@ def league_games():
                 continue
             state, matchup, detail = summ
             comp = e["competitions"][0]
+            parts = score_parts(e)
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail,
-                        "score": score_parts(e)["score"], "status": score_parts(e)["status"],
+                        "score": parts["score"], "status": parts["status"],
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
                         "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -1056,9 +1049,7 @@ def _get_scoreboard(sport, league, date, limit):
     url = SCOREBOARD.format(sport=sport, league=league, date=date)
     if limit:
         url += f"&limit={limit}"
-    req = urllib.request.Request(url, headers={"User-Agent": "sports-widget/1.0"})
-    with urllib.request.urlopen(req, timeout=10) as r:
-        data = json.load(r)
+    data = get_json(url)
     # Some responses only carry the season at league level; copy it onto events.
     lg_season = (data.get("leagues") or [{}])[0].get("season", {})
     events = data.get("events", [])
@@ -1070,7 +1061,14 @@ def _get_scoreboard(sport, league, date, limit):
 def fetch_scoreboard(sport, league, date):
     """Scoreboard events for a YYYYMMDD date or YYYYMMDD-YYYYMMDD range.
 
-    ESPN answers HTTP 400 to parameter combinations it dislikes, so fall back:
+    Cached for a few seconds, so the many callers in one refresh (live teams, tracked games,
+    Leagues, Playoffs) that want the same scoreboard share one request.
+    """
+    return cached(("scoreboard", sport, league, date), 5, lambda: _fetch_scoreboard(sport, league, date))
+
+
+def _fetch_scoreboard(sport, league, date):
+    """ESPN answers HTTP 400 to parameter combinations it dislikes, so fall back:
     range + limit -> range alone -> one request per day.
     """
     try:
@@ -1084,10 +1082,10 @@ def fetch_scoreboard(sport, league, date):
         if ex.code != 400 or "-" not in date:
             raise
     start, end = (datetime.strptime(d, "%Y%m%d") for d in date.split("-"))
+    days = [f"{start + timedelta(days=i):%Y%m%d}" for i in range((end - start).days + 1)]
     events, seen = [], set()
-    for i in range((end - start).days + 1):
-        day = f"{start + timedelta(days=i):%Y%m%d}"
-        for e in _get_scoreboard(sport, league, day, None):
+    for day_events in pmap(lambda day: _get_scoreboard(sport, league, day, None), days):
+        for e in day_events:
             if e.get("id") not in seen:
                 seen.add(e.get("id"))
                 events.append(e)
@@ -1176,13 +1174,12 @@ def pinned_status(pin):
 
 
 def fetch_pinned(pins):
-    out = []
-    for p in pins:
+    def one(p):
         try:
-            out.append(pinned_status(p))
+            return pinned_status(p)
         except Exception as ex:
-            out.append({"name": p["label"], "state": "err", "line": "Unavailable", "detail": str(ex)[:40]})
-    return out
+            return {"name": p["label"], "state": "err", "line": "Unavailable", "detail": str(ex)[:40]}
+    return pmap(one, pins)
 
 
 TEAMS_API = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/teams?limit=1000"
@@ -1206,12 +1203,16 @@ def find_teams(query, leagues=COLLEGE):
     """Search each league's team list for `query`; return teams.json-style entries."""
     q = query.lower()
     found = []
-    for sport, league in leagues:
+
+    def get(lg):
         try:
-            req = urllib.request.Request(TEAMS_API.format(sport=sport, league=league),
-                                         headers={"User-Agent": "sports-widget/1.0"})
-            with urllib.request.urlopen(req, timeout=15) as r:
-                data = json.load(r)
+            return get_json(TEAMS_API.format(sport=lg[0], league=lg[1]), timeout=15)
+        except Exception as ex:
+            return ex
+    for (sport, league), data in zip(leagues, pmap(get, leagues)):
+        try:
+            if isinstance(data, Exception):
+                raise data
             teams = [t["team"] for lg in data["sports"][0]["leagues"] for t in lg["teams"]]
         except Exception as ex:
             print(f"  {sport}/{league}: skipped ({str(ex)[:40]})")
@@ -2464,14 +2465,17 @@ def run_gui():
 
     def load_standings():
         """Fetch all five leagues' standings in the background (cached for 10 minutes)."""
+        def one(lg):
+            abbr, sport, league = lg
+            try:
+                session["standings"][abbr] = parse_standings_tree(standings_json(sport, league), abbr)
+            except Exception:
+                session["standings"].setdefault(abbr, "error")
+                if session["standings"][abbr] is None:
+                    session["standings"][abbr] = "error"
+
         def work():
-            for abbr, sport, league in STANDINGS_LEAGUES:
-                try:
-                    session["standings"][abbr] = parse_standings_tree(standings_json(sport, league), abbr)
-                except Exception:
-                    session["standings"].setdefault(abbr, "error")
-                    if session["standings"][abbr] is None:
-                        session["standings"][abbr] = "error"
+            pmap(one, STANDINGS_LEAGUES)
             root.after(0, standings_loaded)
         threading.Thread(target=work, daemon=True).start()
 
@@ -2527,23 +2531,37 @@ def run_gui():
         if ui_state.get("tab", "games") == "standings":
             load_standings()
             load_open_college()
+        if busy["on"]:
+            busy["again"] = True  # a refresh is still running: run one more when it finishes
+            return
+        busy["on"] = True
+
         def work():
-            res, pres, po, lg = fetch_all(entries), fetch_pinned(list(pins)), playoff_games(), league_games()
-            shown = {r["_key"] for r in res + pres if r.get("_key")}
-            po = [r for r in po if r.get("_key") not in shown]  # already listed above
-            lg = [r for r in lg if r.get("_key") not in shown]
-            for k in list(session["expanded"]):
-                if k in session["games"]:
-                    fetch_details(session["games"][k])
-            live_rows = [r for grp in (res, pres, po, lg) for r in grp if r.get("state") == "in" and r.get("game")]
-            if live_rows:  # win probability for the collapsed cards (one cached request per live game)
-                from concurrent.futures import ThreadPoolExecutor
-                with ThreadPoolExecutor(max_workers=6) as ex:
-                    for r, wbar in zip(live_rows, ex.map(lambda r: win_bar(r["game"]), live_rows)):
-                        if wbar:
-                            r["win"] = wbar
-            root.after(0, lambda: render(res, pres, po, lg))
+            try:
+                pin_list = list(pins)
+                expanded = [session["games"][k] for k in list(session["expanded"]) if k in session["games"]]
+                res, pres, po, lg, _ = pmap(lambda f: f(), [lambda: fetch_all(entries), lambda: fetch_pinned(pin_list),
+                                                            playoff_games, league_games,
+                                                            lambda: pmap(fetch_details, expanded)], workers=5)
+                shown = {r["_key"] for r in res + pres if r.get("_key")}
+                po = [r for r in po if r.get("_key") not in shown]  # already listed above
+                lg = [r for r in lg if r.get("_key") not in shown]
+                live_rows = [r for grp in (res, pres, po, lg) for r in grp if r.get("state") == "in" and r.get("game")]
+                # win probability for the collapsed cards (one cached request per live game)
+                for r, wbar in zip(live_rows, pmap(lambda r: win_bar(r["game"]), live_rows, workers=6)):
+                    if wbar:
+                        r["win"] = wbar
+                root.after(0, lambda: render(res, pres, po, lg))
+            finally:
+                root.after(0, refresh_done)
         threading.Thread(target=work, daemon=True).start()
+
+    busy = {"on": False, "again": False}
+
+    def refresh_done():
+        busy["on"] = False
+        if busy.pop("again", False):
+            refresh()
 
     timer = {"id": None}
 
