@@ -340,7 +340,8 @@ def parse_standings(data):
                         stats[st.get("name")] = str(v)
                 rows.append({"id": str(t.get("id", "")), "abbr": t.get("abbreviation", ""),
                              "name": t.get("displayName") or t.get("name", "?"),
-                             "short": t.get("shortDisplayName") or t.get("displayName", "?"), "stats": stats})
+                             "short": t.get("shortDisplayName") or t.get("displayName", "?"), "stats": stats,
+                             "note": str((e.get("note") or {}).get("description") or "")})
             groups.append({"name": node.get("name") or node.get("abbreviation") or "", "rows": rows})
         for ch in node.get("children") or []:
             walk(ch)
@@ -457,6 +458,23 @@ def standing_cells(league, stats):
 
 
 STANDINGS_HEADERS = {"NHL": ["PTS", "GP"], "NFL": ["PCT"]}
+# What ESPN's "clincher" mark on a standings row means, per league (ESPN's own legends)
+CLINCH_MARKS = {
+    "MLB": {"*": "Clinched best record", "w": "Clinched bye", "z": "Clinched division", "y": "Clinched wild card",
+            "x": "Clinched playoff berth", "e": "Eliminated"},
+    "NFL": {"*": "Clinched bye", "z": "Clinched division", "y": "Clinched wild card", "x": "Clinched playoff berth", "e": "Eliminated"},
+    "NBA": {"z": "Clinched best record in conference", "y": "Clinched division", "x": "Clinched playoff berth",
+            "pi": "Clinched play-in", "e": "Eliminated"},
+    "NHL": {"p": "Clinched Presidents' Trophy", "z": "Clinched conference", "y": "Clinched division",
+            "x": "Clinched playoff berth", "e": "Eliminated"},
+    "WNBA": {"z": "Clinched best record", "x": "Clinched playoff berth", "e": "Eliminated"},
+}
+
+
+def clinch_mark(row):
+    """ESPN's clinch mark for a standings row ("x", "z", "e", ...), or ""."""
+    m = str(row["stats"].get("clincher") or "").strip().lower()
+    return "" if m in ("", "-", "0", "none") else m
 
 
 def seed_map(sport, league):
@@ -4090,6 +4108,9 @@ def run_gui():
             elif t == "text":
                 _, h = ctext(x + 2, y + 4, n["text"], FONTS["line"], DIM)
                 y += 4 + h + 4
+            elif t == "legend":  # clinch marks under a league's standings
+                _, h = ctext(x + 6, y + 6, n["text"], FONTS["small"], DIM, width=w - 12)
+                y += 6 + h + 6
             elif t == "tabs":  # Overall / Conference / Division pills for one league's standings
                 px = x + 6
                 for key, label in n["options"]:
@@ -4119,13 +4140,18 @@ def run_gui():
                     limit = min(limit, canvas.bbox(vid)[0])
                 limit -= 8
                 bold = n["fav"]
-                nid, _ = ctext(x + 32, y + 2, n["name"], FONTS["detb"] if bold else FONTS["line"], FG)
+                mark = n.get("mark", "")
+                if mark:  # the clinch mark sits right after the name
+                    limit -= text_width(FONTS["smallb"], mark) + 6
+                nid, _ = ctext(x + 32, y + 2, n["name"], FONTS["detb"] if bold else FONTS["line"], DIM if mark == "e" and not bold else FG)
                 if canvas.bbox(nid)[2] > limit:  # always the full "City Name": shrink the font, then trim, to fit
                     canvas.itemconfigure(nid, font=FONTS["smallb"] if bold else FONTS["small"])
                     text = n["name"]
                     while canvas.bbox(nid)[2] > limit and len(text) > 4:
                         text = text[:-1]
                         canvas.itemconfigure(nid, text=text.rstrip() + "\u2026")
+                if mark:
+                    ctext(canvas.bbox(nid)[2] + 5, y + 4, mark, FONTS["smallb"], DIM if mark == "e" else "#34d399")
                 y += 18
             elif t == "card":
                 y = draw_card(n["row"], x, y, w, final)
@@ -4181,12 +4207,21 @@ def run_gui():
                     children.append({"t": "tabs", "league": abbr, "options": options, "sel": sel})
                 groups = [{"name": "Overall", "rows": data["overall"]}] if sel == "overall" else data[sel]
                 headers = ["W-L"] + STANDINGS_HEADERS.get(abbr, ["PCT", "GB"])
+                legend = {}
                 for g in groups:
                     children.append({"t": "sub", "text": g["name"], "headers": headers})
                     for rank, r in enumerate(g["rows"], start=1):
                         rec, cols = standing_cells(abbr, r["stats"])
                         fav = (league, r["abbr"].lower()) in favs or (league, r["id"]) in favs
-                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav, "odd": rank % 2 == 1})
+                        mark = clinch_mark(r)
+                        if mark:
+                            legend[mark] = CLINCH_MARKS.get(abbr, {}).get(mark) or r["note"] or "Clinched"
+                        children.append({"t": "srow", "rank": rank, "name": r["name"], "vals": [rec] + cols, "fav": fav, "odd": rank % 2 == 1,
+                                         "mark": mark})
+                if legend:  # what the marks mean, in ESPN's order
+                    order = list(CLINCH_MARKS.get(abbr, {}))
+                    keys = sorted(legend, key=lambda m: order.index(m) if m in order else len(order))
+                    children.append({"t": "legend", "text": "   ".join(f"{m} \u2013 {legend[m]}".replace(" ", "\u00a0") for m in keys)})
             nodes.append(group_node(f"st:{abbr}", abbr, FG, 0, True, i == 0, children))
         for key, cfg in COLLEGE_SECTIONS.items():
             store = session["college"].get(key, {})
