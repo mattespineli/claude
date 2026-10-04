@@ -1353,10 +1353,26 @@ def situation_graphic(sport, comp, league=""):
                 except (TypeError, ValueError):
                     return None
         return None
-    for words, total in ((("timeout",), 3), (("challenge",), 2)):
+    for words, total in ((("timeout",), {"nba": 7, "wnba": 5}.get(league, 4) if sport == "basketball" else 3), (("challenge",), 2)):
         h_, a_ = side("home", words), side("away", words)
         if h_ is not None or a_ is not None:
             out.append({"kind": "timeouts", "home": h_, "away": a_, "total": total})
+    if sport == "basketball":  # who has the ball, and which team is shooting bonus free throws
+        ha_of = {str(c.get("id", (c.get("team") or {}).get("id", ""))): c.get("homeAway") for c in comp.get("competitors", [])}
+        poss = ha_of.get(str(sit.get("possession") or ""))
+        bonus = {}
+        for ha in ("home", "away"):
+            v = next((val for key, val in sit.items() if key.lower().startswith(ha) and "bonus" in key.lower()), None)
+            if v is None:
+                c_ = next((c for c in comp.get("competitors", []) if c.get("homeAway") == ha), {})
+                v = _stat(c_, ("bonus", "inBonus", "teamBonus"))
+            bonus[ha] = str(v).strip().lower() in ("true", "1", "yes", "bonus", "double bonus", "double")
+        if poss or any(bonus.values()):
+            to_ = next((g_ for g_ in out if g_["kind"] == "timeouts"), None)
+            if to_ is None:
+                to_ = {"kind": "timeouts", "home": None, "away": None, "total": 3}
+                out.append(to_)
+            to_["poss"], to_["bonus"] = poss, bonus
     return out or None
 
 
@@ -3619,7 +3635,8 @@ def run_gui():
             fade_items(items_since(n0), bgc, info_alpha(ce, ct))  # never deleted: the frames fade it back in
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
-        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
+        bon = [bool(((tos or {}).get("bonus") or {}).get(t["ha"])) and r["state"] == "in" for t in teams]
+        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (15 if any(bon) else 0) + (13 if any(t.get("record") for t in teams) else 0)
         if mh < nat - 2:  # a short middle is centred against the teams
             for i_ in items_since(n0):
                 canvas.move(i_, 0, (nat - mh) / 2)
@@ -3642,7 +3659,13 @@ def run_gui():
             if sc:
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
-            _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            if tos and tos.get("poss") == t["ha"] and r["state"] == "in":  # the ball: a small arrow pointing at the basket it attacks
+                bx_ = canvas.bbox(ia_)
+                d_ = 1 if i == 0 else -1
+                ax_ = (bx_[2] + 4) if i == 0 else (bx_[0] - 4)
+                ay_ = yy + h / 2
+                canvas.create_polygon(ax_, ay_ - 4, ax_ + 6 * d_, ay_, ax_, ay_ + 4, fill=COLORS["in"], outline="", tags=tags)
             yy += h
             if t.get("record"):  # the team's record under its abbreviation
                 _, h = ctext(cx, yy, t["record"], FONTS["small"], DIM, anchor="n", tags=tags)
@@ -3654,6 +3677,11 @@ def run_gui():
                     canvas.create_oval(x0 + 10 * k - 3, yy + gap + 4, x0 + 10 * k + 3, yy + gap + 10, fill=FG if k < counts[i] else bgc,
                                        outline=FG if k < counts[i] else DIM, tags=tags)
                 yy += 12 + gap
+            if bon[i]:  # in the bonus: this team shoots free throws on the next foul
+                bw_ = text_width(FONTS["sec"], "BONUS") + 10
+                crisp_rr(cx - bw_ / 2, yy + 1, cx + bw_ / 2, yy + 14, 3, "#fb923c", tags)
+                canvas.create_text(round(cx), round(yy + 7.5), text="BONUS", font=FONTS["sec"], fill="#1e1e24", tags=tags)
+                yy += 15
             colb = max(colb, yy)
         yy = max(colb, my) + 2
         sr = r.get("series") if r["state"] == "post" else None
@@ -6236,7 +6264,8 @@ def demo_data(o=None):
     na, nb = sc("basketball", (78, 74))
     nclk = o.get("clock", "5:12")
     nba = {"status": {"period": o.get("q", 3), "clock": int(nclk.split(":")[0]) * 60.0 + int(nclk.split(":")[1]), "displayClock": nclk},
-           "situation": {"lastPlay": {"text": "S. Curry makes 26-foot three point jumper (A. Wiggins assists)"}},
+           "situation": {"lastPlay": {"text": "S. Curry makes 26-foot three point jumper (A. Wiggins assists)"},
+                         "awayTimeouts": 4, "homeTimeouts": 2, "possession": "2", "awayBonus": False, "homeBonus": True},
            "competitors": [team("9", "away", "GS", na, [st("fouls", 9), st("rebounds", 31)]),
                            team("2", "home", "BOS", nb, [st("fouls", 12), st("rebounds", 28)])]}
     ha_, hb_ = sc("hockey", (2, 1))
