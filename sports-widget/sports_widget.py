@@ -3986,7 +3986,8 @@ def demo_data():
            "situation": {"lastPlay": {"text": "S. Curry makes 26-foot three point jumper (A. Wiggins assists)"}},
            "competitors": [team("9", "away", "GS", 78, [st("fouls", 9), st("rebounds", 31)]),
                            team("2", "home", "BOS", 74, [st("fouls", 12), st("rebounds", 28)])]}
-    nhl = {"status": {"period": 2, "clock": 407.0, "displayClock": "6:47"}, "situation": {"powerPlay": True, "powerPlayTeam": "NJ"},
+    nhl = {"status": {"period": 2, "clock": 407.0, "displayClock": "6:47"}, "situation": {"powerPlay": True, "powerPlayTeam": "NJ",
+                                                                  "lastPlay": {"text": "Shot on goal by J. Hughes, saved by J. Swayman"}},
            "competitors": [team("1", "away", "NJ", 2, [st("shotsOnGoal", 24)]), team("2", "home", "BOS", 1, [st("shotsOnGoal", 17)])]}
     soc = {"status": {"displayClock": "67'"},
            "details": [{"scoringPlay": True, "clock": {"displayValue": "23'"}, "team": {"id": "1"}},
