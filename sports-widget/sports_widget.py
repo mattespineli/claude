@@ -5,6 +5,7 @@ JSON endpoints. Edit teams.json to choose teams.
 
 Drag to move, right-click for menu (refresh / always-on-top / quit).
 """
+import functools
 import gzip
 import json
 import math
@@ -893,6 +894,7 @@ def _minute(text):
     return int(m.group(1)) if m else None
 
 
+@functools.lru_cache(maxsize=1024)
 def _rgb(h):
     h = h.lstrip("#")
     return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
@@ -1321,6 +1323,7 @@ def team_status(entry):
         comp_ = event["competitions"][0]
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
+    streak = streak_text(events, entry["team"])
     ser = series_info(event["competitions"][0]) if state == "post" else None
     if state == "post" and not ser:  # schedule data often lacks the series; the scoreboard's copy of the game has it
         sb_ev = scoreboard_event(entry["sport"], entry["league"], event)
@@ -1331,7 +1334,7 @@ def team_status(entry):
             ser = {"head": (ser or {}).get("head", ""), "text": text}
     return {"tv": tv_channels(event["competitions"][0]) if state in ("in", "pre") else "", "series": ser,
             "teams": [dict(t, record=(t["record"] or (own if i == 0 and own else "")) + (
-                          f" \u00b7 {streak_text(events, entry['team'])}" if i == 0 and streak_text(events, entry["team"]) else ""))
+                          f" \u00b7 {streak}" if i == 0 and streak else ""))
                       for i, t in enumerate(comp_teams(event["competitions"][0], me or None))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
@@ -1972,6 +1975,20 @@ def run_gui():
     PANEL, HOVER = "#2a2a33", "#3a3a46"
     TRACK, LIVE_RED = "#3a3a44", "#ef4444"  # empty-bar track, LIVE badge
     UI_FONT = ("Segoe UI", 9)
+    _font_objs = {}
+
+    def font_obj(spec):
+        """One tkinter Font per font spec, reused (creating a Font is several Tcl calls and a new named font)."""
+        f = _font_objs.get(spec)
+        if f is None:
+            import tkinter.font as tkfont
+            f = _font_objs[spec] = tkfont.Font(font=spec)
+        return f
+
+    @functools.lru_cache(maxsize=4096)
+    def text_width(spec, text):
+        """Pixel width of `text` in font `spec` (cached: the same labels are measured on every redraw)."""
+        return font_obj(spec).measure(text)
 
     def style_menu(m):
         m.config(bg=PANEL, fg=FG, activebackground=HOVER, activeforeground=FG, disabledforeground=DIM,
@@ -2070,8 +2087,7 @@ def run_gui():
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
     def styled_button(parent, text, command):
-        import tkinter.font as tkfont
-        w = tkfont.Font(font=UI_FONT).measure(text) + 28
+        w = text_width(UI_FONT, text) + 28
         c = tk.Canvas(parent, width=w, height=28, bg=parent.cget("bg"), highlightthickness=0, cursor="hand2")
         shape = c.create_polygon(rr_points(1, 1, w - 1, 27, 8), smooth=True, fill=PANEL, outline=PANEL)
         c.create_text(w / 2, 14, text=text, fill=FG, font=UI_FONT)
@@ -2215,8 +2231,7 @@ def run_gui():
     tab_pills = {}
 
     def make_tab(label, key):
-        import tkinter.font as tkfont
-        w_ = tkfont.Font(font=("Segoe UI", 9, "bold")).measure(label) + 26
+        w_ = text_width(("Segoe UI", 9, "bold"), label) + 26
         c = tk.Canvas(tabbar, width=w_, height=26, bg=BG, highlightthickness=0, cursor="hand2")
         shape = c.create_polygon(rr_points(1, 1, w_ - 1, 25, 8), smooth=True, fill=BG, outline=BG)
         txt = c.create_text(w_ / 2, 13, text=label, font=("Segoe UI", 9, "bold"), fill=DIM)
@@ -2907,10 +2922,8 @@ def run_gui():
 
     def tv_badges(x, y, text, tags=(), center=False, limit=3):
         """Channel names as small badges in each network's colors (ESPN gives names, not logos); returns the width used."""
-        import tkinter.font as tkfont
-        font = tkfont.Font(font=FONTS["small"])
         names = text.split(" \u00b7 ")[:limit]
-        widths = [font.measure(n) + 10 for n in names]
+        widths = [text_width(FONTS["small"], n) + 10 for n in names]
         total = sum(widths) + 4 * (len(names) - 1)
         px = x - total / 2 if center else x
         for n, pw in zip(names, widths):
@@ -2940,12 +2953,10 @@ def run_gui():
         if not roll:
             i, _h = ctext(xr, y, text, FONTS["score"], color, anchor="ne")
             return canvas.bbox(i)[0]
-        import tkinter.font as tkfont
-        f = tkfont.Font(font=FONTS["score"])
-        hgt = f.metrics("linespace")
+        hgt = font_obj(FONTS["score"]).metrics("linespace")
         x = xr
         for seq in reversed(roll["seqs"]):  # one wheel per digit, right to left
-            cw = max(f.measure(ch) for ch in seq)
+            cw = max(text_width(FONTS["score"], ch) for ch in seq)
             cx, cy = x - cw / 2, y + hgt / 2
             anchor = canvas.create_rectangle(cx, cy, cx, cy, outline="", state="hidden")  # moves with the card
             items = [canvas.create_text(cx, cy, text="", font=FONTS["score"], fill=color) for _ in range(2)]
@@ -2958,7 +2969,9 @@ def run_gui():
     def roll_frame():
         """Place every rolling digit for the current time: the old digit rolls up and away, the next rolls in."""
         now = _time.perf_counter()
-        px0 = FONTS["score"][1] * root.winfo_fpixels("1p")
+        if "px_per_pt" not in session:
+            session["px_per_pt"] = root.winfo_fpixels("1p")
+        px0 = FONTS["score"][1] * session["px_per_pt"]
         for c in session["roll_cells"]:
             p = min((now - c["roll"]["t0"]) / c["roll"]["dur"], 1.0)
             v = (1 - (1 - p) ** 3) * (len(c["seq"]) - 1)  # ease out: fast start, settles onto the new digit
@@ -3034,8 +3047,7 @@ def run_gui():
     def score_width(text):
         if ui_state.get("digital"):
             return len(text) * (DIG_W + DIG_GAP) - DIG_GAP
-        import tkinter.font as tkfont
-        return tkfont.Font(font=FONTS["score"]).measure(text)
+        return text_width(FONTS["score"], text)
 
     def draw_scoreboard(r, cx0, cw_, y, bgc, tags, gl, tos, info, lp=None, ce=None, ct=0):
         """Scoreboard layout: each team's logo with its score underneath at either side, the status and game details
@@ -3058,10 +3070,8 @@ def run_gui():
         n0 = len(canvas.find_all())  # everything drawn from here on belongs to the middle section
         live = r["state"] == "in"
         if live:  # the LIVE flag with the channel(s) beside it, centred together
-            import tkinter.font as tkfont
-            f_ = tkfont.Font(font=FONTS["small"])
             names_ = r["tv"].split(" \u00b7 ")[:2] if r.get("tv") else []
-            tv_w = sum(f_.measure(n) + 10 for n in names_) + 4 * max(len(names_) - 1, 0)
+            tv_w = sum(text_width(FONTS["small"], n) + 10 for n in names_) + 4 * max(len(names_) - 1, 0)
             x0 = mx - (34 + (8 + tv_w if tv_w else 0)) / 2
             canvas.create_polygon(rr_points(x0, my, x0 + 34, my + 14, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
             canvas.create_text(x0 + 17, my + 7, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
@@ -3555,6 +3565,8 @@ def run_gui():
         else:
             session["celeb_on"] = False
 
+    UNIT_CIRCLE = [(math.cos(a_ * math.pi / 45), math.sin(a_ * math.pi / 45)) for a_ in range(90)]
+
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
         """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
         if ce["mode"] != "pulse" and not ce["grand"]:
@@ -3569,7 +3581,7 @@ def run_gui():
                 continue
             r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pp) ** 2)
             intensity = 0.9 * (1 - pp) ** 1.5
-            pts = [(cx + r_ * math.cos(a_ * math.pi / 45), cy + r_ * math.sin(a_ * math.pi / 45)) for a_ in range(90)]
+            pts = [(cx + r_ * ux, cy + r_ * uy) for ux, uy in UNIT_CIRCLE]
             inside = [x0 <= px_ <= x1 and y0 <= py_ <= y1 for px_, py_ in pts]
             if not any(inside):
                 continue
@@ -3617,7 +3629,6 @@ def run_gui():
         """The scoring banner centred in the box (y0..y1): team, what happened, the play. Fades in and out."""
         a = banner_alpha(ce, t)
         lay = session["cur_layer"]
-        n0_ = len(canvas.find_all())
         y = y0
         parts = []  # (text item, its full-strength color): the frames recolor these as the banner fades
         if ce["abbr"]:
@@ -3635,8 +3646,9 @@ def run_gui():
             parts.append((i_, col))
             y += 2 + h
         shift = (y1 - y0 - (y - y0)) / 2
-        for i_ in canvas.find_all()[n0_:]:
-            canvas.move(i_, 0, max(shift, 0))
+        if shift > 0:
+            for i_, _col in parts:
+                canvas.move(i_, 0, shift)
         if lay:
             lay["banner"] += parts
 
@@ -3824,11 +3836,9 @@ def run_gui():
                 _, h = ctext(x + 2, y + 4, n["text"], FONTS["line"], DIM)
                 y += 4 + h + 4
             elif t == "tabs":  # Overall / Conference / Division pills for one league's standings
-                import tkinter.font as tkfont
-                font = tkfont.Font(font=FONTS["smallb"])
                 px = x + 6
                 for key, label in n["options"]:
-                    pw = font.measure(label) + 20
+                    pw = text_width(FONTS["smallb"], label) + 20
                     if px + pw > x + w - 4 and px > x + 6:  # wrap onto the next row
                         px, y = x + 6, y + 26
                     on = key == n["sel"]
