@@ -3622,7 +3622,7 @@ def run_gui():
             if "onside" in low:
                 k_, rec = onside_teams(text)
                 if k_ and rec and k_ == rec:
-                    return "ONSIDE KICK RECOVERED", "#fbbf24", 4.5
+                    return "ONSIDE KICK RECOVERED!", "#fbbf24", 4.5
                 return "ONSIDE KICK", "#9aa0a6", 2.5
             if "intercept" in low:
                 return "INTERCEPTION", "#f87171", 3.5
@@ -3673,7 +3673,7 @@ def run_gui():
         rec = re.search(r"recovered by ([A-Z]{2,4})-", text, re.I)
         return (kick.group(1).upper() if kick else ""), (rec.group(1).upper() if rec else "")
 
-    KICK_PLAYS = ("BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT!", "ONSIDE KICK RECOVERED")
+    KICK_PLAYS = ("BLOCKED FG!", "BLOCKED PUNT!", "BLOCKED PAT!", "ONSIDE KICK RECOVERED!")
 
     def kick_side(r, head, text, kicker):
         """Index of the team that made a special-teams play: the kicking team for an onside recovery, the other team for
@@ -3682,7 +3682,7 @@ def run_gui():
         if len(tm) != 2:
             return None
         idx = lambda ab: next((i for i, t in enumerate(tm) if ab and t.get("abbr", "").upper() == str(ab).upper()), None)
-        if head == "ONSIDE KICK RECOVERED":
+        if head == "ONSIDE KICK RECOVERED!":
             k_, _rec = onside_teams(text)
             return idx(k_) if idx(k_) is not None else idx(kicker)
         rec = re.search(r"recovered by ([A-Z]{2,4})-", text, re.I)  # a block recovered by the blocking team names it
@@ -3997,7 +3997,7 @@ def run_gui():
              ("Kickoff", "KICKOFF", "play", "#9aa0a6"), ("4th down", "4TH DOWN", "fourth", None),
              ("Turnover on downs", "TURNOVER ON DOWNS!", "turnover", None),
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG!", "turnover", "#a78bfa"),
-             ("Blocked punt", "BLOCKED PUNT!", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
+             ("Blocked punt", "BLOCKED PUNT!", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED!", "turnover", "#fbbf24"),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
              ("Run scores", "RUN SCORES", "run", None),
              ("Triple play", "TRIPLE PLAY!", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
