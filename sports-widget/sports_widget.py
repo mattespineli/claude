@@ -4439,8 +4439,14 @@ def run_gui():
                 canvas.create_oval(x - 2, y - 2, x + 2, y + 2, fill=blend(bg, fill, a * (1 - k / 6) * 0.7), outline="", tags=lay["tag"])
             x, y = at(path, p)
             canvas.create_oval(x - 3.5, y - 3.5, x + 3.5, y + 3.5, fill=blend(bg, "#ffffff", a), outline=blend(bg, fill, a), tags=lay["tag"])
-        if total >= 2 and scored:  # runs count up in the middle
-            canvas.create_text(cx, cy, text=str(scored), font=("Segoe UI", 8 + 2 * min(scored, 4), "bold"), fill=blend(bg, fill, a), tags=lay["tag"])  # 1.25x, 1.5x, 1.75x, then 2x of the 8 pt base
+        if total >= 2 and scored:  # runs count up in the middle: bigger with every run, eased, and shaking when it changes
+            sizes = (5, 10, 14, 19, 25)  # pt for 0 (where it grows in from), 1, 2, 3 and 4+ runs
+            now_s, was_s = sizes[min(scored, 4)], sizes[min(scored, 4) - 1]
+            age = min(arrivals)  # seconds since the latest run scored
+            size = was_s + (now_s - was_s) * ease(min(1.0, age / 0.35))
+            shake = max(0.0, 1 - age / 0.45)
+            canvas.create_text(cx + 4 * shake * math.sin(age * 70), cy + 2 * shake * math.cos(age * 85), text=str(scored),
+                               font=("Segoe UI", max(6, int(round(size))), "bold"), fill=blend(bg, fill, a), tags=lay["tag"])
 
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
         """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
