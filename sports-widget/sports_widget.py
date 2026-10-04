@@ -697,9 +697,12 @@ def game_detail_data(data, max_plays=14, max_stats=14):
         a = by_id.get(str((away.get("team") or {}).get("id")), teams[0])
         h = by_id.get(str((home.get("team") or {}).get("id")), teams[1])
         ha, hh = _flat_stats(a), _flat_stats(h)
-        out["stats"] = [(label, val, hh.get(key, ("", ""))[1]) for key, (label, val) in ha.items()][:max_stats]
+        both = [(key, label, val, hh.get(key, ("", ""))[1]) for key, (label, val) in ha.items()]
+        out["stats"] = [(label, a_, h_) for _k, label, a_, h_ in both][:max_stats]
+        out["all_stats"] = both  # untruncated, for picking a few key stats per sport
     else:
         out["stats"] = []
+        out["all_stats"] = []
     return out
 
 
@@ -710,6 +713,38 @@ def _possession_id(sit):
         lp = sit.get("lastPlay") or {}
         poss = (lp.get("team") or {}).get("id") or lp.get("teamId") or ""
     return str(poss)
+
+
+# Key team stats for a finished game's Scoreboard card: (label, candidate ESPN stat names, is a percentage).
+STAT_PICKS = {
+    "baseball": [("Hits", ("bathits", "bath"), False), ("Home runs", ("bathomeruns", "bathr"), False),
+                 ("Strikeouts", ("batstrikeouts", "batk", "batso"), False), ("Errors", ("flderrors", "flde"), False)],
+    "football": [("Total yds", ("totalYards",), False), ("Pass yds", ("netPassingYards", "passingYards"), False),
+                 ("Rush yds", ("rushingYards",), False), ("Turnovers", ("turnovers",), False), ("1st downs", ("firstDowns",), False)],
+    "basketball": [("FG%", ("fieldGoalPct",), True), ("3P%", ("threePointFieldGoalPct",), True),
+                   ("Rebounds", ("totalRebounds", "rebounds"), False), ("Assists", ("assists",), False),
+                   ("Turnovers", ("turnovers", "totalTurnovers"), False)],
+    "hockey": [("Shots", ("shotsTotal", "shots", "shotsOnGoal"), False), ("Hits", ("hits",), False),
+               ("Penalty min", ("penaltyMinutes", "penaltyMins"), False), ("Power play", ("powerPlay",), False)],
+    "soccer": [("Possession", ("possessionPct", "possession"), True), ("Shots", ("totalShots", "shots"), False),
+               ("On target", ("shotsOnTarget",), False), ("Corners", ("wonCorners", "corners"), False)],
+}
+
+
+def pick_stats(sport, full, n=4):
+    """[(label, away, home)] for the sport's key stats found in `full` ([(key, label, away, home)]);
+    the first few stats ESPN lists when too few of them are there."""
+    norm = lambda x: re.sub(r"[^a-z0-9]", "", str(x).lower())
+    by = {}
+    for key, label, a_, h_ in full:
+        by.setdefault(norm(key), (a_, h_))
+        by.setdefault(norm(label), (a_, h_))
+    out = []
+    for label, names, pct in STAT_PICKS.get(sport, []):
+        v = next((by[norm(nm)] for nm in names if norm(nm) in by), None)
+        if v:
+            out.append((label, *[x if not pct or "%" in x else x + "%" for x in v]))
+    return out[:n] if len(out) >= 2 else [(label, a_, h_) for _k, label, a_, h_ in full[:n]]
 
 
 def situation_text(sport, comp):
@@ -2683,9 +2718,9 @@ def run_gui():
         my += h + 4
         if r["state"] == "post" and r.get("game"):  # a finished game: its team stats fill the middle
             d_ = ensure_stats(r["game"])
-            if isinstance(d_, dict) and d_.get("stats"):
+            if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
-                for label, a_, h_ in d_["stats"][:4]:
+                for label, a_, h_ in pick_stats(r["game"]["sport"], d_.get("all_stats", []), 4):
                     vl, vr = (h_, a_) if flip else (a_, h_)
                     ctext(mx - mw / 2, my, vl, FONTS["small"], FG, anchor="nw", tags=tags)
                     ctext(mx, my, label[:12], FONTS["small"], DIM, anchor="n", tags=tags)
