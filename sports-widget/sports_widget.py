@@ -3716,9 +3716,10 @@ def run_gui():
         n_hdr, my_hdr = item_mark(), my  # the pills and status line stay at the top of every card; only what is below them is centred
         stxt_ = f'{r.get("status") or ""} {r.get("detail") or ""}'
         quiet_ = not (lp and lp.get("text")) and not (info or "").strip()  # nothing else is shown in the middle
-        at_half = r["state"] == "in" and (r.get("game") or {}).get("sport") != "baseball" and bool(
+        inning_break = (r.get("game") or {}).get("sport") == "baseball" and bool(re.search(r"\b(mid|middle|end)\s+(of\s+)?(the\s+)?\d", stxt_, re.I))
+        at_half = r["state"] == "in" and (inning_break or (r.get("game") or {}).get("sport") != "baseball" and bool(
             re.search(r"\b(half-?time|end of|intermission)\b", stxt_, re.I)
-            or quiet_ and re.search(r"\b(break|delay(?:ed)?|suspended)\b", stxt_, re.I))  # halftime and quarter / period ends always; other breaks and delays when nothing else is shown
+            or quiet_ and re.search(r"\b(break|delay(?:ed)?|suspended)\b", stxt_, re.I)))  # halftime, quarter / period / inning ends always; other breaks and delays when nothing else is shown
         if (r["state"] == "post" or at_half) and r.get("game"):  # a finished game, or one at halftime: its team stats fill the middle
             d_ = ensure_stats(r["game"], at_half)
             if isinstance(d_, dict) and d_.get("all_stats"):
@@ -3744,7 +3745,10 @@ def run_gui():
                     stat_cycles.append(cyc)
                     stat_apply(cyc)
         lines = info.split("\n") if info else []
-        bb = [g_ for g_ in gl if g_["kind"] == "baseball"]
+        if at_half and inning_break:
+            lines = []  # between innings the diamond, count and batter give way to the stats
+            gl = [g_ for g_ in gl if g_["kind"] != "baseball"]
+        bb = [g_ for g_ in gl if g_["kind"] == "baseball" and not (at_half and inning_break)]
         fb = next((g_ for g_ in gl if g_["kind"] == "football"), None)
         poss, show_poss = "", False
         if bb and live:
