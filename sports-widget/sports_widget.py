@@ -57,7 +57,7 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full1".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full2".encode()).hexdigest()[:16] + ".png")
 
 
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
@@ -163,19 +163,22 @@ def _shrink_png(data, f):
 
 
 def _area_resize(w, h, px, ow, oh):
-    """Exact area-average resize of RGBA pixels to ow x oh (alpha-weighted, so edges don't pick up a dark fringe):
-    each output pixel is the coverage-weighted mean of the source pixels under it, sampled once, with no blur."""
+    """Resize RGBA pixels to ow x oh with a triangle (bilinear) filter stretched over the whole shrink, the same antialiasing
+    as PIL's BILINEAR reduce: every output pixel averages the source pixels within one output pixel of its centre, nearest
+    ones counting most. Alpha-weighted, so edges don't pick up a dark fringe. Smoother than a plain box average, whose
+    hard block edges leave thin rings and diagonals visibly stepped at icon sizes."""
     def spans(n, on):
-        """Per output index: [(source index, weight)] for the source pixels it covers."""
+        """Per output index: [(source index, weight)], the weights adding up to 1."""
         step, out = n / on, []
         for o in range(on):
-            a, b = o * step, (o + 1) * step
+            c = (o + 0.5) * step
             row = []
-            for i in range(int(a), min(n, math.ceil(b))):
-                wt = min(b, i + 1) - max(a, i)
+            for i in range(max(0, int(c - step)), min(n, math.ceil(c + step))):
+                wt = 1 - abs(i + 0.5 - c) / step
                 if wt > 1e-9:
                     row.append((i, wt))
-            out.append(row)
+            tot = sum(wt for _i, wt in row)
+            out.append([(i, wt / tot) for i, wt in row])
         return out
     xs, ys = spans(w, ow), spans(h, oh)
     tmp = []  # horizontal pass: per source row, (r*a, g*a, b*a, a) per output column
@@ -194,7 +197,6 @@ def _area_resize(w, h, px, ow, oh):
         tmp.append(row)
     out = bytearray()
     for sp in ys:  # vertical pass
-        area = sum(wt for _i, wt in sp) * (w / ow)
         for ox in range(ow):
             r = g = b = a = 0.0
             for i, wt in sp:
@@ -204,7 +206,7 @@ def _area_resize(w, h, px, ow, oh):
                 b += t[2] * wt
                 a += t[3] * wt
             out += bytes((min(255, round(r / a)), min(255, round(g / a)), min(255, round(b / a)),
-                          min(255, round(a / area)))) if a > 1e-6 else b"\x00\x00\x00\x00"
+                          min(255, round(a)))) if a > 1e-6 else b"\x00\x00\x00\x00"
     return _png_bytes(ow, oh, out)
 
 
@@ -3231,7 +3233,7 @@ def run_gui():
                                      font=(FONTS["score"][0], -max(6, round(px0 * (1 - 0.35 * d))), "bold"))
 
     TEST_POINTS = {"TOUCHDOWN": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "SAFETY": 2,
-                   "RUN SCORES": 1, "RBI SINGLE": 1, "RBI DOUBLE": 1, "RBI TRIPLE": 1, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD": 6}
+                   "RUN SCORES": 1, "1-RUN SINGLE": 1, "1-RUN DOUBLE": 1, "1-RUN TRIPLE": 1, "PICK SIX": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TD": 6}
 
     def test_score(r, k, side, head):
         """A scoring test adds its points to one side (the digits roll to it) until the animation ends."""
@@ -3518,12 +3520,14 @@ def run_gui():
             if "homer" in low or "home run" in low:
                 return "HOME RUN", True
             hit = next((h_ for h_, w_ in (("TRIPLE", "tripled"), ("DOUBLE", "doubled"), ("SINGLE", "singled")) if re.search(rf"\b{w_}\b(?! off)", low)), None)
-            if hit:  # runs batted in on a hit: RBI SINGLE, 2-RUN DOUBLE
-                return ("RBI " + hit if n == 1 else f"{n}-RUN {hit}"), True
+            if hit:  # runs scored on a hit: 1-RUN SINGLE, 2-RUN DOUBLE
+                return f"{n}-RUN {hit}", True
             return ("RUN SCORES" if n == 1 else f"{n} RUNS SCORE"), True
         if sport == "football":
             if n == 2 and "safety" not in low and ("two-point" in low or "conversion" in low):
                 return "2-PT CONVERSION", True
+            if n >= 6 and "intercept" in low:  # the defence takes it back for a touchdown
+                return "PICK SIX", True
             if n >= 6 and "blocked" in low and ("punt" in low or "field goal" in low):
                 return ("BLOCKED PUNT TD" if "punt" in low else "BLOCKED FG TD"), True
             return {6: "TOUCHDOWN", 7: "TOUCHDOWN", 8: "TOUCHDOWN", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
@@ -3544,7 +3548,7 @@ def run_gui():
         hit = next((n_ for w_, n_ in (("SINGLE", 1), ("DOUBLE", 2), ("TRIPLE", 3)) if head.endswith(w_)), None)
         if hit is None:
             return [0, 1, 2, 3]
-        return list(range(hit)) + ([3] if "RBI" in head or "-RUN" in head else [])
+        return list(range(hit)) + ([3] if "-RUN" in head else [])
 
     def classify_play(sport, text):
         """(headline, color, seconds) for a big play named in ESPN's last-play text, or None."""
@@ -3857,7 +3861,7 @@ def run_gui():
     # (label, headline, kind, color): what the Settings "Test animations" window can fire
     TESTS = [("Touchdown", "TOUCHDOWN", "score", None), ("Field goal", "FIELD GOAL", "score", None), ("Goal", "GOAL!", "score", None),
              ("Home run", "HOME RUN", "run", None), ("Grand slam", "GRAND SLAM!", "grand", GOLD),
-             ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Fumble", "FUMBLE", "turnover", "#f87171"),
+             ("Three-pointer", "THREE-POINTER", "score", None), ("Interception", "INTERCEPTION", "turnover", "#f87171"), ("Pick six", "PICK SIX", "score", None), ("Fumble", "FUMBLE", "turnover", "#f87171"),
              ("Sack", "SACK", "turnover", "#fb923c"), ("Strikeout", "STRIKEOUT", "play", "#60a5fa"),
              ("Double play", "DOUBLE PLAY", "play", "#34d399"), ("Out", "OUT", "play", "#9aa0a6"),
              ("Block", "BLOCK", "play", "#a78bfa"), ("Penalty", "PENALTY", "play", "#fb923c"),
@@ -3866,8 +3870,8 @@ def run_gui():
              ("Safety", "SAFETY", "score", None), ("Blocked FG", "BLOCKED FG", "turnover", "#a78bfa"),
              ("Blocked punt", "BLOCKED PUNT", "turnover", "#a78bfa"), ("Onside recovery", "ONSIDE KICK RECOVERED", "turnover", "#fbbf24"),
              ("Single", "SINGLE", "play", "#38bdf8"), ("Double", "DOUBLE", "play", "#34d399"), ("Triple", "TRIPLE", "play", "#fbbf24"),
-             ("Run scores", "RUN SCORES", "run", None), ("RBI single", "RBI SINGLE", "run", None),
-             ("RBI double", "RBI DOUBLE", "run", None), ("RBI triple", "RBI TRIPLE", "run", None),
+             ("Run scores", "RUN SCORES", "run", None), ("1-run single", "1-RUN SINGLE", "run", None),
+             ("1-run double", "1-RUN DOUBLE", "run", None), ("1-run triple", "1-RUN TRIPLE", "run", None),
              ("Triple play", "TRIPLE PLAY", "play", "#fbbf24"), ("Caught stealing", "CAUGHT STEALING", "play", "#fb923c"),
              ("Picked off", "PICKED OFF", "play", "#fb923c"), ("Steal", "STEAL", "play", "#fb923c"),
              ("Extra point", "EXTRA POINT", "score", None),
