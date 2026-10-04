@@ -3081,7 +3081,7 @@ def run_gui():
         return yy, "\n".join(lines)
 
     # ---- scoring celebrations: a ring pulse or card flash, plus a banner with the play ----------------
-    BANNER_SECS, GRAND_SECS, RING_SECS, FLASH_SECS = 5.0, 7.0, 1.3, 1.2
+    BANNER_SECS, GRAND_SECS, RING_SECS, FLASH_SECS = 6.5, 8.5, 1.3, 1.2
     GOLD = "#fbbf24"
 
     def card_key(r):
@@ -3451,17 +3451,18 @@ def run_gui():
             return
         x0, y0, x1, y1 = bounds
         rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
-        u = max(0.0, min(1.0, (ce["secs"] - t) / 0.9))
-        out = u * u * (3 - 2 * u)  # the last ring fades out together with the banner text
-        for n in range(9):  # three sets of three ripples; the last set holds until the banner goes
+        u = max(0.0, min(1.0, (ce["secs"] - t) / out_secs(ce)))
+        out = u * u * (3 - 2 * u)  # the held rings fade out together with the banner text
+        sets = 3 if ce["secs"] >= 6 else 1  # short events get one set
+        for n in range(sets * 3):  # sets of three ripples; the last set holds until the banner goes
             delay = (n // 3) * 1.4 + (n % 3) * 0.25
             if t < delay:
                 continue
             pp = min(1.0, (t - delay) / RING_SECS)
-            hold = n >= 6  # the last set comes out exactly like the others, then stays spread out until the banner fades
+            hold = n >= (sets - 1) * 3  # the last set comes out exactly like the others, then stays spread out until the banner fades
             if not hold and pp >= 1:
                 continue
-            pe = min(pp, (0.5, 0.62, 0.74)[n - 6]) if hold else pp
+            pe = min(pp, (0.5, 0.62, 0.74)[n - (sets - 1) * 3]) if hold else pp
             r_ = rad + 4 + (rmax - rad - 4) * (1 - (1 - pe) ** 2)
             intensity = 0.9 * (1 - pe) ** 1.5
             if hold:
@@ -3484,10 +3485,14 @@ def run_gui():
             if len(run) > 1:
                 canvas.create_line(*[c_ for pt in run for c_ in pt], fill=col, width=wd, tags=(tag,))
 
+    def out_secs(ce):
+        """How long the fade-out takes: as long as a set of three ripples takes to clear (0.5 s stagger + 1.3 s), less for short events."""
+        return min(RING_SECS + 0.5, 0.45 * ce["secs"])
+
     def banner_alpha(ce, t):
         """0..1 visibility of a banner: eased (smoothstep) fades, slower out than in."""
         ease = lambda v: (lambda u: u * u * (3 - 2 * u))(max(0.0, min(1.0, v)))
-        return ease(t / 0.45) * ease((ce["secs"] - t) / 0.9)
+        return ease(t / 0.45) * ease((ce["secs"] - t) / out_secs(ce))
 
     def fade_items(ids, bgc, f):
         """Blend the colors of existing canvas items toward the card background (f = 1: unchanged, 0: gone)."""
