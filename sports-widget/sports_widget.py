@@ -3434,6 +3434,8 @@ def run_gui():
                 return "INTERCEPTION", "#f87171", 3.5
             if "fumble" in low:
                 return "FUMBLE", "#f87171", 3.5
+            if re.search(r"\bpenalty\b", low):  # a flag on the play (a takeaway or block above outranks it)
+                return "PENALTY", "#facc15", 3.0
             if "sacked" in low or " sack" in low:
                 return "SACK", "#fb923c", 3.0
             if "turnover on downs" in low:
@@ -3631,7 +3633,13 @@ def run_gui():
             if big and k not in session["celebs"]:
                 side = (kick_side(r, big[0], ptext, session["poss_prev"].get(k)) if big[0] in KICK_PLAYS
                         else acting_side(r, big[0], ptid))
-                make_event(r, k, side, big[0], None, big[2], mode, ptext, sound="turnover" if big[0] in (
+                flag = big[0] == "PENALTY" and sport == "football"
+                if flag:  # a flag is the penalized team's ("PENALTY on DAL-M.Parsons ..."), in flag yellow
+                    pm = re.search(r"penalty on ([A-Za-z]{2,4})\b", ptext, re.I)
+                    tm_ = [t_.get("abbr", "").upper() for t_ in r.get("teams") or []]
+                    if pm and pm.group(1).upper() in tm_:
+                        side = tm_.index(pm.group(1).upper())
+                make_event(r, k, side, big[0], FLAG_YELLOW if flag else None, big[2], mode, ptext, sound="turnover" if big[0] in (
                     "INTERCEPTION", "FUMBLE", "SACK", "TURNOVER ON DOWNS") + KICK_PLAYS else None)
                 continue
             old_w = session["win_prev"].get(k)  # or a big swing in win probability
