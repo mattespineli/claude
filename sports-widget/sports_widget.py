@@ -943,8 +943,13 @@ def situation_graphic(sport, comp, league=""):
     if core:
         out.append(core)
     sit = comp.get("situation") or {}
-    if sit.get("homeTimeouts") is not None or sit.get("awayTimeouts") is not None:  # shown by the Scoreboard layout
-        out.append({"kind": "timeouts", "home": int(sit.get("homeTimeouts") or 0), "away": int(sit.get("awayTimeouts") or 0)})
+    # per-team remaining timeouts / ABS challenges: dots under each team in the Scoreboard layout
+    side = lambda k, words: next((int(v) for key, v in sit.items() if key.lower().startswith(k) and isinstance(v, (int, float))
+                                  and any(w in key.lower() for w in words)), None)
+    for words, total in ((("timeout",), 3), (("challenge",), 2)):
+        h_, a_ = side("home", words), side("away", words)
+        if h_ is not None or a_ is not None:
+            out.append({"kind": "timeouts", "home": h_ or 0, "away": a_ or 0, "total": total})
     return out or None
 
 
@@ -2599,6 +2604,7 @@ def run_gui():
             c = [hi if lead >= 0 else DIM, hi if lead <= 0 else DIM]
         rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
         colb = top
+        counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         for i, t in enumerate(teams):
             cx = ix + COL / 2 if i == 0 else ix + ww - COL / 2
             yy = top
@@ -2610,7 +2616,15 @@ def run_gui():
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i))
                 yy += 30
             _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
-            colb = max(colb, yy + h)
+            yy += h
+            if counts[i] is not None:  # remaining timeouts / challenges: filled dots, unlabelled
+                total = max(tos.get("total", 3), counts[i])
+                x0 = cx - 5 * (total - 1)
+                for k in range(total):
+                    canvas.create_oval(x0 + 10 * k - 3, yy + 4, x0 + 10 * k + 3, yy + 10, fill=FG if k < counts[i] else bgc,
+                                       outline=FG if k < counts[i] else DIM, tags=tags)
+                yy += 12
+            colb = max(colb, yy)
         my = top + 2
         live = r["state"] == "in"
         if live:
@@ -2671,18 +2685,6 @@ def run_gui():
                 canvas.create_polygon(ax - 5 * d_, ay - 6, ax + 5 * d_, ay, ax - 5 * d_, ay + 6, fill="#fbbf24" if has else bgc,
                                       outline="#fbbf24" if has else DIM, width=1, tags=tags)
             my += h
-        if tos and live:
-            counts = [tos.get(t["ha"]) for t in teams]
-            if None not in counts:
-                my += 4
-                _, h = ctext(mx, my, "Timeouts", FONTS["small"], DIM, anchor="n", tags=tags)
-                total = max(3, *counts)
-                for i, n in enumerate(counts):
-                    for k in range(total):
-                        dx = (-14 - 10 * (total - 1 - k) - 28) if i == 0 else (14 + 10 * k + 28)
-                        dot = mx + dx
-                        canvas.create_oval(dot - 3, my + 4, dot + 3, my + 10, fill=FG if k < n else bgc, outline=FG if k < n else DIM, tags=tags)
-                my += h
         yy = max(colb, my) + 2
         if gl:
             yy += graphics(ix, yy, gl, bgc, ww)
@@ -3820,7 +3822,7 @@ def demo_data():
                          "homeTimeouts": 2, "awayTimeouts": 3}}
     mlb = {"status": {"type": {"shortDetail": "Top 7th"}},
            "competitors": [team("1", "away", "SFG", 3), team("2", "home", "LAD", 2)],
-           "situation": {"balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
+           "situation": {"awayChallengesRemaining": 1, "homeChallengesRemaining": 2, "balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
                          "batter": {"athlete": {"shortName": "M. Chapman"}}, "pitcher": {"athlete": {"shortName": "T. Glasnow"}}}}
     nba = {"status": {"period": 3, "clock": 312.0, "displayClock": "5:12"},
            "competitors": [team("9", "away", "GS", 78, [st("fouls", 9), st("rebounds", 31)]),
