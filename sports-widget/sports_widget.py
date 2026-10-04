@@ -57,7 +57,7 @@ LOGO_DIR = os.path.join(HERE, "logos")
 
 def logo_path(url, size):
     import hashlib
-    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full2".encode()).hexdigest()[:16] + ".png")
+    return os.path.join(LOGO_DIR, hashlib.md5(f"{url}|{size}|full3".encode()).hexdigest()[:16] + ".png")
 
 
 LOGO_SS = 8  # logos are fetched this many times larger and averaged down, which antialiases the edges
@@ -162,26 +162,29 @@ def _shrink_png(data, f):
     return _png_bytes(ow, oh, out)
 
 
+_LOGO_GAMMA = 1.4  # between plain sRGB averaging (1.0) and linear light (2.2), which washes out thin dark rings
+_TO_LIN = [(i / 255) ** _LOGO_GAMMA for i in range(256)]
+
+
 def _area_resize(w, h, px, ow, oh):
-    """Resize RGBA pixels to ow x oh with a triangle (bilinear) filter stretched over the whole shrink, the same antialiasing
-    as PIL's BILINEAR reduce: every output pixel averages the source pixels within one output pixel of its centre, nearest
-    ones counting most. Alpha-weighted, so edges don't pick up a dark fringe. Smoother than a plain box average, whose
-    hard block edges leave thin rings and diagonals visibly stepped at icon sizes."""
+    """Resize RGBA pixels to ow x oh with a Gaussian filter (sigma 0.45 output pixels), weighting by alpha and averaging
+    colours at a gamma between sRGB and linear light. A box average leaves thin rings and diagonals visibly stepped at
+    icon sizes; the Gaussian smooths them without blurring the logo."""
     def spans(n, on):
         """Per output index: [(source index, weight)], the weights adding up to 1."""
         step, out = n / on, []
+        sig, rad = 0.45 * step, 1.5 * step
         for o in range(on):
             c = (o + 0.5) * step
             row = []
-            for i in range(max(0, int(c - step)), min(n, math.ceil(c + step))):
-                wt = 1 - abs(i + 0.5 - c) / step
-                if wt > 1e-9:
-                    row.append((i, wt))
+            for i in range(max(0, int(c - rad)), min(n, math.ceil(c + rad))):
+                row.append((i, math.exp(-0.5 * ((i + 0.5 - c) / sig) ** 2)))
             tot = sum(wt for _i, wt in row)
             out.append([(i, wt / tot) for i, wt in row])
         return out
     xs, ys = spans(w, ow), spans(h, oh)
-    tmp = []  # horizontal pass: per source row, (r*a, g*a, b*a, a) per output column
+    lin = _TO_LIN
+    tmp = []  # horizontal pass: per source row, (r*a, g*a, b*a, a) per output column, colours in linear light
     for y in range(h):
         base, row = y * w * 4, []
         for sp in xs:
@@ -189,13 +192,14 @@ def _area_resize(w, h, px, ow, oh):
             for i, wt in sp:
                 k = base + i * 4
                 al = px[k + 3] * wt
-                r += px[k] * al
-                g += px[k + 1] * al
-                b += px[k + 2] * al
+                r += lin[px[k]] * al
+                g += lin[px[k + 1]] * al
+                b += lin[px[k + 2]] * al
                 a += al
             row.append((r, g, b, a))
         tmp.append(row)
     out = bytearray()
+    inv = 1 / _LOGO_GAMMA
     for sp in ys:  # vertical pass
         for ox in range(ow):
             r = g = b = a = 0.0
@@ -205,8 +209,8 @@ def _area_resize(w, h, px, ow, oh):
                 g += t[1] * wt
                 b += t[2] * wt
                 a += t[3] * wt
-            out += bytes((min(255, round(r / a)), min(255, round(g / a)), min(255, round(b / a)),
-                          min(255, round(a)))) if a > 1e-6 else b"\x00\x00\x00\x00"
+            out += bytes((min(255, round(255 * (r / a) ** inv)), min(255, round(255 * (g / a) ** inv)),
+                          min(255, round(255 * (b / a) ** inv)), min(255, round(a)))) if a > 1e-6 else b"\x00\x00\x00\x00"
     return _png_bytes(ow, oh, out)
 
 
