@@ -3572,7 +3572,7 @@ def run_gui():
                     win = 0 if a_ >= b_ else 1
                     teams = r.get("teams") or []
                     nm = [t_["abbr"] for t_ in teams] if len(teams) == 2 else ["", ""]
-                    make_event(r, k, win, "FINAL", None, 4.5, mode, f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}",
+                    make_event(r, k, win, "FINAL", None, BANNER_SECS, mode, f"{nm[0]} {r['score'][0]} \u2013 {nm[1]} {r['score'][1]}",
                                sound="final")
                 session["was_live"].discard(k)
                 continue
@@ -3741,7 +3741,7 @@ def run_gui():
         scoring = kind in ("score", "run", "grand")
         import random
         side = random.randrange(2) if len(r.get("teams") or []) == 2 else None  # a test plays for either team, at random
-        make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else 4.5 if kind == "final" else BANNER_SECS if scoring else 3.5,
+        make_event(r, k, side, head, None, GRAND_SECS if kind == "grand" else BANNER_SECS if scoring or kind == "final" else 3.5,
                    mode, "4th & 7  \u00b7  Test animation" if kind == "fourth" else "Test animation", grand=kind == "grand", run=kind in ("run", "grand"),
                    sound={"score": "score", "run": "score", "grand": "grand", "turnover": "turnover", "swing": "swing",
                           "final": "final", "fourth": "fourth"}.get(kind))
