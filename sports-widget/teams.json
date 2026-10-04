@@ -1,0 +1,65 @@
+{
+  "refresh_seconds": 60,
+  "teams": [
+    {
+      "sport": "baseball",
+      "league": "mlb",
+      "team": "sf",
+      "label": "San Francisco Giants"
+    },
+    {
+      "sport": "football",
+      "league": "nfl",
+      "team": "sf",
+      "label": "San Francisco 49ers"
+    },
+    {
+      "sport": "basketball",
+      "league": "nba",
+      "team": "gs",
+      "label": "Golden State Warriors"
+    },
+    {
+      "sport": "basketball",
+      "league": "wnba",
+      "team": "gs",
+      "label": "Golden State Valkyries"
+    },
+    {
+      "sport": "baseball",
+      "league": "mlb",
+      "team": "nyy",
+      "label": "New York Yankees"
+    },
+    {
+      "sport": "hockey",
+      "league": "nhl",
+      "team": "nj",
+      "label": "New Jersey Devils"
+    },
+    {
+      "sport": "football",
+      "league": "college-football",
+      "team": "21",
+      "label": "San Diego State Aztecs Football"
+    },
+    {
+      "sport": "basketball",
+      "league": "mens-college-basketball",
+      "team": "21",
+      "label": "San Diego State Aztecs Men's Basketball"
+    },
+    {
+      "sport": "basketball",
+      "league": "womens-college-basketball",
+      "team": "21",
+      "label": "San Diego State Aztecs Women's Basketball"
+    },
+    {
+      "sport": "volleyball",
+      "league": "womens-college-volleyball",
+      "team": "21",
+      "label": "San Diego State Aztecs Volleyball"
+    }
+  ]
+}
