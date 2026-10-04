@@ -3407,20 +3407,21 @@ def run_gui():
             session["celeb_on"] = False
 
     def draw_rings(cx, cy, rad, ce, t, bgc, bounds, tag):
-        """A ripple spreading from a logo across the whole card (three rings, clipped to the card x0, y0, x1, y1)."""
+        """Ripples spreading from a logo across the whole card (3 sets of 3 rings, clipped to the card x0, y0, x1, y1)."""
         if ce["mode"] != "pulse" and not ce["grand"]:
             return
         x0, y0, x1, y1 = bounds
         rmax = max(math.hypot(cx - px_, cy - py_) for px_ in (x0, x1) for py_ in (y0, y1)) + 4
         u = max(0.0, min(1.0, (ce["secs"] - t) / 0.9))
         out = u * u * (3 - 2 * u)  # the last ring fades out together with the banner text
-        for j in range(3):  # three ripples, one after the other; the third stays put until the banner goes
-            delay = j * 0.9
+        for n in range(9):  # three sets of three ripples; the very last ripple stays put until the banner goes
+            delay = (n // 3) * 1.4 + (n % 3) * 0.25
             if t < delay:
                 continue
             pp = min(1.0, (t - delay) / RING_SECS)
-            r_ = rad + 4 + (rmax - rad - 4) * (1.0 if j < 2 else 0.8) * (1 - (1 - pp) ** 2)  # the held ring stops inside the card
-            if j < 2:
+            hold = n == 8
+            r_ = rad + 4 + (rmax - rad - 4) * (0.8 if hold else 1.0) * (1 - (1 - pp) ** 2)  # the held ring stops inside the card
+            if not hold:
                 if pp >= 1:
                     continue
                 intensity = 0.9 * (1 - pp) ** 1.5
