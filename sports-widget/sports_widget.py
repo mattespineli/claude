@@ -842,6 +842,21 @@ def comp_logos(comp):
     return [_logo(c.get("team", {})) for c in pair]
 
 
+def comp_teams(comp, first=None):
+    """Both teams of a game for the Scoreboard layout, [{logo, abbr, ha}]: `first` (a competitor) first, else away then home."""
+    cs = comp.get("competitors", [])
+    if len(cs) != 2:
+        return []
+    if first is not None and first in cs:
+        order = [first] + [c for c in cs if c is not first and c != first]
+    else:
+        away = next((c for c in cs if c.get("homeAway") == "away"), None)
+        order = [away, [c for c in cs if c is not away][0]] if away else list(cs)
+    return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""),
+             "abbr": (c.get("team") or {}).get("abbreviation") or (c.get("athlete") or {}).get("shortName") or "?"}
+            for c in order]
+
+
 def tint_color(team):
     """Primary team color (alternate if the primary is nearly black), or None."""
     cands = [("#" + str(x).lstrip("#")) for x in (team.get("color"), team.get("alternateColor")) if _valid_hex(x)]
@@ -927,6 +942,9 @@ def situation_graphic(sport, comp, league=""):
     core = _situation_graphic(sport, comp)
     if core:
         out.append(core)
+    sit = comp.get("situation") or {}
+    if sit.get("homeTimeouts") is not None or sit.get("awayTimeouts") is not None:  # shown by the Scoreboard layout
+        out.append({"kind": "timeouts", "home": int(sit.get("homeTimeouts") or 0), "away": int(sit.get("awayTimeouts") or 0)})
     return out or None
 
 
@@ -1062,7 +1080,7 @@ def team_status(entry):
         comp_ = event["competitions"][0]
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
-    return {"logos": [_logo(me.get("team", {})) or _logo(team)],
+    return {"teams": comp_teams(event["competitions"][0], me or None), "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
@@ -1187,7 +1205,7 @@ def playoff_games(debug=False, days=7):
             series = comp.get("series", {}).get("summary", "")
             extra = " · ".join(x for x in (note, series) if x)
             parts = score_parts(e)
-            row = {"logos": comp_logos(comp), "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
+            row = {"logos": comp_logos(comp), "teams": comp_teams(comp), "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                    "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                    "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
                    "league": name, "extra": extra, "score": parts["score"], "status": parts["status"],
@@ -1214,6 +1232,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
+LAYOUT_CHOICES = [("Default", "default"), ("Scoreboard", "scoreboard")]
 DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
                    ("5 minutes", 300), ("10 minutes", 600), ("15 minutes", 900)]
@@ -1257,6 +1276,7 @@ def league_games():
             comp = e["competitions"][0]
             parts = score_parts(e)
             out.append({"name": matchup, "state": state, "line": "", "league": name, "detail": detail, "logos": comp_logos(comp),
+                        "teams": comp_teams(comp),
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, sport),
                         "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "_date": e.get("date", ""),
                         "url": event_url(e, sport, league),
@@ -1437,7 +1457,7 @@ def pinned_status(pin):
             s = summarize_game(e, pin["sport"], pin["league"])
             if s:
                 parts = score_parts(e)
-                return {"logos": comp_logos(e["competitions"][0]),
+                return {"logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0]),
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
@@ -2196,8 +2216,8 @@ def run_gui():
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
 
-    def ctext(x, y, s_, font, fill, width=None, anchor="nw", tags=()):
-        kw = {"text": s_, "font": font, "fill": fill, "anchor": anchor, "tags": tags}
+    def ctext(x, y, s_, font, fill, width=None, anchor="nw", tags=(), justify="left"):
+        kw = {"text": s_, "font": font, "fill": fill, "anchor": anchor, "tags": tags, "justify": justify}
         if width:
             kw["width"] = int(width)
         i = canvas.create_text(x, y, **kw)
@@ -2523,6 +2543,94 @@ def run_gui():
                 pass
         root.after(1000 - int(now * 1000) % 1000 + 5, clock_tick)  # just after each whole second
 
+    def score_width(text):
+        if ui_state.get("digital"):
+            return len(text) * (DIG_W + DIG_GAP) - DIG_GAP
+        import tkinter.font as tkfont
+        return tkfont.Font(font=FONTS["score"]).measure(text)
+
+    def draw_scoreboard(r, cx0, cw_, y, bgc, tags, gl, tos, info):
+        """Scoreboard layout: each team's logo with its score underneath at either side, the status and game details
+        (diamond and count, down and possession, timeouts) in the free space between. Returns (bottom y, info left over)."""
+        ix, ww = cx0 + PAD, cw_ - 2 * PAD
+        COL = 72
+        mx, mw = ix + ww / 2, ww - 2 * COL - 8
+        top = y
+        sc, teams = r.get("score"), r["teams"]
+        c = [FG, FG]
+        if sc:
+            try:
+                lead = (float(sc[0]) > float(sc[1])) - (float(sc[0]) < float(sc[1]))
+            except ValueError:
+                lead = 0
+            hi = COLORS["in"] if r["state"] == "in" else FG
+            c = [hi if lead >= 0 else DIM, hi if lead <= 0 else DIM]
+        rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
+        colb = top
+        for i, t in enumerate(teams):
+            cx = ix + COL / 2 if i == 0 else ix + ww - COL / 2
+            yy = top
+            img = logo_img(t["logo"], 44) if t.get("logo") else None
+            if img:
+                canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
+            yy += 46
+            if sc:
+                draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i))
+                yy += 30
+            _, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            colb = max(colb, yy + h)
+        my = top + 2
+        live = r["state"] == "in"
+        if live:
+            canvas.create_polygon(rr_points(mx - 17, my, mx + 17, my + 14, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
+            canvas.create_text(mx, my + 7, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+            my += 18
+        elif r["state"] == "pre":
+            sep = (r.get("line") or "@").split(" ")[0]
+            _, h = ctext(mx, my + 4, sep if sep in ("vs", "@") else "@", FONTS["line"], DIM, anchor="n", tags=tags)
+            my += 4 + h
+        sid, h = ctext(mx, my, r.get("status") if sc else r["detail"], FONTS["detb"] if live else FONTS["line"],
+                       COLORS.get(r["state"], FG), width=mw, anchor="n", tags=tags, justify="center")
+        clock = r.get("clock") if live else None
+        if clock:
+            session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
+            canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
+        my += h + 4
+        lines = info.split("\n") if info else []
+        bb = [g_ for g_ in gl if g_["kind"] == "baseball"]
+        if bb and live:
+            my += graphics(mx - 52, my, bb, bgc, BB_W)
+            for l_ in [l_ for l_ in lines if l_.startswith("AB:")]:
+                for part in l_.split(" \u00b7 "):
+                    _, h = ctext(mx, my, part, FONTS["small"], FG, anchor="n", tags=tags)
+                    my += h
+            lines = [l_ for l_ in lines if not l_.startswith(("Runners:", "Bases empty", "AB:"))]
+            gl = [g_ for g_ in gl if g_ not in bb]
+        elif any(g_["kind"] == "football" for g_ in gl) and live and lines:
+            parts = lines[0].split(" \u00b7 ")
+            _, h = ctext(mx, my, parts[0], FONTS["detb"], FG, width=mw, anchor="n", tags=tags, justify="center")
+            my += h
+            if parts[1:]:
+                _, h = ctext(mx, my, " \u00b7 ".join(parts[1:]), FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
+                my += h
+            lines = lines[1:]
+        if tos and live:
+            counts = [tos.get(t["ha"]) for t in teams]
+            if None not in counts:
+                my += 4
+                _, h = ctext(mx, my, "Timeouts", FONTS["small"], DIM, anchor="n", tags=tags)
+                total = max(3, *counts)
+                for i, n in enumerate(counts):
+                    for k in range(total):
+                        dx = (-14 - 10 * (total - 1 - k) - 28) if i == 0 else (14 + 10 * k + 28)
+                        dot = mx + dx
+                        canvas.create_oval(dot - 3, my + 4, dot + 3, my + 10, fill=FG if k < n else bgc, outline=FG if k < n else DIM, tags=tags)
+                my += h
+        yy = max(colb, my) + 2
+        if gl:
+            yy += graphics(ix, yy, gl, bgc, ww)
+        return yy, "\n".join(lines)
+
     def draw_card(r, x, y, w, final):
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
@@ -2535,74 +2643,79 @@ def run_gui():
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
         yy = y + GAP
         sc = r.get("score")
-        text_w = ww
-        if sc:  # big score at the top right; the team names wrap to the space on its left
-            xr = cx0 + cw_ - PAD
-            try:
-                lead = (float(sc[0]) > float(sc[1])) - (float(sc[0]) < float(sc[1]))
-            except ValueError:
-                lead = 0
-            live = r["state"] == "in"
-            hi = COLORS["in"] if live else FG
-            c1 = hi if lead >= 0 else DIM
-            c2 = hi if lead <= 0 else DIM
-            rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
-            x2 = draw_score(xr, yy - 3, sc[1], c2, bgc, (rk, 1))
-            if ui_state.get("digital"):
-                x1 = digital_text(x2 - 4, yy + 1, "-", DIM, bgc)
-            else:
-                idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
-                x1 = canvas.bbox(idash)[0]
-            text_w = max(ww - (xr - draw_score(x1 - 4, yy - 3, sc[0], c1, bgc, (rk, 0))) - 12, 80)
-        urls = [u for u in (r.get("logos") or []) if u]  # team logo(s) in front of the name
-        lg_size = 44 if len(urls) == 1 else 22
-        tx = ix + (LOGO_W if urls else 0)
-        text_w = max(text_w - (tx - ix), 60)
-        for i, u in enumerate(urls):
-            img = logo_img(u, lg_size)
-            if img:
-                canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
-        _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
-        y_head = yy
-        yy += h
-        if r["line"]:
-            _, h = ctext(tx, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
-            yy += h
-        if sc:
-            yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
         gl = r.get("graphic") or []
         gl = [gl] if isinstance(gl, dict) else gl
-        bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases, count and batter/pitcher get their own row
-        lw = ww
-        sx = tx  # the status line lines up with the name, beside the logo
-        if r["state"] == "in":  # red LIVE pill in front of the clock
-            bw = 34
-            canvas.create_polygon(rr_points(tx, yy + 2, tx + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
-            canvas.create_text(tx + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
-            sx = tx + bw + 6
-        ys = yy  # top of the status row: the baseball panel starts here too
-        sid, h = ctext(sx, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
-                       COLORS.get(r["state"], FG), width=lw - (sx - ix), tags=tags)
-        clock = r.get("clock") if r["state"] == "in" else None
-        if clock:
-            session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
-            canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
-        yy += max(h, 18 if r["state"] == "in" else 0)
-        if urls:
-            yy = max(yy, y_head + len(urls) * (lg_size + 2))  # the logo spans name, opponent and status lines
+        tos = next((g_ for g_ in gl if g_["kind"] == "timeouts"), None)
+        gl = [g_ for g_ in gl if g_["kind"] != "timeouts"]
         info = r.get("info") or ""
-        if bb:
-            yy += graphics(ix, yy, [g_ for g_ in gl if g_ not in bb], bgc, lw)
-            rh = graphics(ix, yy, bb, bgc, BB_W)  # bases and count at the left, batter/pitcher beside them
-            wy = yy + 4
-            for part in (p_ for l_ in info.split("\n") if l_.startswith("AB:") for p_ in l_.split(" \u00b7 ")):
-                _, h = ctext(ix + BB_W + 8, wy, part, FONTS["small"], FG, width=ww - BB_W - 8, tags=tags)
-                wy += h
-            yy = max(yy + rh + 2, wy)
-            info = "\n".join(l_ for l_ in info.split("\n")
-                             if not l_.startswith(("Runners:", "Bases empty", "AB:")))
-        elif gl:
-            yy += graphics(ix, yy, gl, bgc, ww)
+        lw = ww
+        if ui_state.get("layout") == "scoreboard" and len(r.get("teams") or []) == 2 and r["state"] in ("pre", "in", "post"):
+            yy, info = draw_scoreboard(r, cx0, cw_, yy, bgc, tags, gl, tos, info)
+        else:
+            text_w = ww
+            if sc:  # big score at the top right; the team names wrap to the space on its left
+                xr = cx0 + cw_ - PAD
+                try:
+                    lead = (float(sc[0]) > float(sc[1])) - (float(sc[0]) < float(sc[1]))
+                except ValueError:
+                    lead = 0
+                live = r["state"] == "in"
+                hi = COLORS["in"] if live else FG
+                c1 = hi if lead >= 0 else DIM
+                c2 = hi if lead <= 0 else DIM
+                rk = r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
+                x2 = draw_score(xr, yy - 3, sc[1], c2, bgc, (rk, 1))
+                if ui_state.get("digital"):
+                    x1 = digital_text(x2 - 4, yy + 1, "-", DIM, bgc)
+                else:
+                    idash, _h = ctext(x2 - 4, yy - 3, "\u2013", FONTS["score"], DIM, anchor="ne")
+                    x1 = canvas.bbox(idash)[0]
+                text_w = max(ww - (xr - draw_score(x1 - 4, yy - 3, sc[0], c1, bgc, (rk, 0))) - 12, 80)
+            urls = [u for u in (r.get("logos") or []) if u]  # team logo(s) in front of the name
+            lg_size = 44 if len(urls) == 1 else 22
+            tx = ix + (LOGO_W if urls else 0)
+            text_w = max(text_w - (tx - ix), 60)
+            for i, u in enumerate(urls):
+                img = logo_img(u, lg_size)
+                if img:
+                    canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
+            _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
+            y_head = yy
+            yy += h
+            if r["line"]:
+                _, h = ctext(tx, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
+                yy += h
+            if sc:
+                yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
+            bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases, count and batter/pitcher get their own row
+            sx = tx  # the status line lines up with the name, beside the logo
+            if r["state"] == "in":  # red LIVE pill in front of the clock
+                bw = 34
+                canvas.create_polygon(rr_points(tx, yy + 2, tx + bw, yy + 16, 5), smooth=True, fill=LIVE_RED, outline=LIVE_RED, tags=tags)
+                canvas.create_text(tx + bw / 2, yy + 9, text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+                sx = tx + bw + 6
+            ys = yy  # top of the status row: the baseball panel starts here too
+            sid, h = ctext(sx, yy, r.get("status") if sc else r["detail"], FONTS["detb"] if r["state"] == "in" else FONTS["line"],
+                           COLORS.get(r["state"], FG), width=lw - (sx - ix), tags=tags)
+            clock = r.get("clock") if r["state"] == "in" else None
+            if clock:
+                session["clock_items"].append((sid, canvas.itemcget(sid, "text"), clock))
+                canvas.itemconfigure(sid, text=tick_clock(canvas.itemcget(sid, "text"), clock))
+            yy += max(h, 18 if r["state"] == "in" else 0)
+            if urls:
+                yy = max(yy, y_head + len(urls) * (lg_size + 2))  # the logo spans name, opponent and status lines
+            if bb:
+                yy += graphics(ix, yy, [g_ for g_ in gl if g_ not in bb], bgc, lw)
+                rh = graphics(ix, yy, bb, bgc, BB_W)  # bases and count at the left, batter/pitcher beside them
+                wy = yy + 4
+                for part in (p_ for l_ in info.split("\n") if l_.startswith("AB:") for p_ in l_.split(" \u00b7 ")):
+                    _, h = ctext(ix + BB_W + 8, wy, part, FONTS["small"], FG, width=ww - BB_W - 8, tags=tags)
+                    wy += h
+                yy = max(yy + rh + 2, wy)
+                info = "\n".join(l_ for l_ in info.split("\n")
+                                 if not l_.startswith(("Runners:", "Bases empty", "AB:")))
+            elif gl:
+                yy += graphics(ix, yy, gl, bgc, ww)
         g_ = r.get("game")
         if r.get("win"):
             yy += graphics(ix, yy, r["win"], bgc, lw)
@@ -3268,7 +3381,20 @@ def run_gui():
             session["sig"] = compute_sig()
         styled_option(win, digital_choice, ["Off", "On"], command=on_digital, width=12).grid(
             row=5, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=6, column=0, padx=16, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Card layout", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=6, column=0, padx=16, pady=(6, 4), sticky="w")
+        layout_choice = tk.StringVar(value=next((l for l, v in LAYOUT_CHOICES if v == ui_state.get("layout", "default")), "Default"))
+
+        def on_layout(label):
+            ui_state["layout"] = dict(LAYOUT_CHOICES)[label]
+            save_state(ui_state)
+            session["sig"] = None
+            view_tween["next"] = True  # ease the window to the new height
+            draw_all()
+            session["sig"] = compute_sig()
+            fit()
+        styled_option(win, layout_choice, [l for l, _ in LAYOUT_CHOICES], command=on_layout, width=12).grid(
+            row=6, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=7, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
             import shutil
@@ -3279,8 +3405,8 @@ def run_gui():
             session["sig"] = None
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
-        styled_button(win, "Clear cache", clear_logos).grid(row=6, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=7, column=1, padx=16, pady=(10, 16), sticky="e")
+        styled_button(win, "Clear cache", clear_logos).grid(row=7, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=8, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
@@ -3630,9 +3756,11 @@ def demo_data():
             else {"at": time.time(), "secs": int(cm.group(3)) * 60 - 30, "up": True, "minute": int(cm.group(3))})
         return {"name": name, "state": state, "line": line, "detail": detail, "tint": tint, "url": "https://www.espn.com/", "clock": clock,
                 "score": score, "status": status, "win": wbar, "next": next_line,
+                "teams": comp_teams(comp, (comp.get("competitors") or [None])[0]) if state != "none" else [],
                 "info": situation_text(sport, comp), "graphic": situation_graphic(sport, comp, league)}
     nfl = {"competitors": [team("25", "away", "SF", 21), team("6", "home", "DAL", 17)],
-           "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4}}
+           "situation": {"shortDownDistanceText": "3rd & 4", "possession": "25", "possessionText": "DAL 38", "distance": 4,
+                         "homeTimeouts": 2, "awayTimeouts": 3}}
     mlb = {"status": {"type": {"shortDetail": "Top 7th"}},
            "competitors": [team("1", "away", "SFG", 3), team("2", "home", "LAD", 2)],
            "situation": {"balls": 1, "strikes": 2, "outs": 2, "onFirst": True, "onThird": True,
@@ -3667,6 +3795,8 @@ def demo_leagues():
         return {"score": (m.group(1), m.group(2)) if m else None, "status": m.group(3) if m else detail,
                 "name": name, "state": state, "line": "", "league": lg, "detail": detail,
                                                "tint": tint, "info": "", "graphic": None, "_key": (lg, name),
+                                               "teams": [{"logo": None, "ha": h, "abbr": t.split()[-1][:3].upper()}
+                                                         for h, t in zip(("away", "home"), name.split(" @ "))],
                                                "url": "https://www.espn.com/"}
     return [g("MLB", "Boston Red Sox @ Toronto Blue Jays", "in", "2-1  Bot 4th", "#134a8e"),
             g("MLB", "Seattle Mariners @ Houston Astros", "pre", "Sat Oct 3 8:10 PM", "#eb6e1f"),
