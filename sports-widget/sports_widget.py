@@ -7,6 +7,7 @@ Drag to move, right-click for menu (refresh / always-on-top / quit).
 """
 import gzip
 import json
+import math
 import os
 import re
 import sys
@@ -1050,6 +1051,7 @@ def comp_teams(comp, first=None):
         away = next((c for c in cs if c.get("homeAway") == "away"), None)
         order = [away, [c for c in cs if c is not away][0]] if away else list(cs)
     return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""), "record": _record(c).strip(" ()"),
+             "color": team_colors(c, "#34d399"),
              "abbr": (c.get("team") or {}).get("abbreviation") or (c.get("athlete") or {}).get("shortName") or "?"}
             for c in order]
 
@@ -1460,6 +1462,7 @@ def playoff_games(debug=False, days=7):
 
 STATE = os.path.join(HERE, "state.json")
 LIVE_REFRESH_CHOICES = [("Same as normal", 0), ("10 seconds", 10), ("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60)]
+SCORE_ANIM_CHOICES = [("Pulse + banner", "pulse"), ("Banner + flash", "flash"), ("Off", "off")]
 LAYOUT_CHOICES = [("Scoreboard", "scoreboard"), ("List", "list")]  # "default" in an older state.json means List
 DOCK_CHOICES = [("Off", "off"), ("Left edge", "left"), ("Right edge", "right")]
 REFRESH_CHOICES = [("15 seconds", 15), ("30 seconds", 30), ("1 minute", 60), ("2 minutes", 120),
@@ -2436,14 +2439,15 @@ def run_gui():
     import time as _time
     FONTS = {"score": ("Segoe UI", 20, "bold"), "name": ("Segoe UI", 10, "bold"), "line": ("Segoe UI", 9), "detb": ("Segoe UI", 9, "bold"),
              "sec": ("Segoe UI", 8, "bold"), "hdr": ("Segoe UI", 9, "bold"), "small": ("Segoe UI", 8),
-             "smallb": ("Segoe UI", 8, "bold")}
+             "smallb": ("Segoe UI", 8, "bold"), "ban": ("Segoe UI", 14, "bold")}
     PAD, GAP = 10, 6
     LOGO_W, BB_W = 52, 112  # width reserved for a logo in front of the name; baseball bases/count graphic
     last = {}
     session = {"live_prev": 0, "expanded": set(), "details": {}, "games": {}, "sig": None,
                "anims": {}, "vis": {}, "hits": {}, "total": 0, "looping": False, "actx": None, "standings": {}, "college": {},
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
-               "clock_items": [], "stats": {}, "stats_redraw": False}
+               "clock_items": [], "stats": {}, "stats_redraw": False,
+               "score_prev": {}, "play_prev": {}, "celebs": {}, "celeb_on": False}
 
     def gkey(g):
         return f'{g["league"]}:{g["id"]}'
@@ -2890,7 +2894,7 @@ def run_gui():
         import tkinter.font as tkfont
         return tkfont.Font(font=FONTS["score"]).measure(text)
 
-    def draw_scoreboard(r, cx0, cw_, y, bgc, tags, gl, tos, info, lp=None):
+    def draw_scoreboard(r, cx0, cw_, y, bgc, tags, gl, tos, info, lp=None, ce=None, ct=0):
         """Scoreboard layout: each team's logo with its score underneath at either side, the status and game details
         (diamond and count, down and possession, timeouts) in the free space between. Returns (bottom y, info left over)."""
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
@@ -2984,6 +2988,10 @@ def run_gui():
             text = lp["text"] if len(lp["text"]) <= cap_ else lp["text"][:cap_ - 1].rstrip() + "\u2026"
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
             my += 4 + h
+        banner = bool(ce and ce.get("banner"))
+        if banner:  # the banner takes the middle for a few seconds
+            canvas.delete(*canvas.find_all()[n0:])
+            my = top + 2
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (13 if any(t.get("record") for t in teams) else 0)
@@ -2991,7 +2999,9 @@ def run_gui():
             for i_ in canvas.find_all()[n0:]:
                 canvas.move(i_, 0, (nat - mh) / 2)
             my += (nat - mh) / 2
-            mh = nat  # natural height of a team column
+            mh = nat
+        if banner:
+            draw_banner(mx, top, top + max(nat, mh), mw, ce, ct, bgc)  # natural height of a team column
         lg = max(44, min(64, 44 + int(max(mh - nat, 0) // 4) * 4))  # a bigger logo, in steps so few sizes are cached
         gap = max(0, min(10, (mh - nat - (lg - 44)) / 3))  # what is left over is spread between the rows
         colb = top
@@ -2999,6 +3009,8 @@ def run_gui():
             cx = ix + COL / 2 if i == 0 else ix + ww - COL / 2
             yy = top
             img = logo_img(t["logo"], lg) if t.get("logo") else None
+            if ce and i == ce["side"]:
+                draw_rings(cx, yy + lg / 2, lg / 2, ce, ct, bgc)
             if img:
                 canvas.create_image(cx, yy, image=img, anchor="n", tags=tags)
             yy += lg + 2 + gap
@@ -3035,14 +3047,193 @@ def run_gui():
             yy += graphics(ix, yy, gl, bgc, ww)
         return yy, "\n".join(lines)
 
+    # ---- scoring celebrations: a ring pulse or card flash, plus a banner with the play ----------------
+    BANNER_SECS, GRAND_SECS, RING_SECS, FLASH_SECS, CONFETTI_SECS = 5.0, 7.0, 0.9, 1.2, 2.8
+    GOLD = "#fbbf24"
+
+    def card_key(r):
+        return r.get("_key") or (gkey(r["game"]) if r.get("game") else r["name"])
+
+    def celeb_of(r):
+        """(celebration, seconds since it began) for a card whose team just scored, else (None, 0)."""
+        e = session["celebs"].get(card_key(r))
+        t = _time.perf_counter() - e["t0"] if e else 0
+        return (e, t) if e and t < e["secs"] else (None, 0)
+
+    def headline_for(sport, n, prev, cur, side, text):
+        """(headline, show a banner) for a score of n points; baseball knows its grand slams."""
+        low = text.lower()
+        if sport == "baseball":
+            if "grand slam" in low or (n == 4 and prev[2]):
+                return "GRAND SLAM!", True
+            return ("HOME RUN" if "homer" in low or "home run" in low else "RUN SCORES" if n == 1 else f"{n} RUNS SCORE"), True
+        if sport == "football":
+            return {6: "TOUCHDOWN", 7: "TOUCHDOWN", 8: "TOUCHDOWN", 3: "FIELD GOAL", 2: "SAFETY", 1: "EXTRA POINT"}.get(n, "SCORE"), True
+        if sport in ("hockey", "soccer"):
+            return "GOAL!", True
+        if sport == "basketball":  # every basket would be too much: threes and lead changes only
+            if n == 3:
+                return "THREE-POINTER", True
+            before, after = prev[0] - prev[1], cur[0] - cur[1]
+            if before * after < 0 or (before == 0 and after != 0):
+                return "TAKES THE LEAD", True
+            return "", False
+        return "SCORE", True
+
+    def classify_play(sport, text):
+        """(headline, color, seconds) for a big play named in ESPN's last-play text, or None."""
+        low = text.lower()
+        if sport == "football":
+            if "intercept" in low:
+                return "INTERCEPTION", "#f87171", 3.5
+            if "fumble" in low:
+                return "FUMBLE", "#f87171", 3.5
+            if "sacked" in low or " sack" in low:
+                return "SACK", "#fb923c", 3.0
+            if "turnover on downs" in low:
+                return "TURNOVER ON DOWNS", "#f87171", 3.5
+            if "blocked" in low and ("punt" in low or "field goal" in low or "kick" in low):
+                return "BLOCKED KICK", "#a78bfa", 3.5
+        elif sport == "baseball":
+            if "triple play" in low:
+                return "TRIPLE PLAY", "#fbbf24", 4.0
+            if "double play" in low:
+                return "DOUBLE PLAY", "#34d399", 3.5
+            if "strikes out" in low or "struck out" in low or "strikeout" in low:
+                return "STRIKEOUT", "#60a5fa", 3.0
+            if "caught stealing" in low:
+                return "CAUGHT STEALING", "#fb923c", 3.0
+            if "picked off" in low:
+                return "PICKED OFF", "#fb923c", 3.0
+            if any(w in low for w in (" flies out", " grounds out", " lines out", " pops out", " fouls out", "forceout", "force out")):
+                return "OUT", "#9aa0a6", 2.0
+        elif sport == "basketball":
+            if " blocks " in low:
+                return "BLOCK", "#a78bfa", 2.5
+            if " steals " in low or "steal" in low and "stolen" not in low:
+                return "STEAL", "#fb923c", 2.5
+        elif sport == "hockey" and "penalty" in low:
+            return "PENALTY", "#fb923c", 3.0
+        return None
+
+    def detect_scores(groups):
+        """Compare live scores with the last refresh and start a celebration for each card that just scored."""
+        mode = ui_state.get("score_anim", "pulse")
+        now, seen = _time.perf_counter(), {}
+        plays = {}
+        for r in (r for grp in groups for r in grp):
+            if r["state"] != "in" or not r.get("score"):
+                continue
+            k = card_key(r)
+            if k in seen:
+                continue
+            try:
+                cur = (float(r["score"][0]), float(r["score"][1]))
+            except ValueError:
+                continue
+            gl = r.get("graphic") or []
+            gl = [gl] if isinstance(gl, dict) else gl
+            loaded = any(g_["kind"] == "baseball" and all(g_["bases"]) for g_ in gl)
+            prev = session["score_prev"].get(k)
+            seen[k] = (cur[0], cur[1], loaded)
+            ptext = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
+            plays[k] = ptext
+            if prev is None or mode == "off":
+                continue
+            d = (cur[0] - prev[0], cur[1] - prev[1])
+            if max(d) <= 0:  # nobody scored: maybe a big play (turnover, strikeout, double play...)
+                old = session["play_prev"].get(k)
+                big = classify_play((r.get("game") or {}).get("sport", ""), ptext) if old is not None and ptext and ptext != old else None
+                if big and k not in session["celebs"]:
+                    session["celebs"][k] = {"t0": now, "side": 0, "abbr": "", "color": big[1], "head": big[0], "mode": "play",
+                                            "detail": ptext if len(ptext) <= 90 else ptext[:89].rstrip() + "\u2026", "banner": True,
+                                            "grand": False, "secs": big[2], "bits": []}
+                continue
+            side = 0 if d[0] >= d[1] else 1
+            teams = r.get("teams") or []
+            t = teams[side] if len(teams) == 2 else {}
+            text = next((g_["text"] for g_ in gl if g_["kind"] == "lastplay"), "")
+            head, banner = headline_for((r.get("game") or {}).get("sport", ""), int(d[side]), prev, cur, side, text)
+            grand = head == "GRAND SLAM!"
+            import random
+            rnd = random.Random(now)
+            session["celebs"][k] = {
+                "t0": now, "side": side, "abbr": t.get("abbr", ""), "color": GOLD if grand else t.get("color") or "#34d399",
+                "head": head, "detail": text if len(text) <= 90 else text[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
+                "grand": grand, "secs": GRAND_SECS if grand else BANNER_SECS,
+                "bits": [(rnd.uniform(0.15, 0.85) * 3.14159, rnd.uniform(110, 330), rnd.choice((3, 4, 5)),
+                          rnd.choice((GOLD, "#ffffff", t.get("color") or "#34d399", "#f87171", "#34d399")))
+                         for _ in range(48)]}
+        session["score_prev"] = seen
+        session["play_prev"] = plays
+        if session["celebs"] and not session["celeb_on"]:
+            session["celeb_on"] = True
+            root.after(0, celeb_tick)
+
+    def celeb_tick():
+        now = _time.perf_counter()
+        live = {k: e for k, e in session["celebs"].items() if now - e["t0"] < e["secs"]}
+        finished = len(live) != len(session["celebs"])
+        session["celebs"] = live
+        if not session["anims"] or finished:
+            draw_all()
+        if live:
+            root.after(40, celeb_tick)
+        else:
+            session["celeb_on"] = False
+
+    def draw_rings(cx, cy, rad, ce, t, bgc):
+        """Rings expanding from a logo in the scoring team's color."""
+        if ce["mode"] != "pulse" and not ce["grand"]:
+            return
+        for delay in (0.0, 0.22):
+            pp = (t - delay) / RING_SECS
+            if 0 <= pp <= 1:
+                r_ = rad + 4 + 26 * (1 - (1 - pp) ** 2)
+                canvas.create_oval(cx - r_, cy - r_, cx + r_, cy + r_, outline=blend(bgc, ce["color"], 0.95 * (1 - pp)),
+                                   width=3 if pp < 0.5 else 2)
+
+    def draw_banner(cx, y0, y1, w, ce, t, bgc):
+        """The scoring banner centred in the box (y0..y1): team, what happened, the play. Fades in and out."""
+        a = max(0.0, min(1.0, t / 0.25, (ce["secs"] - t) / 0.5))
+        n0_ = len(canvas.find_all())
+        y = y0
+        if ce["abbr"]:
+            _, h = ctext(cx, y, ce["abbr"], FONTS["smallb"], blend(bgc, FG, a * 0.7), anchor="n")
+            y += h
+        _, h = ctext(cx, y, ce["head"], FONTS["ban"], blend(bgc, blend(ce["color"], "#ffffff", 0.3), a), anchor="n")
+        y += h
+        if ce["detail"]:
+            _, h = ctext(cx, y + 2, ce["detail"], FONTS["small"], blend(bgc, FG, a * 0.9), width=w, anchor="n", justify="center")
+            y += 2 + h
+        shift = (y1 - y0 - (y - y0)) / 2
+        for i_ in canvas.find_all()[n0_:]:
+            canvas.move(i_, 0, max(shift, 0))
+
+    def draw_confetti(x0, x1, y0, y1, ce, t):
+        """A grand slam: a burst of confetti from the middle of the card."""
+        if not ce["grand"] or t > CONFETTI_SECS:
+            return
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        for ang, speed, size, col in ce["bits"]:
+            x = cx + speed * math.cos(ang) * t
+            y = cy - speed * math.sin(ang) * t * 0.7 + 260 * t * t
+            if x0 <= x <= x1 and y0 <= y <= y1:
+                sz = size * (1 - max(0.0, t - CONFETTI_SECS + 0.6) / 0.6)
+                canvas.create_rectangle(x - sz, y - sz, x + sz, y + sz, fill=col, outline="")
+
     def draw_card(r, x, y, w, final):
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
+        ce, ct = celeb_of(r)  # this card's team just scored
+        flashing = bool(ce) and ce["mode"] == "flash" and ct < FLASH_SECS
+        if flashing:
+            bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
         cx0, cw_ = x + 2, w - 4
         tags = ()
         if r.get("game") or r.get("url"):
             tags = (new_hit(("game", r)),)
-        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc) if tint else None
+        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc) if (tint or flashing) else None
         hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
         yy = y + GAP
@@ -3055,7 +3246,7 @@ def run_gui():
         info = r.get("info") or ""
         lw = ww
         if ui_state.get("layout", "scoreboard") == "scoreboard" and len(r.get("teams") or []) == 2 and r["state"] in ("pre", "in", "post"):
-            yy, info = draw_scoreboard(r, cx0, cw_, yy, bgc, tags, gl, tos, info, lp)
+            yy, info = draw_scoreboard(r, cx0, cw_, yy, bgc, tags, gl, tos, info, lp, ce, ct)
         else:
             text_w = ww
             if sc:  # big score at the top right; the team names wrap to the space on its left
@@ -3084,12 +3275,18 @@ def run_gui():
                 img = logo_img(u, lg_size)
                 if img:
                     canvas.create_image(ix, yy + i * (lg_size + 2), image=img, anchor="nw", tags=tags)
+                if ce and i == (ce["side"] if len(urls) == 2 else (0 if ce["side"] == 0 else -1)):
+                    draw_rings(ix + lg_size / 2, yy + i * (lg_size + 2) + lg_size / 2, lg_size / 2, ce, ct, bgc)
             _, h = ctext(tx, yy, r["name"], FONTS["name"], FG, width=text_w, tags=tags)
             y_head = yy
             yy += h
             if r["line"]:
                 _, h = ctext(tx, yy, r["line"], FONTS["line"], DIM, width=text_w, tags=tags)
                 yy += h
+            if ce and ce.get("banner"):  # the banner covers the name and opponent for a few seconds
+                by1 = max(yy, y_head + 40)
+                canvas.create_rectangle(tx - 2, y_head - 2, tx + text_w + 2, by1, fill=bgc, outline="")
+                draw_banner(tx + text_w / 2, y_head, by1, text_w, ce, ct, bgc)
             if sc:
                 yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
             bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases, count and batter/pitcher get their own row
@@ -3148,6 +3345,8 @@ def run_gui():
                 ctx = {"key": key, "kind": "card", "H": H, "y0": y0, "cover": cover, "x0": cx0 - 1, "x1": cx0 + cw_ + 1,
                        "bg": bgid, "hit": hit, "geo": (cx0, y, cx0 + cw_), "dy": 0}
         bottom = yy + GAP
+        if ce:
+            draw_confetti(cx0, cx0 + cw_, y, bottom, ce, ct)
         if bgid:
             canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
         if hit:
@@ -3522,6 +3721,7 @@ def run_gui():
 
     def render(results, pin_results, playoffs, leagues=()):
         loading["on"] = False
+        detect_scores((results, pin_results, playoffs, leagues))
         last["args"] = (results, pin_results, playoffs, leagues)  # unfiltered, so view changes can re-render
         stamp.config(text="Last Refreshed " + datetime.now().strftime("%I:%M %p").lstrip("0"))
         any_live = any(r["state"] == "in" for grp in (results, pin_results, playoffs, leagues) for r in grp)
@@ -3805,7 +4005,15 @@ def run_gui():
             fit()
         styled_option(win, layout_choice, [l for l, _ in LAYOUT_CHOICES], command=on_layout, width=12).grid(
             row=6, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=7, column=0, padx=16, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Score animation", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=7, column=0, padx=16, pady=(6, 4), sticky="w")
+        anim_choice = tk.StringVar(value=next((l for l, v in SCORE_ANIM_CHOICES if v == ui_state.get("score_anim", "pulse")), "Pulse + banner"))
+
+        def on_anim(label):
+            ui_state["score_anim"] = dict(SCORE_ANIM_CHOICES)[label]
+            save_state(ui_state)
+        styled_option(win, anim_choice, [l for l, _ in SCORE_ANIM_CHOICES], command=on_anim, width=12).grid(
+            row=7, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=8, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
             import shutil
@@ -3816,8 +4024,8 @@ def run_gui():
             session["sig"] = None
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
-        styled_button(win, "Clear cache", clear_logos).grid(row=7, column=1, padx=16, pady=(6, 4), sticky="e")
-        styled_button(win, "Close", win.destroy).grid(row=8, column=1, padx=16, pady=(10, 16), sticky="e")
+        styled_button(win, "Clear cache", clear_logos).grid(row=8, column=1, padx=16, pady=(6, 4), sticky="e")
+        styled_button(win, "Close", win.destroy).grid(row=9, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         win.geometry(f"+{root.winfo_x() + 30}+{root.winfo_y() + 30}")
 
