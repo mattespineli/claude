@@ -1036,12 +1036,18 @@ def situation_graphic(sport, comp, league=""):
     if last and not _halftime(comp):
         out.append({"kind": "lastplay", "text": last})
     # per-team remaining timeouts / ABS challenges: dots under each team in the Scoreboard layout
-    side = lambda k, words: next((int(v) for key, v in sit.items() if key.lower().startswith(k) and isinstance(v, (int, float))
-                                  and any(w in key.lower() for w in words)), None)
+    def side(k, words):  # a team's count, or None when ESPN leaves it out (which is not the same as 0)
+        for key, v in sit.items():
+            if key.lower().startswith(k) and any(w in key.lower() for w in words):
+                try:
+                    return int(float(v))
+                except (TypeError, ValueError):
+                    return None
+        return None
     for words, total in ((("timeout",), 3), (("challenge",), 2)):
         h_, a_ = side("home", words), side("away", words)
         if h_ is not None or a_ is not None:
-            out.append({"kind": "timeouts", "home": h_ or 0, "away": a_ or 0, "total": total})
+            out.append({"kind": "timeouts", "home": h_, "away": a_, "total": total})
     return out or None
 
 
@@ -4067,6 +4073,10 @@ if __name__ == "__main__":
                 stats = sorted({st.get("name") for c in comp.get("competitors", []) for st in c.get("statistics", []) or []})
                 print(f"{sp}/{lg} {e.get('shortName')}: situation keys={sorted((comp.get('situation') or {}).keys())} stats={stats}")
                 print("  ->", situation_text(sp, comp).replace("\n", " | ") or "(nothing)")
+                sit_ = comp.get("situation") or {}
+                counts_ = {k: v for k, v in sit_.items() if "imeout" in k or "hallenge" in k}
+                if counts_:
+                    print("  timeouts/challenges:", counts_, "| teams:", [(c.get("homeAway"), c.get("team", {}).get("abbreviation")) for c in comp.get("competitors", [])])
     elif "--debug-team" in sys.argv:  # --debug-team sdsu : why does this team show (or not show) a game?
         q = sys.argv[sys.argv.index("--debug-team") + 1].lower()
         for entry in load_config()["teams"]:
