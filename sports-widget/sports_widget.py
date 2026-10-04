@@ -910,6 +910,15 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
             out["home_win_start"] = float(((data.get("predictor") or {}).get("homeTeam") or {}).get("gameProjection")) / 100
         except (TypeError, ValueError):
             pass
+    def thin(vals, n=80):  # at most n points, evenly picked, always keeping the last
+        if len(vals) <= n:
+            return vals
+        return [vals[round(i * (len(vals) - 1) / (n - 1))] for i in range(n)]
+    try:
+        out["wp_series"] = thin([1 - float(p_["homeWinPercentage"]) for p_ in wp if p_.get("homeWinPercentage") is not None])  # the away (left) team's chance
+    except (TypeError, ValueError):
+        out["wp_series"] = []
+
     def periods(c):
         return [str(l.get("displayValue") if l.get("displayValue") not in (None, "") else int(float(l.get("value") or 0)))
                 for l in c.get("linescores") or []]
@@ -921,6 +930,13 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
         drives = data.get("drives") or {}
         for d in (drives.get("previous") or []) + ([drives["current"]] if drives.get("current") else []):
             plays += d.get("plays") or []
+    flow = []  # the away (left) team's lead after each play that has the score
+    for p in plays:
+        try:
+            flow.append(float(p["awayScore"]) - float(p["homeScore"]))
+        except (KeyError, TypeError, ValueError):
+            pass
+    out["flow"] = thin(flow) if len(flow) > 1 else []
     lines = []
     for p in plays[-max_plays:][::-1]:
         text = p.get("text") or p.get("shortText")
@@ -3184,6 +3200,25 @@ def run_gui():
             yy += h + 1
         return yy - y
 
+    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note=""):
+        """A small line of how a game went: vals run from -1 (all right team) to 1 (all left team) through 0 (even). Each stretch
+        takes the colour of the team ahead there. Returns the height used."""
+        _, h = ctext(x, y + 4, label, FONTS["small"], DIM)
+        if note:
+            ctext(x + w, y + 4, note, FONTS["small"], DIM, anchor="ne")
+        top, H = y + 4 + h + 2, 26
+        mid = top + H / 2
+        canvas.create_line(x, mid, x + w, mid, fill=blend(bgc, DIM, 0.45), dash=(2, 3))
+        n = len(vals)
+        pts = [(x + w * i / (n - 1), mid - v_ * H / 2) for i, v_ in enumerate(vals)]
+        for (x0_, y0_), (x1_, y1_), v0_, v1_ in zip(pts, pts[1:], vals, vals[1:]):
+            m_ = (v0_ + v1_) / 2
+            col = ca if m_ > 0 else cb if m_ < 0 else DIM
+            canvas.create_line(x0_, y0_, x1_, y1_, fill=col, width=2, capstyle="round")
+        ex_, ey_ = pts[-1]
+        canvas.create_oval(ex_ - 2.5, ey_ - 2.5, ex_ + 2.5, ey_ + 2.5, fill=ca if vals[-1] > 0 else cb if vals[-1] < 0 else DIM, outline="")
+        return 4 + h + 2 + H + 4
+
     def draw_details(x, y, w, bgc, d, win_shown=False, g=None):  # win_shown: no win probability here (shown on the card, or game over)
         """Expanded-game section; returns its height."""
         y0 = y
@@ -3197,6 +3232,12 @@ def run_gui():
         y += 11
         if d.get("linescore") and d.get("state") != "pre":
             y += draw_linescore(x, y, w, d, g) + 4
+        ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
+        if d.get("flow") and d.get("state") != "pre" and ui_state.get("sparklines", True):  # the score margin over the game, under the line score
+            m_ = max(abs(v_) for v_ in d["flow"]) or 1
+            big_ = max(d["flow"], key=abs)
+            lead_ = f"Largest lead {d['away_abbr'] if big_ > 0 else d['home_abbr']} {abs(big_):g}" if big_ else ""
+            y += draw_spark(x, y, w, bgc, [v_ / m_ for v_ in d["flow"]], ca_, cb_, "Game flow", lead_)
         if d.get("state") == "post" and d.get("home_win_start") is not None:  # the final is 100-0: show where the game began
             hw = round(d["home_win_start"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
@@ -3207,6 +3248,9 @@ def run_gui():
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
             y += graphics(x, y, {"kind": "versus", "label": "Win probability", "a_name": d["away_abbr"], "a": 100 - hw,
                                  "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc, w)
+        ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
+        if len(d.get("wp_series") or []) > 1 and ui_state.get("sparklines", True):
+            y += draw_spark(x, y, w, bgc, [v_ * 2 - 1 for v_ in d["wp_series"]], ca_, cb_, "Win probability over the game")
         recent = d["plays"][:8] if d.get("state") != "post" else []  # a finished game has its box score instead
         for title, items in (("Scoring", d["scoring"]), ("Recent plays", recent)):
             if items:
@@ -6271,7 +6315,19 @@ def run_gui():
             save_state(ui_state)
         styled_option(win, shake_choice, list(SHAKES), command=on_shake, width=12).grid(
             row=10, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Sparklines", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=11, column=0, padx=16, pady=(6, 4), sticky="w")
+        spark_choice = tk.StringVar(value="On" if ui_state.get("sparklines", True) else "Off")
+
+        def on_spark(label):  # the win-probability and game-flow lines in an expanded game
+            ui_state["sparklines"] = label == "On"
+            save_state(ui_state)
+            session["sig"] = None
+            draw_all()
+            session["sig"] = compute_sig()
+            fit()
+        styled_option(win, spark_choice, ["On", "Off"], command=on_spark, width=12).grid(
+            row=11, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Animations", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
         win_ref[0] = win
         tests = test_buttons(win)
         shown = [False]
@@ -6284,7 +6340,7 @@ def run_gui():
             if panel is None:
                 tests.grid_remove()
             if panel is not None:  # the window grows to the right and stays where it is (nudged left only if it would leave the screen)
-                panel.grid(row=0, column=2, rowspan=16, padx=(0, 16), pady=16, sticky="n")
+                panel.grid(row=0, column=2, rowspan=17, padx=(0, 16), pady=16, sticky="n")
                 win.update_idletasks()
                 l, _t, r, _b = screen_bounds()
                 if win.winfo_x() + win.winfo_reqwidth() > r:
@@ -6301,8 +6357,8 @@ def run_gui():
         def toggle_tests():
             set_side(None if shown[0] else "tests")
         test_btn = styled_button(win, "Test...", toggle_tests)
-        test_btn.grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
+        test_btn.grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Team logos", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=13, column=0, padx=16, pady=(6, 4), sticky="w")
 
         def clear_logos():
             import shutil
@@ -6313,10 +6369,10 @@ def run_gui():
             session["sig"] = None
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
-        styled_button(win, "Clear cache", clear_logos).grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Background", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=13, column=0, padx=16, pady=(6, 4), sticky="w")
+        styled_button(win, "Clear cache", clear_logos).grid(row=13, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Background", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=14, column=0, padx=16, pady=(6, 4), sticky="w")
         bgbox = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground=PANEL, highlightcolor=DIM)  # a HEX field with a preview
-        bgbox.grid(row=13, column=1, padx=16, pady=(6, 4), sticky="e")
+        bgbox.grid(row=14, column=1, padx=16, pady=(6, 4), sticky="e")
         bg_swatch = tk.Canvas(bgbox, width=20, height=20, bg=PANEL, highlightthickness=0)
         bg_dot = bg_swatch.create_oval(3, 3, 17, 17, fill=BG, outline=DIM)
         bg_swatch.pack(side="left", padx=(6, 0))
@@ -6341,7 +6397,7 @@ def run_gui():
         bg_entry.bind("<Return>", on_bg_entry)
         bg_entry.bind("<FocusOut>", on_bg_entry)
         presets = tk.Frame(win, bg=BG)  # the default, then the colours of the teams you follow
-        presets.grid(row=14, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
+        presets.grid(row=15, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
         bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8), anchor="w")
         bg_tip.grid(row=99, column=0, columnspan=8, sticky="w", pady=(2, 0))  # its own line, so it never widens the window
         n_presets = [0]
@@ -6379,7 +6435,7 @@ def run_gui():
                     pass  # the window was closed meanwhile
             root.after(0, show)
         threading.Thread(target=load_team_colors, daemon=True).start()
-        styled_button(win, "Close", close).grid(row=15, column=1, padx=16, pady=(10, 16), sticky="e")
+        styled_button(win, "Close", close).grid(row=16, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         sp = ui_state.get("settings_pos")
         if isinstance(sp, list) and len(sp) == 2:  # where it was last time (kept on screen)
