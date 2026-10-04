@@ -2236,10 +2236,26 @@ def run_gui():
     entries = cfg["teams"]
     default_refresh = int(cfg.get("refresh_seconds", 60))
 
-    BG, FG, DIM = "#1e1e24", "#f2f2f2", "#9aa0a6"
+    DEFAULT_BG = "#1e1e24"
+
+    def usable_bg(h):
+        """A chosen panel colour, darkened if it is so light that the text could not be read."""
+        h = "#" + str(h).lstrip("#").lower()
+        while _lum(h) > 0.3:
+            h = blend(h, "#000000", 0.12)
+        return h
+
+    def theme_for(bg):
+        """(BG, PANEL, HOVER, TRACK): the panel colour and the shades the controls and bars derive from it."""
+        if bg == DEFAULT_BG:
+            return bg, "#2a2a33", "#3a3a46", "#3a3a44"
+        return bg, blend(bg, "#ffffff", 0.07), blend(bg, "#ffffff", 0.15), blend(bg, "#ffffff", 0.14)
+
+    _saved_bg = (load_state() or {}).get("bg")
+    BG, PANEL, HOVER, TRACK = theme_for(usable_bg(_saved_bg) if isinstance(_saved_bg, str) and _valid_hex(_saved_bg) else DEFAULT_BG)
+    FG, DIM = "#f2f2f2", "#9aa0a6"
     COLORS = {"in": "#34d399", "pre": DIM, "post": FG, "none": DIM, "err": "#f87171"}
-    PANEL, HOVER = "#2a2a33", "#3a3a46"
-    TRACK, LIVE_RED = "#3a3a44", "#ef4444"  # empty-bar track, LIVE badge
+    LIVE_RED = "#ef4444"  # LIVE badge
     FLAG_YELLOW = "#facc15"  # PENALTY badge (the color of a penalty flag)
     UI_FONT = ("Segoe UI", 9)
     _font_objs = {}
@@ -5813,6 +5829,49 @@ def run_gui():
         styled_button(win, "Track selected", add).pack(pady=(0, 12))
         load()
 
+    def set_background(h):
+        """Make `h` the panel's background colour everywhere, live: derived shades, every widget and drawing, the baked icons."""
+        nonlocal BG, PANEL, HOVER, TRACK
+        h = usable_bg(h)
+        if h == BG:
+            return
+        old = (BG, PANEL, HOVER, TRACK)
+        BG, PANEL, HOVER, TRACK = theme_for(h)
+        mapping = {o_: n_ for o_, n_ in zip(old, (BG, PANEL, HOVER, TRACK))}
+
+        def walk(w, canv_items):
+            for opt in ("background", "highlightbackground", "activebackground", "troughcolor"):
+                try:
+                    v_ = str(w.cget(opt)).lower()
+                    if v_ in mapping:
+                        w.configure(**{opt: mapping[v_]})
+                except tk.TclError:
+                    pass
+            if isinstance(w, tk.Canvas) and w is not canvas and w is not scroll:
+                for i_ in w.find_all():
+                    for opt in ("fill", "outline"):
+                        try:
+                            v_ = str(w.itemcget(i_, opt)).lower()
+                            if v_ in mapping:
+                                w.itemconfigure(i_, **{opt: mapping[v_]})
+                        except tk.TclError:
+                            pass
+            for ch in w.winfo_children():
+                walk(ch, canv_items)
+        walk(root, None)
+        refresh_img.put(" ".join("{" + " ".join(row) + "}" for row in aa_refresh_pixels(34, FG, BG)))
+        gear_img.put(" ".join("{" + " ".join(row) + "}" for row in aa_gear_pixels(34, FG, BG)))
+        view_imgs.clear()
+        icon["rows"].clear()
+        threading.Thread(target=icon_precompute, daemon=True).start()
+        draw_view_icon(ui_state.get("view", "full"))
+        ui_state["bg"] = None if h == DEFAULT_BG else h
+        save_state(ui_state)
+        session["sig"] = None
+        draw_all()
+        session["sig"] = compute_sig()
+        fit()
+
     def settings_dialog():
         win = tk.Toplevel(root)
         win.title("Settings")
@@ -5875,12 +5934,39 @@ def run_gui():
         val.bind("<Up>", lambda e: step(1))
         val.bind("<Down>", lambda e: step(-1))
 
-        scale = tk.Scale(win, from_=30, to=100, orient="horizontal", showvalue=False, length=240, command=on_scale,
+        bar = tk.Frame(win, bg=BG)  # the slider with a left and a right arrow for fine adjustment
+        bar.grid(row=1, column=0, columnspan=2, padx=16, pady=(0, 10))
+        scale = tk.Scale(bar, from_=30, to=100, orient="horizontal", showvalue=False, length=200, command=on_scale,
                          bg=BG, fg=FG, troughcolor=PANEL, highlightthickness=0, bd=0, sliderrelief="flat",
                          activebackground="#8a8f98")
         scale.set(int(ui_state.get("opacity", 0.95) * 100))
-        scale.grid(row=1, column=0, columnspan=2, padx=16, pady=(0, 10))
         scale.bind("<ButtonRelease-1>", on_release)
+
+        def arrow_button(pts, d, side):
+            c_ = tk.Canvas(bar, width=24, height=26, bg=BG, highlightthickness=0, cursor="hand2")
+            tri = c_.create_polygon(*pts, fill=DIM, outline=DIM)
+            held = {"id": None}
+
+            def tick():
+                step(d)
+                held["id"] = c_.after(70, tick)
+
+            def press(_e):
+                step(d)
+                held["id"] = c_.after(400, tick)  # holding the arrow keeps stepping
+
+            def release(_e):
+                if held["id"]:
+                    c_.after_cancel(held["id"])
+                    held["id"] = None
+            c_.tag_bind(tri, "<Enter>", lambda e: c_.itemconfigure(tri, fill=FG, outline=FG))
+            c_.tag_bind(tri, "<Leave>", lambda e: (c_.itemconfigure(tri, fill=DIM, outline=DIM), release(e)))
+            c_.tag_bind(tri, "<ButtonPress-1>", press)
+            c_.tag_bind(tri, "<ButtonRelease-1>", release)
+            c_.pack(side=side)
+        arrow_button((16, 6, 8, 13, 16, 20), -1, "left")
+        scale.pack(side="left")
+        arrow_button((8, 6, 16, 13, 8, 20), 1, "left")
         tk.Label(win, text="Refresh every", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=2, column=0, padx=16, pady=(6, 4), sticky="w")
         cur = int(ui_state.get("refresh_seconds", default_refresh))
         choice = tk.StringVar(value=next((l for l, v in REFRESH_CHOICES if v == cur), f"{cur} seconds"))
@@ -5998,6 +6084,48 @@ def run_gui():
             draw_all()  # redraws and downloads the logos again
             session["sig"] = compute_sig()
         styled_button(win, "Clear cache", clear_logos).grid(row=11, column=1, padx=16, pady=(6, 4), sticky="e")
+        tk.Label(win, text="Background", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=12, column=0, padx=16, pady=(6, 4), sticky="w")
+        bgbox = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground=PANEL, highlightcolor=DIM)  # a HEX field with a preview
+        bgbox.grid(row=12, column=1, padx=16, pady=(6, 4), sticky="e")
+        bg_swatch = tk.Canvas(bgbox, width=20, height=20, bg=PANEL, highlightthickness=0)
+        bg_dot = bg_swatch.create_oval(3, 3, 17, 17, fill=BG, outline=DIM)
+        bg_swatch.pack(side="left", padx=(6, 0))
+        bg_hex = tk.StringVar(value=BG)
+        bg_entry = tk.Entry(bgbox, width=8, textvariable=bg_hex, bg=PANEL, fg=FG, insertbackground=FG, relief="flat", bd=0,
+                            highlightthickness=0, font=UI_FONT)
+        bg_entry.pack(side="left", padx=(4, 8), ipady=3)
+
+        def apply_bg(h):
+            set_background(h)
+            bg_hex.set(BG)
+            bg_swatch.itemconfigure(bg_dot, fill=BG)
+
+        def on_bg_entry(_=None):
+            t_ = bg_hex.get().strip().lstrip("#")
+            if len(t_) == 3 and all(c_ in "0123456789abcdefABCDEF" for c_ in t_):
+                t_ = "".join(c_ * 2 for c_ in t_)  # #abc means #aabbcc
+            if len(t_) == 6 and all(c_ in "0123456789abcdefABCDEF" for c_ in t_):
+                apply_bg("#" + t_)
+            else:
+                bg_hex.set(BG)  # not a colour: put the current one back
+        bg_entry.bind("<Return>", on_bg_entry)
+        bg_entry.bind("<FocusOut>", on_bg_entry)
+        presets = tk.Frame(win, bg=BG)  # the default, then the colours of the teams you follow
+        presets.grid(row=13, column=0, columnspan=2, padx=16, pady=(0, 6), sticky="w")
+        team_cols = []
+        for r_ in (last.get("args") or ([],))[0]:
+            if r_.get("tint") and r_["tint"] not in [c_ for _n, c_ in team_cols]:
+                team_cols.append((re.sub(r"\s*\(.*$", "", r_["name"]), r_["tint"]))
+        for name_, col_ in [("Default", DEFAULT_BG)] + team_cols[:9]:
+            shown_ = usable_bg(col_)
+            c_ = tk.Canvas(presets, width=26, height=26, bg=BG, highlightthickness=0, cursor="hand2")
+            c_.create_oval(3, 3, 23, 23, fill=shown_, outline=DIM, width=1)
+            c_.bind("<ButtonRelease-1>", lambda e, h_=col_: apply_bg(h_))
+            c_.bind("<Enter>", lambda e, n_=name_: bg_tip.config(text=n_))
+            c_.bind("<Leave>", lambda e: bg_tip.config(text="Presets: default and your teams"))
+            c_.pack(side="left", padx=2)
+        bg_tip = tk.Label(presets, text="Presets: default and your teams", bg=BG, fg=DIM, font=("Segoe UI", 8))
+        bg_tip.pack(side="left", padx=(8, 0))
         styled_button(win, "Close", close).grid(row=14, column=1, padx=16, pady=(10, 16), sticky="e")
         win.update_idletasks()
         sp = ui_state.get("settings_pos")
