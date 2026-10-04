@@ -56,7 +56,7 @@ Right-click a game → **Open game on ESPN** opens its ESPN page.
 
 Right-click → **Update & Restart** runs `git pull` and relaunches the widget (needs Git on PATH; shows the error if the pull fails). **Restart** relaunches without pulling.
 
-Right-click → **Settings...** → **Dock** (Off / Left edge / Right edge, default Off) docks the widget to that edge of the screen. It slides away leaving a thin strip, and slides back out when the mouse touches the strip; it stays out while a menu or dialog is open. While docked, the pin button in the header turns autohide off (stays out) and on, and the Title view is unavailable.
+Right-click → **Settings...** → **Dock** (Off / Left edge / Right edge, default Off) docks the widget to that edge of the screen (or just drag the widget until the pointer touches a screen edge, and drag it away from the edge to undock). It slides away leaving a thin strip, and slides back out when the mouse touches the strip; it stays out while a menu or dialog is open. While docked, the pin button in the header turns autohide off (stays out) and on, and the Title view is unavailable.
 
 Right-click → **Settings...** to adjust opacity (30-100%, slider or typed value) and refresh cadence (15 seconds to 15 minutes). **Digital scores** switches the big scores to a seven-segment display. Team logos are downloaded once into `logos/`. Teams that are out of season sit in a collapsed *Out of season* group under My Teams. Live MLB games show the base diamond, count and batter/pitcher on the right, with a base diamond with outs; live NFL games show a field-position strip (ball, first-down line, red zone).
 

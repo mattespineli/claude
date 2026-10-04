@@ -3185,11 +3185,20 @@ def run_gui():
         close_menu()
         if e.widget not in (grip, scroll):  # grip resizes, scrollbar scrolls
             drag["x"], drag["y"] = e.x_root - root.winfo_x(), e.y_root - root.winfo_y()
+            drag["px"] = e.x_root
             drag["moved"] = False
+    UNDOCK_DIST, DOCK_SNAP = 60, 8  # px dragged away to undock; px from a screen edge to dock on release
+
     def move(e):
         if e.widget not in (grip, scroll) and "x" in drag:
             drag["moved"] = True
-            if not docked():  # a docked widget stays put on its edge
+            if docked():  # a docked widget stays on its edge until it is dragged well away from it
+                if abs(e.x_root - drag.get("px", e.x_root)) > UNDOCK_DIST:
+                    set_dock("off")
+                    root.update_idletasks()
+                    drag["x"], drag["y"] = root.winfo_width() // 2, 20  # carry it by its top centre
+                    root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
+            else:
                 root.geometry(f"+{e.x_root - drag['x']}+{e.y_root - drag['y']}")
 
     def hit_at(e):
@@ -3205,6 +3214,12 @@ def run_gui():
     def on_release(e):
         if drag.get("moved") and e.widget not in (grip, scroll):
             save_geometry()  # the window was dragged somewhere new
+            if not docked():  # let go with the pointer at a screen edge: dock there
+                l, _t, r, _b = screen_bounds()
+                if e.x_root <= l + DOCK_SNAP:
+                    set_dock("left")
+                elif e.x_root >= r - 1 - DOCK_SNAP:
+                    set_dock("right")
         h = hit_at(e)
         if not h or drag.get("moved"):
             return
