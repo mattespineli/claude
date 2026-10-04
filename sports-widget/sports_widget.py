@@ -4693,7 +4693,7 @@ def run_gui():
                     k_ = a * max(0.0, 1 - max(0.0, t - INFO_OUT) / 1.4)  # 1 as it lands, down to 0 as it settles
                     canvas.coords(hi_, bx_ + 3.0 * k_ * math.sin(t * 75), by_ + 3.0 * k_ * math.cos(t * 91))
                     sz_ = max(fs_, round(fs_ * (1 + 0.3 * ease(k_))))
-                    canvas.itemconfigure(hi_, font=("Segoe UI", sz_, "bold"), width=round(ww_ * sz_ / fs_))  # it swells, then shrinks back; the wrap grows with it so lines break the same
+                    canvas.itemconfigure(hi_, font=("Segoe UI", sz_, "bold"))  # it swells, then shrinks back
                 ia = info_alpha(ce, t)
                 for i_, opt, base in lay["fade"]:
                     if opt == "pill":
@@ -4976,7 +4976,17 @@ def run_gui():
             bfont = ("Segoe UI", size_, "bold")
             if max(text_width(bfont, w_) for w_ in ce["head"].split()) <= w - 4:
                 break
-        i_, h = ctext(cx, y, ce["head"], bfont, blend(bgc, col, a), width=w, anchor="n", justify="center")
+        head_txt, head_w = ce["head"], w
+        if shakes(ce):  # break the lines once at normal size and never wrap again: the swollen text just overflows
+            lines_, cur_ = [], ""
+            for wd_ in ce["head"].split():
+                if cur_ and text_width(bfont, cur_ + " " + wd_) > w:
+                    lines_.append(cur_)
+                    cur_ = wd_
+                else:
+                    cur_ = (cur_ + " " + wd_).strip()
+            head_txt, head_w = "\n".join(lines_ + [cur_]), None
+        i_, h = ctext(cx, y, head_txt, bfont, blend(bgc, col, a), width=head_w, anchor="n", justify="center")
         parts.append((i_, col))
         head_i = i_
         y += h
