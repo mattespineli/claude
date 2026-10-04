@@ -4155,6 +4155,19 @@ def run_gui():
         styled_button(win, "Track selected", add).pack(pady=(0, 12))
         load()
 
+    def place_beside(win):
+        """Put a dialog next to the widget (right of it, else left), always fully on screen, so it covers no cards."""
+        win.update_idletasks()
+        w, h = win.winfo_reqwidth(), win.winfo_reqheight()
+        l, t, r, b = screen_bounds()
+        x = root.winfo_x() + root.winfo_width() + 10
+        if x + w > r:  # no room on the right (the widget is near that edge, or docked there)
+            x = root.winfo_x() - w - 10
+            if x < l:
+                x = max(l, r - w)
+        y = max(t, min(root.winfo_y() + 30, b - h))
+        win.geometry(f"+{x}+{y}")
+
     def settings_dialog():
         win = tk.Toplevel(root)
         win.title("Settings")
@@ -4280,8 +4293,7 @@ def run_gui():
             shown[0] = not shown[0]
             if shown[0]:  # the window grows sideways, and moves beside the widget so the cards stay visible
                 tests.grid(row=0, column=2, rowspan=13, padx=(0, 16), pady=16, sticky="n")
-                win.update_idletasks()
-                win.geometry(f"+{root.winfo_x() + root.winfo_width() + 10}+{root.winfo_y() + 30}")
+                place_beside(win)
             else:
                 tests.grid_remove()
             test_btn.itemconfigure(2, text="Hide" if shown[0] else "Test...")
