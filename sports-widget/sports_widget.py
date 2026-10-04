@@ -2165,6 +2165,21 @@ def run_gui():
         store = ui_state if n["persist"] else session
         if store.get(key, n["default"]):
             start_anim(key, False, on_done=lambda: set_open(n, False))  # shrink first, then flip the state
+        elif key.startswith("st:"):  # standings behave like an accordion: one league open at a time
+            others = [k for k in (f"st:{a}" for a, _, _ in STANDINGS_LEAGUES)
+                      if k != key and ui_state.get(k, k == f"st:{STANDINGS_LEAGUES[0][0]}")]
+            if not others:
+                set_open(n, True)
+                start_anim(key, True)
+                return
+            for extra in others[1:]:
+                set_open({"key": extra, "persist": True}, False)
+
+            def open_new():
+                set_open({"key": others[0], "persist": True}, False)
+                set_open(n, True)
+                start_anim(key, True)
+            start_anim(others[0], False, on_done=open_new)  # collapse the open league, then expand this one
         else:
             set_open(n, True)
             start_anim(key, True)
