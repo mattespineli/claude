@@ -1293,6 +1293,36 @@ def _versus(label, comp, names):
             "a_color": ca, "b_color": cb}
 
 
+def abs_challenges(comp, league):
+    """ABS challenges left per team in a live MLB game: {"home": n, "away": n} or None. ESPN's scoreboard has no such field, so
+    each team starts with 2 and loses one for every play in the game summary that reads as a challenge it lost.
+    (Assumption: a lost challenge's play text says "challenge" and one of stands / upheld / confirmed / unsuccessful / lost,
+    and names the team by `team.id` or by abbreviation.)"""
+    if league != "mlb" or not comp.get("id"):
+        return None
+    try:
+        data = fetch_summary_cached("baseball", league, comp["id"])
+    except Exception:
+        return None
+    teams = {str(c.get("id", (c.get("team") or {}).get("id", ""))): c for c in comp.get("competitors", [])}
+    left = {"home": 2, "away": 2}
+    plays = data.get("plays") or []
+    if not plays:
+        for d in ((data.get("drives") or {}).get("previous") or []):
+            plays += d.get("plays") or []
+    for p in plays:
+        text = str(p.get("text") or p.get("shortText") or "")
+        low = text.lower()
+        if "challenge" not in low or not re.search(r"stands|upheld|confirmed|unsuccessful|lost|denied", low):
+            continue
+        c = teams.get(str((p.get("team") or {}).get("id", "")))
+        if c is None:
+            c = next((c_ for c_ in teams.values() if (c_.get("team") or {}).get("abbreviation", "\0") in text), None)
+        if c is not None and c.get("homeAway") in left:
+            left[c["homeAway"]] = max(0, left[c["homeAway"]] - 1)
+    return left
+
+
 def situation_graphic(sport, comp, league=""):
     """Graphics for a live game: list of dicts, or None."""
     out = []
@@ -1357,6 +1387,10 @@ def situation_graphic(sport, comp, league=""):
         h_, a_ = side("home", words), side("away", words)
         if h_ is not None or a_ is not None:
             out.append({"kind": "timeouts", "home": h_, "away": a_, "total": total})
+    if sport == "baseball" and not any(g_["kind"] == "timeouts" for g_ in out):
+        ab = abs_challenges(comp, league)
+        if ab:
+            out.append({"kind": "timeouts", "home": ab["home"], "away": ab["away"], "total": 2})
     if sport == "basketball":  # who has the ball, and which team is shooting bonus free throws
         ha_of = {str(c.get("id", (c.get("team") or {}).get("id", ""))): c.get("homeAway") for c in comp.get("competitors", [])}
         poss = ha_of.get(str(sit.get("possession") or ""))
