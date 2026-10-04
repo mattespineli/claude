@@ -1323,6 +1323,40 @@ def abs_challenges(comp, league):
     return left
 
 
+def hoops_from_plays(comp, league):
+    """Basketball timeouts left and bonus, counted from the game summary's plays (ESPN's scoreboard has neither):
+    {"left": {"home": n, "away": n}, "bonus": {"home": bool, "away": bool}} or None.
+    Assumes plays carry the acting `team.id`, `period.number` and text such as "Warriors Full Timeout" / "Shooting foul";
+    a team is in the bonus once the other team has 5 fouls in the period (4 in overtime; 7 in a men's college half)."""
+    if not comp.get("id"):
+        return None
+    try:
+        data = fetch_summary_cached("basketball", league, comp["id"])
+    except Exception:
+        return None
+    teams = {str(c.get("id", (c.get("team") or {}).get("id", ""))): c.get("homeAway") for c in comp.get("competitors", [])}
+    plays = data.get("plays") or []
+    if not plays:
+        return None
+    total = {"nba": 7, "wnba": 5}.get(league, 4)
+    used, fouls = {"home": 0, "away": 0}, {"home": 0, "away": 0}
+    period = int((comp.get("status") or {}).get("period") or 0)
+    for p in plays:
+        ha = teams.get(str((p.get("team") or {}).get("id", "")))
+        if ha not in used:
+            continue
+        low = " ".join(str(x) for x in (p.get("text"), (p.get("type") or {}).get("text"))).lower()
+        if "timeout" in low and not re.search(r"official|tv\b|media", low):
+            used[ha] += 1
+        elif "foul" in low and "technical" not in low and int((p.get("period") or {}).get("number") or 0) == period:
+            fouls[ha] += 1
+    college_men = league == "mens-college-basketball"
+    limit = 4 if period > (2 if college_men else 4) else 7 if college_men else 5
+    other = {"home": "away", "away": "home"}
+    return {"left": {k: max(0, total - v) for k, v in used.items()},
+            "bonus": {k: fouls[other[k]] >= limit for k in used}}
+
+
 def situation_graphic(sport, comp, league=""):
     """Graphics for a live game: list of dicts, or None."""
     out = []
@@ -1391,6 +1425,10 @@ def situation_graphic(sport, comp, league=""):
         ab = abs_challenges(comp, league)
         if ab:
             out.append({"kind": "timeouts", "home": ab["home"], "away": ab["away"], "total": 2})
+    hf = hoops_from_plays(comp, league) if sport == "basketball" and not any(g_["kind"] == "timeouts" for g_ in out) else None
+    if hf:
+        out.append({"kind": "timeouts", "home": hf["left"]["home"], "away": hf["left"]["away"],
+                    "total": {"nba": 7, "wnba": 5}.get(league, 4)})
     if sport == "basketball":  # who has the ball, and which team is shooting bonus free throws
         ha_of = {str(c.get("id", (c.get("team") or {}).get("id", ""))): c.get("homeAway") for c in comp.get("competitors", [])}
         poss = ha_of.get(str(sit.get("possession") or ""))
@@ -1401,6 +1439,8 @@ def situation_graphic(sport, comp, league=""):
                 c_ = next((c for c in comp.get("competitors", []) if c.get("homeAway") == ha), {})
                 v = _stat(c_, ("bonus", "inBonus", "teamBonus"))
             bonus[ha] = str(v).strip().lower() in ("true", "1", "yes", "bonus", "double bonus", "double")
+            if v is None and hf:
+                bonus[ha] = hf["bonus"][ha]
         if poss or any(bonus.values()):
             to_ = next((g_ for g_ in out if g_["kind"] == "timeouts"), None)
             if to_ is None:
