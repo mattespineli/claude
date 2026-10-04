@@ -1247,10 +1247,11 @@ def comp_teams(comp, first=None):
     else:
         away = next((c for c in cs if c.get("homeAway") == "away"), None)
         order = [away, [c for c in cs if c is not away][0]] if away else list(cs)
+    gcs = matchup_colors(order, ("#60a5fa", "#f59e0b"))  # card gradient: left team's colour to the right team's, kept distinguishable
     return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""), "record": _record(c).strip(" ()"), "id": str((c.get("team") or {}).get("id", c.get("id", ""))),
-             "color": team_colors(c, "#34d399"),
+             "color": team_colors(c, "#34d399"), "gcolor": gcs[i_],
              "abbr": (c.get("team") or {}).get("abbreviation") or (c.get("athlete") or {}).get("shortName") or "?"}
-            for c in order]
+            for i_, c in enumerate(order)]
 
 
 def tint_color(team):
@@ -1598,10 +1599,11 @@ def team_status(entry):
         text = series_from_schedule(events, event, entry["team"])
         if text:
             ser = {"head": (ser or {}).get("head", ""), "text": text}
+    me_id = str((me.get("team") or {}).get("id", me.get("id", ""))) if me else ""
     return {"tv": tv_channels(event["competitions"][0]) if state in ("in", "pre") else "", "series": ser,
-            "teams": [dict(t, record=(t["record"] or (own if i == 0 and own else "")) + (
-                          f" \u00b7 {streak}" if i == 0 and streak else ""))
-                      for i, t in enumerate(comp_teams(event["competitions"][0], me or None))], "logos": [_logo(me.get("team", {})) or _logo(team)],
+            "teams": [dict(t, record=(t["record"] or (own if t["id"] == me_id and own else "")) + (
+                          f" \u00b7 {streak}" if t["id"] == me_id and streak else ""), mine=bool(me_id) and t["id"] == me_id)
+                      for t in comp_teams(event["competitions"][0])], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line, "next_tv": next_tv,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
@@ -1907,7 +1909,7 @@ def summarize_game(event, sport=None, league=None):
 def score_parts(event, team_abbr=None):
     """{"score": (a, b) | None, "status": text} for the big score on a card.
 
-    With `team_abbr` the order is (that team, opponent) and a finished game gets a W/L/T; otherwise (away, home).
+    The order is always (away, home); with `team_abbr` a finished game also gets that team's W/L/T.
     """
     if _state_of(event) == "pre":
         return {"score": None, "status": ""}
@@ -1916,26 +1918,23 @@ def score_parts(event, team_abbr=None):
     cs = comp.get("competitors", [])
     detail = ((comp.get("status") or {}).get("type") or {}).get("shortDetail", "")
     result = ""
-    if team_abbr:
-        me = _find_me(comp, team_abbr)
-        opp = next((c for c in cs if c is not me), None)
-        if (me is None or opp is None) and len(cs) == 2:
-            me, opp = cs
-        pair = (me, opp)
-    else:
-        away = next((c for c in cs if c.get("homeAway") == "away"), None)
-        home = next((c for c in cs if c.get("homeAway") == "home"), None)
-        pair = (away, home) if away and home else (tuple(cs) if len(cs) == 2 else (None, None))
+    away = next((c for c in cs if c.get("homeAway") == "away"), None)
+    home = next((c for c in cs if c.get("homeAway") == "home"), None)
+    pair = (away, home) if away and home else (tuple(cs) if len(cs) == 2 else (None, None))
     if not pair[0] or not pair[1]:
         return {"score": None, "status": detail}
     a_, b_ = _score(pair[0]), _score(pair[1])
     if a_ == "" and b_ == "":
         return {"score": None, "status": detail}
-    if team_abbr and state == "post":
-        try:
-            result = "W" if float(a_) > float(b_) else ("L" if float(a_) < float(b_) else "T")
-        except ValueError:
-            pass
+    if team_abbr and state == "post":  # the followed team's result, whichever side it is on
+        me = _find_me(comp, team_abbr)
+        opp = next((c for c in pair if c is not me), None)
+        if me is not None and opp is not None:
+            try:
+                x_, y_ = float(_score(me)), float(_score(opp))
+                result = "W" if x_ > y_ else ("L" if x_ < y_ else "T")
+            except ValueError:
+                pass
     played = _date_label(event) if state == "post" else ""
     return {"score": (a_, b_), "status": " \u00b7 ".join(x for x in (result, detail, played) if x)}
 
@@ -3474,6 +3473,8 @@ def run_gui():
     def draw_test():
         """Draw the dummy card alone on its own canvas (called with that canvas and session swapped in)."""
         canvas.delete("all")
+        for k_ in [k_ for k_ in grad_of if k_[0] is canvas]:
+            del grad_of[k_]
         for key in ("hits", "roll_cells", "clock_items", "pulse_items", "layers", "gcount", "hcards", "hseen"):
             session[key].clear()
         session["actx"] = None
@@ -3736,6 +3737,8 @@ def run_gui():
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
             ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            if t.get("mine"):  # the team you follow: a small gold star before its abbreviation
+                canvas.create_text(canvas.bbox(ia_)[0] - 3, yy + 1, text="\u2605", anchor="ne", font=FONTS["small"], fill="#fbbf24", tags=tags)
             if tos and tos.get("poss") == t["ha"] and r["state"] == "in":  # the ball: a small arrow pointing at the basket it attacks
                 bx_ = canvas.bbox(ia_)
                 d_ = 1 if i == 0 else -1
@@ -3957,7 +3960,7 @@ def run_gui():
         t = teams[side] if len(teams) == 2 and side in (0, 1) else {}
         session["celebs"][k] = {
             "t0": now, "side": side if t else None, "abbr": t.get("abbr", ""), "color": color or t.get("color") or "#e5e7eb",
-            "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
+            "tcolor": t.get("color"), "head": head, "detail": detail if len(detail) <= 90 else detail[:89].rstrip() + "\u2026", "mode": mode, "banner": banner,
             "grand": grand, "run": run, "tag": tag, "secs": secs, "chained_in": chained_in, "chained_out": chained_out,
             "field": field, "out": out}
         session["celeb_dirty"] = True  # the next tick redraws once; frames after that only recolor
@@ -4542,7 +4545,7 @@ def run_gui():
                 continue
             bgc = lay["bgc"]
             if lay["flash"]:  # text fades toward the card as it is right now, flash included, so hidden text stays hidden
-                bgc = blend(lay["flash"][2], ce["color"], 0.5 * max(0.0, 1 - t / FLASH_SECS) ** 2)
+                bgc = blend(lay["flash"][2], flash_color(ce), flash_k(ce, t))
             a = banner_alpha(ce, t)
             try:
                 for i_, col in lay["banner"]:
@@ -4555,10 +4558,18 @@ def run_gui():
                         canvas.itemconfigure(i_, **{opt: blend(bgc, base, ia)})
                 if lay["flash"]:
                     bgid, hit, base = lay["flash"]
-                    col = blend(base, ce["color"], 0.5 * max(0.0, 1 - t / FLASH_SECS) ** 2)
+                    fk = flash_k(ce, t)
+                    tc = flash_color(ce)
+                    col = blend(base, tc, fk)
                     for i_ in (bgid, hit):
                         if i_:
                             canvas.itemconfigure(i_, fill=col, **({"outline": col} if i_ == bgid else {}))
+                    g_ = grad_of.get((canvas, bgid))
+                    if g_:  # the gradient flashes too
+                        canvas.itemconfigure(bgid, fill=blend(g_["cols"][0], tc, fk), outline="")
+                        canvas.itemconfigure(g_["cap"], fill=blend(g_["cols"][1], tc, fk))
+                        for i2_, c2_ in zip(g_["strips"], g_["strip_cols"]):
+                            canvas.itemconfigure(i2_, fill=blend(c2_, tc, fk))
                 if lay.get("xfade"):
                     xfade_apply(lay, t)
                 canvas.delete(lay["tag"])
@@ -4828,11 +4839,54 @@ def run_gui():
         if lay:
             lay["banner"] += parts
 
+    FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
+
+    def flash_k(ce, t):
+        """0..1 strength of the team-colour card background: in at the start, held until the last chained event ends, then out."""
+        up = 1.0 if ce.get("chained_in") else ease(t / FLASH_IN)
+        down = 1.0 if ce.get("chained_out") else ease((ce["secs"] - t) / FLASH_OUT)
+        return min(up, down)
+
+    def flash_color(ce):
+        return blend(BG, ce.get("tcolor") or ce["color"], 0.4)
+
+    grad_of = {}  # (canvas, card background id) -> the gradient's cap and strips, which follow the background when it is resized
+
+    def make_gradient(bgid, x0, y, x1, gc, fcol=None, fk=0.0, n=24, tags=()):
+        """Fill a card's rounded background with a horizontal gradient: the background polygon is the left colour, a second
+        rounded cap makes the right end, and vertical strips between them (inset by the corner radius) blend across."""
+        tint_ = (lambda c_: blend(c_, fcol, fk)) if fcol else (lambda c_: c_)
+        cap = canvas.create_polygon(rr_points(x1 - 20, y, x1, y + 10, 10), smooth=True, fill=tint_(gc[1]), outline="", tags=tags)
+        span = (x1 - x0) - 20
+        geo, ids, cols = [], [], []
+        for i in range(n):
+            sx = x0 + 10 + span * i / n
+            sw = span / n + 1
+            col = blend(gc[0], gc[1], (sx + sw / 2 - x0) / (x1 - x0))
+            geo.append((sx, sw))
+            cols.append(col)
+            ids.append(canvas.create_rectangle(sx, y, sx + sw, y + 10, fill=tint_(col), outline="", tags=tags))
+        grad_of[(canvas, bgid)] = {"cap": cap, "strips": ids, "geo": geo, "cols": gc, "strip_cols": cols, "x1": x1}
+
+    def set_bg(bgid, x0, top, x1, bot):
+        canvas.coords(bgid, *rr_points(x0, top, x1, bot, 10))
+        g = grad_of.get((canvas, bgid))
+        if g:
+            canvas.coords(g["cap"], *rr_points(x1 - 20, top, x1, bot, 10))
+            for i_, (sx, sw) in zip(g["strips"], g["geo"]):
+                canvas.coords(i_, sx, top, sx + sw, bot)
+
     def draw_card(r, x, y, w, final):
         r = run_view(test_view(r))
         session["xfade"] = r.get("_xfade")
         tint = r.get("tint")
         bgc = blend(BG, tint, 0.22) if tint else BG
+        teams_ = r.get("teams") or []
+        gc = None  # the card's background runs from the left team's colour to the right team's
+        if len(teams_) == 2 and all(t_.get("gcolor") for t_ in teams_) and r["state"] in ("pre", "in", "post"):
+            gc = tuple(blend(BG, t_["gcolor"], 0.22) for t_ in teams_)
+            bgc = blend(gc[0], gc[1], 0.5)
+            tint = tint or bgc
         ce, ct = celeb_of(r)  # this card's team just scored
         session["cur_celeb"] = (ce, ct)
         session["cur_key"] = card_key(r)
@@ -4841,15 +4895,22 @@ def run_gui():
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and not ce.get("field") and ce["mode"] == "pulse" and ct < FLASH_SECS and ce["side"] is not None
+        flashing = bool(ce) and ce["mode"] == "pulse" and ce["side"] is not None
+        fk_ = flash_k(ce, ct) if flashing else 0.0
+        tc_ = flash_color(ce) if flashing else None
         if flashing:
-            bgc = blend(bgc, ce["color"], 0.5 * (1 - ct / FLASH_SECS) ** 2)
+            bgc = blend(bgc, tc_, fk_)
         cx0, cw_ = x + 2, w - 4
         tags = ()
         if r.get("game") or r.get("url"):
             tags = (new_hit(("game", r)),)
-        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=bgc, outline=bgc) if (tint or flashing) else None
-        hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags else None
+        lcol = blend(gc[0], tc_, fk_) if gc and flashing else gc[0] if gc else bgc
+        bgid = canvas.create_polygon(rr_points(cx0, y, cx0 + cw_, y + 10, 10), smooth=True, fill=lcol, outline="" if gc else lcol) if (tint or flashing) else None
+        if bgid and gc:
+            make_gradient(bgid, cx0, y, cx0 + cw_, gc, tc_, fk_, tags=tags)
+        if bgid and gc and tags:
+            canvas.itemconfigure(bgid, tags=tags)
+        hit = canvas.create_rectangle(cx0 + 3, y + 3, cx0 + cw_ - 3, y + 10, fill=bgc, outline="", tags=tags) if tags and not (bgid and gc) else None
         ix, ww = cx0 + PAD, cw_ - 2 * PAD
         yy = y + GAP
         if flashing:
@@ -4983,7 +5044,7 @@ def run_gui():
             session["pulse_items"].append((pid, "#fb923c", bgc))
             start_pulse()
         if bgid:
-            canvas.coords(bgid, *rr_points(cx0, y, cx0 + cw_, bottom, 10))
+            set_bg(bgid, cx0, y, cx0 + cw_, bottom)
         if hit:
             canvas.coords(hit, cx0 + 3, y + 3, cx0 + cw_ - 3, bottom - 3)
         if ctx:
@@ -5275,6 +5336,8 @@ def run_gui():
         if not last and ui_state.get("tab", "games") != "standings":
             return 0
         canvas.delete("all")
+        for k_ in [k_ for k_ in grad_of if k_[0] is canvas]:
+            del grad_of[k_]
         session["hits"].clear()
         session["roll_cells"].clear()
         session["clock_items"].clear()
@@ -5348,7 +5411,7 @@ def run_gui():
         for rec, (above, d) in zip(recs, offs):  # the card itself: its background, border and click area end at the eased bottom
             top, bot = rec["top"] + above, rec["bottom"] + above + d
             if rec["bg"]:
-                canvas.coords(rec["bg"], *rr_points(rec["x0"], top, rec["x1"], bot, 10))
+                set_bg(rec["bg"], rec["x0"], top, rec["x1"], bot)
             if rec["border"]:
                 canvas.coords(rec["border"], *rr_points(rec["x0"] + 1, top + 1, rec["x1"] - 1, bot - 1, 10))
             if rec["hit"]:
@@ -5397,7 +5460,7 @@ def run_gui():
             canvas.coords(ctx["cover"], ctx["x0"], y0 + vis + gap, ctx["x1"], y0 + H + gap + 3)
             cx0, ytop, cx1 = ctx["geo"]
             if ctx["bg"]:
-                canvas.coords(ctx["bg"], *rr_points(cx0, ytop, cx1, ctx["bottom"] + dy, 10))
+                set_bg(ctx["bg"], cx0, ytop, cx1, ctx["bottom"] + dy)
             if ctx["hit"]:
                 canvas.coords(ctx["hit"], cx0 + 3, ytop + 3, cx1 - 3, ctx["bottom"] + dy - 3)
         else:
