@@ -3139,7 +3139,7 @@ def run_gui():
 
         styled_option(win, live_choice, [l for l, _ in LIVE_REFRESH_CHOICES], command=on_live_refresh, width=12).grid(
             row=3, column=1, padx=16, pady=(6, 4), sticky="e")
-        tk.Label(win, text="Dock and autohide", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=4, column=0, padx=16, pady=(6, 4), sticky="w")
+        tk.Label(win, text="Dock", bg=BG, fg=FG, font=("Segoe UI", 10, "bold")).grid(row=4, column=0, padx=16, pady=(6, 4), sticky="w")
         dock_choice = tk.StringVar(value=next((l for l, v in DOCK_CHOICES if v == ui_state.get("dock", "off")), "Off"))
         styled_option(win, dock_choice, [l for l, _ in DOCK_CHOICES], command=lambda label: set_dock(dict(DOCK_CHOICES)[label]),
                       width=12).grid(row=4, column=1, padx=16, pady=(6, 4), sticky="e")
