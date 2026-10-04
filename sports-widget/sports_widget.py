@@ -4362,7 +4362,7 @@ def run_gui():
     def field_runners(head, occ, n):
         """Who runs: [(delay s, [spots: 0 home, 1 first, 2 second, 3 third])]. occ: the men on base before the play (None when
         unknown), n: the runs that score. Runners on base score first, from the farthest base; the batter goes last."""
-        hit = next((h_ for h_ in ("SINGLE", "DOUBLE", "TRIPLE") if head.endswith(h_)), None)
+        hit = next((n_ for h_, n_ in (("SINGLE", 1), ("DOUBLE", 2), ("TRIPLE", 3)) if head.endswith(h_)), None)
         homer = "HOME RUN" in head or head.startswith("GRAND SLAM")
         order = [3, 2, 1]
         if occ:
