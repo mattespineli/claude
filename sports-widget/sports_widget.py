@@ -2653,6 +2653,25 @@ def run_gui():
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
+    SESSION0 = {k_: type(v_)() if isinstance(v_, (dict, list, set)) else v_ for k_, v_ in session.items()}
+
+    def run_in(view, fn, *a):
+        """Run fn with the drawing canvas and session swapped for a (canvas, session) view, e.g. the Settings dummy card."""
+        nonlocal canvas, session
+        if view is None:
+            return fn(*a)
+        try:
+            if not view[0].winfo_exists():
+                return None
+        except tk.TclError:
+            return None
+        saved = canvas, session
+        canvas, session = view
+        try:
+            return fn(*a)
+        finally:
+            canvas, session = saved
+
     FRAME_MS = 8  # every animation loop aims at 120 frames a second
 
     def frame_delay(t0):
@@ -3270,6 +3289,23 @@ def run_gui():
             new = mine + (int(runs.group(1)) if runs else TEST_POINTS.get(head) or max(1, int(other - mine) + 1))  # TAKES THE LEAD: one more than it trails by
         session["test_scores"][k] = {"side": side, "text": f"{new:g}", "ce": session["celebs"].get(k)}
 
+    tv = {"view": None}  # the Settings dummy card's (canvas, session), while Settings is open
+
+    def redraw():
+        if session.get("view"):
+            draw_test()
+        else:
+            draw_all()
+
+    def draw_test():
+        """Draw the dummy card alone on its own canvas (called with that canvas and session swapped in)."""
+        canvas.delete("all")
+        for key in ("hits", "roll_cells", "clock_items", "pulse_items", "layers", "gcount", "hcards", "hseen"):
+            session[key].clear()
+        session["actx"] = None
+        y = draw_card(session["dummy"], 0, 2, int(canvas.cget("width")), False)
+        canvas.configure(height=int(y + 4))
+
     def test_view(r):
         """The card as a running scoring test shows it (its points added); the real card once the test is over."""
         k = card_key(r)
@@ -3719,7 +3755,7 @@ def run_gui():
             play_sound(sound)
         if not session["celeb_on"]:
             session["celeb_on"] = True
-            root.after(0, celeb_tick)
+            root.after(0, run_in, session.get("view"), celeb_tick)
 
     def game_time(sport, status):
         """What ESPN's status text says about the clock: {"period", "secs"} (OT counts as a late period), {"inning"}, or {"minute"}."""
@@ -3976,19 +4012,12 @@ def run_gui():
     win_ref = [None]
 
     def fire_test(label):
-        """Play one animation on the first live card (else the first card with two teams). The reason when it can't play."""
-        top_, bot_ = canvas.canvasy(0), canvas.canvasy(canvas.winfo_height())
-        shown = []  # game cards in view, top to bottom
-        for tag, payload in session["hits"].items():
-            if payload[0] == "game" and payload[1].get("teams"):
-                bb_ = canvas.bbox(tag)
-                if bb_ and bb_[3] > top_ and bb_[1] < bot_:
-                    shown.append((bb_[1], payload[1]))
-        shown.sort(key=lambda t_: t_[0])
-        shown = [(y_, r_.get("_real", r_)) for y_, r_ in shown]
-        r = next((r for _y, r in shown if r["state"] == "in"), None) or (shown[0][1] if shown else None)
-        if not r:
-            return "No game card is in view to play it on. Switch to the Games tab and scroll to a game."
+        return run_in(tv["view"], _fire_test, label)
+
+    def _fire_test(label):
+        """Play one animation on the Settings dummy card. The reason when it can't play."""
+        r = session["dummy"]
+        shown = [(0, r)]
         _l, head, kind, color = next(t_ for t_ in TESTS if t_[0] == label)
         runs = session.get("test_runs", 0)
         if head in ("SINGLE", "DOUBLE", "TRIPLE") and runs:  # a hit that scores N runs
@@ -4004,8 +4033,8 @@ def run_gui():
         if kind in ("clutch", "redzone"):
             session["force_clutch" if kind == "clutch" else "force_red"][k] = _time.perf_counter() + 8
             session["sig"] = None
-            draw_all()
-            root.after(8200, lambda: (session.update(sig=None), draw_all()))
+            redraw()
+            root.after(8200, run_in, session.get("view"), redraw)
             return
         mode = ui_state.get("score_anim", "pulse")
         mode = "pulse" if mode in ("off", "flash") else mode
@@ -4030,8 +4059,86 @@ def run_gui():
     def test_buttons(parent):
         """A frame of buttons that play each animation, for the Settings window to show beside its options."""
         f = tk.Frame(parent, bg=BG)
-        tk.Label(f, text="Plays on the first live game card in view", bg=BG, fg=DIM, font=("Segoe UI", 9)).grid(
-            row=0, column=0, columnspan=3, pady=(0, 6), sticky="w")
+        head_ = tk.Frame(f, bg=BG)  # the dummy card the tests play on, with the sport and its options beside it
+        head_.grid(row=0, column=0, columnspan=3, pady=(0, 8), sticky="w")
+        tcanvas = tk.Canvas(head_, bg=BG, highlightthickness=0, width=330, height=200)
+        tcanvas.grid(row=0, column=0, rowspan=2, padx=(4, 16), sticky="n")
+        tsession = {k_: type(v_)() if isinstance(v_, (dict, list, set)) else v_ for k_, v_ in SESSION0.items()}
+        tview = (tcanvas, tsession)
+        tsession["view"] = tview
+        tv["view"] = tview
+        side_ = tk.Frame(head_, bg=BG)
+        side_.grid(row=0, column=1, sticky="nw")
+        opts_ = tk.Frame(head_, bg=BG)
+        opts_.grid(row=1, column=1, sticky="nw", pady=(8, 0))
+        sports_ = [("Football", 0), ("Baseball", 1), ("Basketball", 2), ("Hockey", 3), ("Soccer", 4)]
+        bases_ = [False, False, False]
+
+        def build_dummy(sport_):
+            import copy
+            row_ = copy.deepcopy(demo_data()[dict(sports_)[sport_]])
+            lg_ = {"Football": "nfl", "Baseball": "mlb", "Basketball": "nba", "Hockey": "nhl"}.get(sport_)
+            for t_ in row_.get("teams") or []:
+                if lg_ and not t_.get("logo"):
+                    t_["logo"] = f"https://a.espncdn.com/i/teamlogos/{lg_}/500/{t_['abbr'].lower()}.png"
+            gl_ = row_.get("graphic") or []
+            for g_ in ([gl_] if isinstance(gl_, dict) else gl_):
+                if g_["kind"] == "baseball":
+                    g_["bases"] = list(bases_)
+            return row_
+
+        def show_dummy(rebuild=True):
+            def go():
+                if rebuild:
+                    tsession["dummy"] = build_dummy(sport_var.get())
+                    for key in ("celebs", "celeb_next", "test_scores", "force_clutch", "force_red", "daggers"):
+                        tsession[key].clear()
+                draw_test()
+            run_in(tview, go)
+
+        def draw_options():
+            for w_ in opts_.winfo_children():
+                w_.destroy()
+            if sport_var.get() == "Baseball":  # men on base: toggles the diamond on the dummy card
+                tk.Label(opts_, text="Men on base", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
+                row_ = tk.Frame(opts_, bg=BG)
+                row_.pack(anchor="w")
+                pills_ = []
+
+                def flip(i_):
+                    bases_[i_] = not bases_[i_]
+                    for j_, (c_, shape_, txt_) in enumerate(pills_):
+                        on = bases_[j_]
+                        c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
+                        c_.itemconfigure(txt_, fill=FG if on else DIM)
+                    show_dummy()
+                for i_, lab_ in enumerate(("1st", "2nd", "3rd")):
+                    pw_ = text_width(FONTS["smallb"], lab_) + 20
+                    c_ = tk.Canvas(row_, width=pw_, height=24, bg=BG, highlightthickness=0, cursor="hand2")
+                    shape_ = c_.create_polygon(rr_points(1, 2, pw_ - 1, 22, 8), smooth=True, fill=BG, outline="#33333d")
+                    txt_ = c_.create_text(pw_ / 2, 12, text=lab_, font=FONTS["smallb"], fill=DIM)
+                    c_.bind("<ButtonRelease-1>", lambda e, i2=i_: flip(i2))
+                    c_.pack(side="left", padx=2)
+                    pills_.append((c_, shape_, txt_))
+                for j_, (c_, shape_, txt_) in enumerate(pills_):
+                    on = bases_[j_]
+                    c_.itemconfigure(shape_, fill=PANEL if on else BG, outline=PANEL if on else "#33333d")
+                    c_.itemconfigure(txt_, fill=FG if on else DIM)
+
+        sport_var = tk.StringVar(value=ui_state.get("test_sport", "Football"))
+
+        def on_sport(v_):
+            ui_state["test_sport"] = v_
+            save_state(ui_state)
+            draw_options()
+            show_dummy()
+        tk.Label(side_, text="Dummy card", bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=2, pady=(0, 4))
+        styled_option(side_, sport_var, [n_ for n_, _ in sports_], command=on_sport, width=12).pack(anchor="w")
+        draw_options()
+        tcanvas.bind("<Map>", lambda e: show_dummy(False) if tsession.get("dummy") else None)
+        f.after(50, show_dummy)
+        for ms_ in (1500, 4000):  # logos arrive a moment after the first draw
+            f.after(ms_, lambda: show_dummy(False))
         # what follows the animation (these only ever play after the play that caused them): one choice, like radio buttons
         def choice_row(row, title, key, options, default):
             """A row of pills where exactly one is on, kept in session[key]."""
@@ -4147,11 +4254,11 @@ def run_gui():
             pass  # an expand / collapse is running; it redraws everything itself
         elif finished or session["celeb_dirty"]:
             session["celeb_dirty"] = False
-            draw_all()
+            redraw()
         else:
             celeb_frame()
         if live:
-            root.after(frame_delay(now), celeb_tick)
+            root.after(frame_delay(now), run_in, session.get("view"), celeb_tick)
         else:
             session["celeb_on"] = False
 
