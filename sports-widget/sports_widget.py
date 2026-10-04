@@ -3881,7 +3881,7 @@ def run_gui():
     def clock_tick():
         """Run the game clocks on live cards once a second between refreshes."""
         now = time.time()
-        for item, base, clock in session["clock_items"]:
+        for item, base, clock in ([] if hidden_away() else session["clock_items"]):
             try:
                 text = tick_clock(base, clock, now)
                 if canvas.itemcget(item, "text") != text:
@@ -6386,7 +6386,10 @@ def run_gui():
         timer["id"] = root.after(secs * 1000, tick)
 
     def tick():
-        refresh()
+        if hidden_away():  # docked and slid out of sight: skip the poll, the reveal catches up with one refresh
+            dock["stale"] = True
+        else:
+            refresh()
         schedule()
 
     def track_dialog():
@@ -6979,7 +6982,11 @@ def run_gui():
     # and slides back when the pointer touches that strip. It stays out while the pointer is over it, a mouse
     # button is held (drag, resize) or a menu/dialog is open, and hides again shortly after the pointer leaves.
     DOCK_STRIP, DOCK_HIDE_DELAY = 5, 0.6
-    dock = {"x": root.winfo_x(), "shown": True, "leave": None, "held": False}
+    dock = {"x": root.winfo_x(), "shown": True, "leave": None, "held": False, "stale": False}
+
+    def hidden_away():
+        """True while the docked widget is slid out of sight (autohide): nothing on it can be seen, so polling and clocks pause."""
+        return ui_state.get("dock", "off") in ("left", "right") and ui_state.get("autohide", True) and not dock["shown"]
 
     def docked():
         return ui_state.get("dock", "off") in ("left", "right")
@@ -7064,6 +7071,9 @@ def run_gui():
                     want = now - dock["leave"] < DOCK_HIDE_DELAY
                 else:
                     want = False
+                if want and not dock["shown"] and dock["stale"]:
+                    dock["stale"] = False
+                    refresh()  # catch up on whatever happened while hidden (a score still animates as it is detected)
                 dock["shown"] = want
                 target = dock_shown_x(area, w) if want else dock_hidden_x(area, w)
                 if x != target:  # ease toward the target: a quick slide that slows at the end
