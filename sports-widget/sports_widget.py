@@ -3374,6 +3374,8 @@ def run_gui():
         w, h, col = spec
         return pill_image(w, h, blend(bgc, col, round(f * 16) / 16), bgc)
 
+    PILL_DY = -1 if sys.platform == "win32" else 0  # Segoe UI sits low in its line box: nudge pill text up so it centres
+
     def crisp_rr(x1, y1, x2, y2, r, color, tags=()):
         """A rounded pill as an anti-aliased image on the card's colour."""
         x1, y1, x2, y2 = (int(round(v_)) for v_ in (x1, y1, x2, y2))
@@ -3393,7 +3395,7 @@ def run_gui():
         for n, pw in zip(names, widths):
             bg_, fg_ = NETWORK_STYLES.get(n.lower(), (PANEL, FG))
             crisp_rr(px, y, px + pw, y + 14, 3, bg_, tags)
-            canvas.create_text(round(px + pw / 2), round(y + 7), text=n, font=FONTS["small"], fill=fg_, tags=tags)
+            canvas.create_text(round(px + pw / 2), round(y + 7 + PILL_DY), text=n, font=FONTS["small"], fill=fg_, tags=tags)
             px += pw + 4
         return total
 
@@ -3644,7 +3646,7 @@ def run_gui():
             tv_w = sum(text_width(FONTS["small"], n) + 10 for n in names_) + 4 * max(len(names_) - 1, 0)
             x0 = mx - (34 + (8 + tv_w if tv_w else 0)) / 2
             crisp_rr(x0, my, x0 + 34, my + 14, 3, LIVE_RED, tags)
-            canvas.create_text(round(x0 + 17), round(my + 7), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+            canvas.create_text(round(x0 + 17), round(my + 7 + PILL_DY), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
             if tv_w:
                 tv_badges(x0 + 42, my, " \u00b7 ".join(names_), tags)
             my += 18
@@ -3722,7 +3724,7 @@ def run_gui():
                 pw = text_width(FONTS["sec"], "FLAG") + 12
                 canvas.create_polygon(rr_points(mx - pw / 2, my + 4, mx + pw / 2, my + 18, 5), smooth=True, fill=FLAG_YELLOW,
                                       outline=FLAG_YELLOW, tags=tags)
-                canvas.create_text(mx, my + 11, text="FLAG", fill="#1e1e24", font=FONTS["sec"], tags=tags)
+                canvas.create_text(mx, my + 11 + PILL_DY, text="FLAG", fill="#1e1e24", font=FONTS["sec"], tags=tags)
                 my += 18
             text = text if len(text) <= cap_ else text[:cap_ - 1].rstrip() + "\u2026"
             _, h = ctext(mx, my + 4, text, FONTS["small"], DIM, width=mw, anchor="n", tags=tags, justify="center")
@@ -3778,7 +3780,7 @@ def run_gui():
             if bon[i]:  # in the bonus: this team shoots free throws on the next foul
                 bw_ = text_width(FONTS["sec"], "BONUS") + 10
                 crisp_rr(cx - bw_ / 2, yy + 4, cx + bw_ / 2, yy + 17, 3, "#fb923c", tags)
-                canvas.create_text(round(cx), round(yy + 10.5), text="BONUS", font=FONTS["sec"], fill="#1e1e24", tags=tags)
+                canvas.create_text(round(cx), round(yy + 10.5 + PILL_DY), text="BONUS", font=FONTS["sec"], fill="#1e1e24", tags=tags)
                 yy += 18
             colb = max(colb, yy)
         yy = max(colb, my) + 2
@@ -5007,7 +5009,7 @@ def run_gui():
             if r["state"] == "in":  # red LIVE pill in front of the clock
                 bw = 34
                 crisp_rr(tx, yy + 2, tx + bw, yy + 16, 3, LIVE_RED, tags)
-                canvas.create_text(round(tx + bw / 2), round(yy + 9), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+                canvas.create_text(round(tx + bw / 2), round(yy + 9 + PILL_DY), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
                 sx = tx + bw + 6
                 if r.get("tv"):  # the channel(s) right beside the LIVE flag
                     sx += tv_badges(sx, yy + 2, r["tv"], tags, limit=2) + 8
