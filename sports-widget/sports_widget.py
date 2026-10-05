@@ -398,6 +398,7 @@ COLLEGE_SECTIONS = {
         ("American", "american", None), ("Big West", "big west", None), ("C-USA", "conference usa", None),
         ("Mountain West", "mountain west", None), ("Sun Belt", "sun belt", None), ("WCC", "west coast", None)]},
 }
+COLLEGE_ABBR = {c["league"]: k for k, c in COLLEGE_SECTIONS.items()}  # the short tag a college game card carries
 STANDINGS_KEYS = [a for a, _, _ in STANDINGS_LEAGUES] + list(COLLEGE_SECTIONS)
 CONFERENCES = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard/conferences"
 _conf_ids = {}
@@ -5549,11 +5550,14 @@ def run_gui():
                 yy = max(yy, y + GAP + 28)  # keep the lines below clear of the score
             bb = [g_ for g_ in gl if g_["kind"] == "baseball"]  # bases, count and batter/pitcher get their own row
             sx = tx  # the status line lines up with the name, beside the logo
+            cab = COLLEGE_ABBR.get((r.get("game") or {}).get("league")) if "league" not in r else None
+            if cab:  # a college game says which sport it is (CFB, CBB...), first on the status row
+                sx = tx + tv_badges(tx, yy + 2, cab, tags) + 6
             if r["state"] == "in":  # red LIVE pill in front of the clock
                 bw = 34
-                crisp_rr(tx, yy + 2, tx + bw, yy + 16, 3, LIVE_RED, tags)
-                canvas.create_text(round(tx + bw / 2), round(yy + 9 + PILL_DY), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
-                sx = tx + bw + 6
+                crisp_rr(sx, yy + 2, sx + bw, yy + 16, 3, LIVE_RED, tags)
+                canvas.create_text(round(sx + bw / 2), round(yy + 9 + PILL_DY), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
+                sx = sx + bw + 6
                 if r.get("tv"):  # the channel(s) right beside the LIVE flag
                     sx += tv_badges(sx, yy + 2, r["tv"], tags, limit=2) + 8
             ys = yy  # top of the status row: the baseball panel starts here too
