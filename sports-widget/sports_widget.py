@@ -5946,12 +5946,12 @@ def run_gui():
         off = [r for r in results if r["state"] == "none"]
         if active or off:
             nodes.append({"t": "section", "text": "My Teams"})
-            nodes += cards([r for r in active if eff(r) == "in"])  # live games stay on top, always visible
+            live = [r for r in active if eff(r) == "in"]
             rest = [r for r in active if eff(r) != "in"]
-            lnames = {lg: n for n, _, lg in LEAGUES}
-            for lg in dict.fromkeys((r.get("game") or {}).get("league", "") for r in rest):  # the others fold into one group per league
-                games = [r for r in rest if (r.get("game") or {}).get("league", "") == lg]
-                nodes.append(group_node(f"mine:{lg}", f"{lnames.get(lg, lg.upper())} \u00b7 {len(games)}", FG, 0, True, False, cards(games)))
+            if live:
+                nodes.append(group_node("mine:live", f"Live \u00b7 {len(live)}", COLORS["in"], 0, False, True, cards(live)))
+            if rest:  # finals and upcoming games share one group
+                nodes.append(group_node("mine:recent", f"Recent & Upcoming \u00b7 {len(rest)}", FG, 0, True, True, cards(rest)))
             if off:
                 nodes.append(group_node("offseason", f"Out of season \u00b7 {len(off)}", DIM, 0, True, False, cards(off)))
         elif not (pin_results or playoffs or leagues or live_view):
