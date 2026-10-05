@@ -3290,7 +3290,7 @@ def run_gui():
         _, h = ctext(x, y + 4, label, FONTS["small"], DIM)
         if note:
             ctext(x + w, y + 4, note, FONTS["small"], DIM, anchor="ne")
-        top, H = y + 4 + h + 2, 26
+        top, H = y + 4 + h + 2, 40
         mid = top + H / 2
         if pers:
             period_marks(x, top, w, H, bgc, pers)
