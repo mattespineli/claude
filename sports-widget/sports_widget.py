@@ -2948,7 +2948,7 @@ def run_gui():
                "roll_last": {}, "rolls": {}, "roll_cells": [], "rolling": False,
                "clock_items": [], "stats": {}, "stats_redraw": False,
                "score_prev": {}, "play_prev": {}, "win_prev": {}, "down_prev": {}, "poss_prev": {}, "was_live": set(), "bases_prev": {}, "run_hold": {}, "celebs": {}, "celeb_next": {}, "daggers": set(), "celeb_on": False,
-               "pulse_items": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "ended_at": {}, "state_prev": {}, "moved": set(), "mfade": {}, "move_sched": set(), "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
+               "pulse_items": [], "sparks": [], "pulse_on": False, "cur_celeb": (None, 0), "force_clutch": {}, "force_red": {}, "ended_at": {}, "state_prev": {}, "moved": set(), "mfade": {}, "move_sched": set(), "test_scores": {}, "xfade": None, "hcards": [], "hshow": {}, "box_side": {}, "opening": set(), "hseen": {}, "h_on": False,
                "layers": {}, "cur_layer": None, "ring_center": None, "celeb_dirty": False,
                "tweens": {}, "shown": {}, "gcount": {}, "cur_key": None, "tween_on": False}
 
@@ -3264,6 +3264,17 @@ def run_gui():
             yy += h + 1
         return yy - y
 
+    def spark_whens(pers, sport, league):
+        """The period each point of a chart falls in, as its column title (Q3, OT, Inn 7...); '' where unknown."""
+        known = [p_ for p_ in (pers or []) if isinstance(p_, (int, float)) and p_ >= 1]
+        labs = period_labels(sport or "", league or "", int(max(known))) if known else []
+        pre = {"baseball": "Inn ", "hockey": "P"}.get(sport, "")
+        out = []
+        for p_ in pers or []:
+            lab = labs[int(p_) - 1] if isinstance(p_, (int, float)) and 1 <= p_ <= len(labs) else ""
+            out.append(pre + lab if lab.isdigit() else lab)
+        return out
+
     def period_marks(x, top, w, H, bgc, pers):
         """Faint vertical lines where the period (quarter, inning...) changes along a chart."""
         n = len(pers)
@@ -3272,7 +3283,7 @@ def run_gui():
                 xm = x + w * (i - 0.5) / (n - 1)
                 canvas.create_line(xm, top, xm, top + H, fill=blend(bgc, DIM, 0.35))
 
-    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note="", pers=None):
+    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note="", pers=None, names=None, sport="", league=""):
         """A small line of how a game went: vals run from -1 (all right team) to 1 (all left team) through 0 (even). Each stretch
         takes the colour of the team ahead there. Returns the height used."""
         _, h = ctext(x, y + 4, label, FONTS["small"], DIM)
@@ -3285,6 +3296,24 @@ def run_gui():
         canvas.create_line(x, mid, x + w, mid, fill=blend(bgc, DIM, 0.45), dash=(2, 3))
         n = len(vals)
         pts = [(x + w * i / (n - 1), mid - v_ * H / 2) for i, v_ in enumerate(vals)]
+        ext = []  # the points with an extra one wherever the line crosses even, so each stretch lies on one side of it
+        for i, (px_, py_) in enumerate(pts):
+            if i and vals[i - 1] * vals[i] < 0:
+                t_ = vals[i - 1] / (vals[i - 1] - vals[i])
+                ext.append((pts[i - 1][0] + (px_ - pts[i - 1][0]) * t_, mid, 0.0))
+            ext.append((px_, py_, vals[i]))
+        run, sign = [], 0  # shade between the line and the even line in the colour of the team ahead
+        for px_, py_, v_ in ext + [(None, None, 0.0)]:
+            sg = (v_ > 0) - (v_ < 0)
+            if sg and sign and sg != sign or px_ is None:
+                if len(run) > 1:
+                    canvas.create_polygon(run[0][0], mid, *[c_ for p_ in run for c_ in p_[:2]], run[-1][0], mid,
+                                          fill=blend(bgc, ca if sign > 0 else cb, 0.28), outline="")
+                run = [r_ for r_ in run[-1:] if r_[2] == 0.0]  # a crossing point starts the next stretch
+                sign = 0
+            if px_ is not None:
+                run.append((px_, py_, v_))
+                sign = sign or sg
         run_, rcol = [pts[0]], None  # consecutive stretches of one colour make one polyline
         for p1_, v0_, v1_ in zip(pts[1:], vals, vals[1:]):
             m_ = (v0_ + v1_) / 2
@@ -3298,9 +3327,13 @@ def run_gui():
             canvas.create_line(*[c_ for p_ in run_ for c_ in p_], fill=rcol, width=2, capstyle="round", joinstyle="round")
         ex_, ey_ = pts[-1]
         canvas.create_oval(ex_ - 2.5, ey_ - 2.5, ex_ + 2.5, ey_ + 2.5, fill=ca if vals[-1] > 0 else cb if vals[-1] < 0 else DIM, outline="")
+        if names:  # hovering shows who is favoured at that point, and what the chance is
+            texts = [f"{names[0] if v_ >= 0 else names[1]} {round((1 + abs(v_)) * 50)}%" for v_ in vals]
+            session["sparks"].append({"x": x, "w": w, "top": top, "H": H, "bgc": bgc, "when": spark_whens(pers, sport, league),
+                                      "pts": [[p_] for p_ in pts], "cols": [[ca if v_ > 0 else cb if v_ < 0 else DIM] for v_ in vals], "texts": texts})
         return 4 + h + 2 + H + 4
 
-    def draw_flow(x, y, w, bgc, flow, ca, cb, note=""):
+    def draw_flow(x, y, w, bgc, flow, ca, cb, note="", names=None, sport="", league=""):
         """Game flow: each team's score climbing over the game, one line per team in its colour. Returns the height used."""
         _, h = ctext(x, y + 4, "Game flow", FONTS["small"], DIM)
         if note:
@@ -3310,10 +3343,16 @@ def run_gui():
         period_marks(x, top, w, H, bgc, [f_[2] for f_ in flow])
         canvas.create_line(x, top + H, x + w, top + H, fill=blend(bgc, DIM, 0.45))
         n = len(flow)
+        sides = []
         for side, col in ((0, ca), (1, cb)):
             pts = [c_ for i, f_ in enumerate(flow) for c_ in (x + w * i / (n - 1), top + H - f_[side] / top_score * H)]
             canvas.create_line(*pts, fill=col, width=2, joinstyle="round", capstyle="round")
             canvas.create_oval(pts[-2] - 2.5, pts[-1] - 2.5, pts[-2] + 2.5, pts[-1] + 2.5, fill=col, outline="")
+            sides.append(list(zip(pts[::2], pts[1::2])))
+        if names:  # hovering shows the score at that point
+            session["sparks"].append({"x": x, "w": w, "top": top, "H": H, "bgc": bgc, "when": spark_whens([f_[2] for f_ in flow], sport, league),
+                                      "pts": [[sides[0][i], sides[1][i]] for i in range(n)], "cols": [[ca, cb]] * n,
+                                      "texts": [f"{names[0]} {f_[0]:g} \u2013 {names[1]} {f_[1]:g}" for f_ in flow]})
         return 4 + h + 2 + H + 4
 
     def draw_details(x, y, w, bgc, d, win_shown=False, g=None):  # win_shown: no win probability here (shown on the card, or game over)
@@ -3333,7 +3372,7 @@ def run_gui():
         if d.get("flow") and d.get("state") != "pre" and ui_state.get("sparklines", True):  # the score margin over the game, under the line score
             big_ = max((f_[0] - f_[1] for f_ in d["flow"]), key=abs)
             lead_ = f"Largest lead {d['away_abbr'] if big_ > 0 else d['home_abbr']} {abs(big_):g}" if big_ else ""
-            y += draw_flow(x, y, w, bgc, d["flow"], ca_, cb_, lead_)
+            y += draw_flow(x, y, w, bgc, d["flow"], ca_, cb_, lead_, (d["away_abbr"], d["home_abbr"]), g["sport"] if g else "", g["league"] if g else "")
         if d.get("state") == "post" and d.get("home_win_start") is not None:  # the final is 100-0: show where the game began
             hw = round(d["home_win_start"] * 100)
             ca, cb = d.get("colors", ("#60a5fa", "#f59e0b"))
@@ -3347,7 +3386,8 @@ def run_gui():
         ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
         if len(d.get("wp_series") or []) > 1 and ui_state.get("sparklines", True):
             y += draw_spark(x, y, w, bgc, [v_ * 2 - 1 for v_, _p in d["wp_series"]], ca_, cb_, "Win probability over the game",
-                            pers=[p_ for _v, p_ in d["wp_series"]])
+                            pers=[p_ for _v, p_ in d["wp_series"]], names=(d["away_abbr"], d["home_abbr"]),
+                            sport=g["sport"] if g else "", league=g["league"] if g else "")
         recent = d["plays"][:8] if d.get("state") != "post" else []  # a finished game has its box score instead
         for title, items in (("Scoring", d["scoring"]), ("Recent plays", recent)):
             if items:
@@ -3744,7 +3784,7 @@ def run_gui():
             del grad_of[k_]
         for k_ in [k_ for k_ in pill_of if k_[0] == str(canvas)]:  # its pills went with everything else
             del pill_of[k_]
-        for key in ("hits", "roll_cells", "clock_items", "pulse_items", "layers", "gcount", "hcards", "hseen"):
+        for key in ("hits", "roll_cells", "clock_items", "pulse_items", "sparks", "layers", "gcount", "hcards", "hseen"):
             session[key].clear()
         session["actx"] = None
         y = draw_card(session["dummy"], 0, 2, int(canvas.cget("width")), False)
@@ -5997,6 +6037,7 @@ def run_gui():
         session["clock_items"].clear()
         stat_cycles.clear()
         session["pulse_items"].clear()
+        session["sparks"].clear()
         session["layers"].clear()
         session["gcount"].clear()
         session["hcards"].clear()
@@ -6927,10 +6968,38 @@ def run_gui():
         elif h[1].get("game"):
             toggle_expand(h[1]["game"])
 
+    def spark_hover(e):
+        """Hovering a game-flow or win-probability chart marks the point under the pointer with a circle per line and says what it was."""
+        canvas.delete("sparkhover")
+        if e is None or e.widget is not canvas or session["anims"]:
+            return
+        x, y = canvas.canvasx(e.x), canvas.canvasy(e.y)
+        for sp in session["sparks"]:
+            if sp["x"] - 4 <= x <= sp["x"] + sp["w"] + 4 and sp["top"] - 4 <= y <= sp["top"] + sp["H"] + 4:
+                n = len(sp["pts"])
+                i = max(0, min(n - 1, round((x - sp["x"]) / sp["w"] * (n - 1))))
+                px = sp["pts"][i][0][0]
+                canvas.create_line(px, sp["top"], px, sp["top"] + sp["H"], fill=DIM, tags="sparkhover")
+                for (cx, cy), col in zip(sp["pts"][i], sp["cols"][i]):
+                    canvas.create_oval(cx - 4, cy - 4, cx + 4, cy + 4, fill=col, outline=FG, width=1, tags="sparkhover")
+                when = sp["when"][i] if i < len(sp["when"]) else ""
+                tid = canvas.create_text(px, sp["top"] - 2, text=(when + " \u00b7 " if when else "") + sp["texts"][i], font=FONTS["small"],
+                                         fill=FG, anchor="s", tags="sparkhover")
+                bx0, by0, bx1, by1 = canvas.bbox(tid)
+                shift = max(0, sp["x"] - bx0 - 2) - max(0, bx1 - (sp["x"] + sp["w"]) - 2)  # keep the label inside the chart's width
+                if shift:
+                    canvas.move(tid, shift, 0)
+                    bx0, bx1 = bx0 + shift, bx1 + shift
+                bg_ = canvas.create_rectangle(bx0 - 3, by0 - 1, bx1 + 3, by1 + 1, fill=sp["bgc"], outline=DIM, tags="sparkhover")
+                canvas.tag_lower(bg_, tid)
+                return
+
     def on_motion(e):
+        spark_hover(e)
         h = hit_at(e)
         canvas.configure(cursor="hand2" if h and (h[0] in ("group", "stview", "statpage") or h[1].get("game")) else "")
     canvas.bind("<Motion>", on_motion)
+    canvas.bind("<Leave>", lambda e: canvas.delete("sparkhover"))
 
     def restart():
         """Start a fresh copy of this script (picks up code changes from git pull), then close this one."""
