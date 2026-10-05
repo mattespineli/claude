@@ -3158,16 +3158,13 @@ def run_gui():
             tween_apply(mk, put_minute)
             return 44
         if kind == "baseball":
-            K = 36 / 27  # spaced as if home plate were there: the old diamond with its plate (y 10 to 37) fills the B-S-O rows' height (y 4 to 40)
-            fx_, fy_ = (lambda v: 21 + (v - 21) * K), (lambda v: 4 + (v - 10) * K)
-
-            def base(cx, cy, on):  # bases only, no home plate drawn
-                r = 5 * K
+            def base(cx, cy, on):  # whole-pixel diamonds spaced as if home plate were there: its corner would end at y 40, the B-S-O rows' bottom
+                r = 7
                 hl = g.get("color", "#fbbf24")
-                cx, cy = fx_(cx), fy_(cy)
+                cx, cy = cx + 0.5, cy + 0.5  # on a pixel's centre and with round joins, the diamond comes out symmetric
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else bg,
-                                 outline=hl if on else DIM, width=2)
-            base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
+                                 outline=hl if on else DIM, width=2, joinstyle="round")
+            base(21, 11, g["bases"][1]); base(32, 22, g["bases"][0]); base(10, 22, g["bases"][2])
             ce_, ct_ = session["cur_celeb"]
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
