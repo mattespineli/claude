@@ -4520,6 +4520,8 @@ def run_gui():
         a score, a big play, a swing in win probability, or the final whistle."""
         mode = ui_state.get("score_anim", "pulse")
         mode = "pulse" if mode == "flash" else mode  # the Flash option is gone: Ripple flashes the card too
+        if dock.pop("quiet", False):  # the first refresh after the panel slid back out only resyncs: no catching up on what was missed
+            mode = "off"
         if ui_state.get("anim_scope", "all") == "mine":
             groups = groups[:2]  # My Teams and tracked games only
         now, seen, plays, wins, live_keys = _time.perf_counter(), {}, {}, {}, set()
@@ -7167,6 +7169,7 @@ def run_gui():
                     want = False
                 if want and not dock["shown"] and dock["stale"]:
                     dock["stale"] = False
+                    dock["quiet"] = True
                     refresh()  # catch up on whatever happened while hidden (a score still animates as it is detected)
                 dock["shown"] = want
                 target = dock_shown_x(area, w) if want else dock_hidden_x(area, w)
