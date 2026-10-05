@@ -5478,11 +5478,12 @@ def run_gui():
                 lay["shake"] = (head_i, *canvas.coords(head_i)[:2], bfont[1], w)
 
     FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
+    FLASH_DIP, FLASH_STEP = 0.45, 0.4  # between chained animations it eases down to this much, then each Then animation flashes back up
 
     def flash_k(ce, t):
-        """0..1 strength of the team-colour card background: in at the start, held until the last chained event ends, then out."""
-        up = 1.0 if ce.get("chained_in") else ease(t / FLASH_IN)
-        down = 1.0 if ce.get("chained_out") else ease((ce["secs"] - t) / FLASH_OUT)
+        """0..1 strength of the team-colour card background: in at the start, a dip and a fresh flash at each chained (Then) animation, out after the last."""
+        up = FLASH_DIP + (1 - FLASH_DIP) * ease(t / FLASH_IN) if ce.get("chained_in") else ease(t / FLASH_IN)
+        down = FLASH_DIP + (1 - FLASH_DIP) * ease((ce["secs"] - t) / FLASH_STEP) if ce.get("chained_out") else ease((ce["secs"] - t) / FLASH_OUT)
         return min(up, down)
 
     def flash_color(ce):
