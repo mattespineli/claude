@@ -3951,10 +3951,17 @@ def run_gui():
         my = top + 2
         n0 = item_mark()  # everything drawn from here on belongs to the middle section
         live = r["state"] == "in"
+        cab = COLLEGE_ABBR.get((r.get("game") or {}).get("league")) if "league" not in r else None
+        if cab and not live:  # not live: the sport tag gets a row of its own above the status
+            tv_badges(mx, my, cab, tags, center=True)
+            my += 18
         if live:  # the LIVE flag with the channel(s) beside it, centred together
             names_ = r["tv"].split(" \u00b7 ")[:2] if r.get("tv") else []
             tv_w = sum(text_width(FONTS["small"], n) + 10 for n in names_) + 4 * max(len(names_) - 1, 0)
-            x0 = mx - (34 + (8 + tv_w if tv_w else 0)) / 2
+            cab_w = text_width(FONTS["small"], cab) + 14 if cab else 0  # the sport tag of a college game, before LIVE
+            x0 = mx - (cab_w + 34 + (8 + tv_w if tv_w else 0)) / 2 + cab_w
+            if cab:
+                tv_badges(x0 - cab_w, my, cab, tags)
             crisp_rr(x0, my, x0 + 34, my + 14, 3, LIVE_RED, tags)
             canvas.create_text(round(x0 + 17), round(my + 7 + PILL_DY), text="LIVE", fill="#ffffff", font=FONTS["sec"], tags=tags)
             if tv_w:
