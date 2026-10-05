@@ -4037,7 +4037,7 @@ def run_gui():
             d_ = ensure_stats(r["game"], " ".join(stxt_.split()) if at_half else "")
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
-                room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
+                room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") or t.get("rank") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
                 nrows = max(4, min(6, -(-int(room) // 14)))
                 pool = pick_stats(r["game"]["sport"], d_.get("all_stats", []), None)
                 pages = [[(label, *((h_, a_) if flip else (a_, h_))) for label, a_, h_ in pg] for pg in stat_pages(pool, nrows)]
@@ -4133,7 +4133,7 @@ def run_gui():
         mh = my - top  # the middle section sets the height; the teams scale up to match it
         counts = [tos.get(t["ha"]) for t in teams] if tos and r["state"] == "in" else [None, None]
         bon = [bool(((tos or {}).get("bonus") or {}).get(t["ha"])) and r["state"] == "in" for t in teams]
-        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (18 if any(bon) else 0) + (13 if any(t.get("record") for t in teams) else 0)
+        nat = 46 + (30 if sc else 0) + 14 + (12 if counts[0] is not None else 0) + (18 if any(bon) else 0) + (13 if any(t.get("record") or t.get("rank") for t in teams) else 0)
         if mh < nat - 2:  # a short middle: what is below the status line is centred against the teams
             if my > my_hdr:
                 for i_ in items_since(n_hdr):
@@ -4157,22 +4157,16 @@ def run_gui():
             if sc:
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
-            if t.get("rank"):  # the rank or seed, dimmed, so the team stays the prominent part
-                rw_, aw_ = text_width(FONTS["small"], t["rank"]), text_width(FONTS["smallb"], t["abbr"])
-                lx_ = cx - (rw_ + 4 + aw_) / 2
-                ctext(lx_, yy + 1, t["rank"], FONTS["small"], DIM, anchor="nw", tags=tags)
-                ia_, h = ctext(lx_ + rw_ + 4, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="nw", tags=tags)
-            else:
-                ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
             if tos and tos.get("poss") == t["ha"] and r["state"] == "in":  # the ball: a small arrow pointing at the basket it attacks
                 bx_ = canvas.bbox(ia_)
                 d_ = 1 if i == 0 else -1
-                ax_ = (bx_[2] + 4) if i == 0 else ((lx_ if t.get("rank") else bx_[0]) - 4)  # beside the whole label, rank included
+                ax_ = (bx_[2] + 4) if i == 0 else (bx_[0] - 4)
                 ay_ = yy + h / 2
                 canvas.create_polygon(ax_, ay_ - 4, ax_ + 6 * d_, ay_, ax_, ay_ + 4, fill=COLORS["in"], outline="", tags=tags)
             yy += h
-            if t.get("record"):  # the team's record under its abbreviation
-                _, h = ctext(cx, yy, t["record"], FONTS["small"], DIM, anchor="n", tags=tags)
+            if t.get("record") or t.get("rank"):  # the team's rank or seed and record under its abbreviation, dimmed
+                _, h = ctext(cx, yy, " \u00b7 ".join(x_ for x_ in (t.get("rank"), t.get("record")) if x_), FONTS["small"], DIM, anchor="n", tags=tags)
                 yy += h
             if counts[i] is not None:  # remaining timeouts / challenges: filled dots, unlabelled
                 total = max(tos.get("total", 3), counts[i])
