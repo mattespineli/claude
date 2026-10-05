@@ -399,6 +399,10 @@ COLLEGE_SECTIONS = {
         ("Mountain West", "mountain west", None), ("Sun Belt", "sun belt", None), ("WCC", "west coast", None)]},
 }
 COLLEGE_ABBR = {c["league"]: k for k, c in COLLEGE_SECTIONS.items()}  # the short tag a college game card carries
+COLLEGE_ABBR.update({"college-softball": "SB", "womens-college-volleyball": "WVB", "mens-college-volleyball": "MVB",
+                     "mens-college-soccer": "MSOC", "womens-college-soccer": "WSOC", "mens-college-lacrosse": "MLAX",
+                     "womens-college-lacrosse": "WLAX", "mens-college-hockey": "MHKY", "womens-college-hockey": "WHKY",
+                     "womens-college-field-hockey": "FH"})
 STANDINGS_KEYS = [a for a, _, _ in STANDINGS_LEAGUES] + list(COLLEGE_SECTIONS)
 CONFERENCES = "https://site.api.espn.com/apis/site/v2/sports/{sport}/{league}/scoreboard/conferences"
 _conf_ids = {}
