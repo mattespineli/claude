@@ -1347,7 +1347,7 @@ def series_from_schedule(events, event, team_abbr):
     return f"{who} leads series {lead}-{trail}" if won != lost else f"Series tied {won}-{lost}"
 
 
-def comp_teams(comp, first=None):
+def comp_teams(comp, first=None, seeds=None):
     """Both teams of a game for the Scoreboard layout, [{logo, abbr, ha}]: `first` (a competitor) first, else away then home."""
     cs = comp.get("competitors", [])
     if len(cs) != 2:
@@ -1359,7 +1359,7 @@ def comp_teams(comp, first=None):
         order = [away, [c for c in cs if c is not away][0]] if away else list(cs)
     gcs = matchup_colors(order, ("#60a5fa", "#f59e0b"))  # card gradient: left team's colour to the right team's, kept distinguishable
     return [{"logo": _logo(c.get("team") or {}), "ha": c.get("homeAway", ""), "record": _record(c).strip(" ()"), "id": str((c.get("team") or {}).get("id", c.get("id", ""))),
-             "color": team_colors(c, "#34d399"), "gcolor": gcs[i_],
+             "color": team_colors(c, "#34d399"), "gcolor": gcs[i_], "rank": _rank(c, seeds).strip(),
              "abbr": (c.get("team") or {}).get("abbreviation") or (c.get("athlete") or {}).get("shortName") or "?"}
             for i_, c in enumerate(order)]
 
@@ -1713,7 +1713,7 @@ def team_status(entry):
     return {"tv": tv_channels(event["competitions"][0]) if state in ("in", "pre") else "", "series": ser,
             "teams": [dict(t, record=(t["record"] or (own if t["id"] == me_id and own else "")) + (
                           f" \u00b7 {streak}" if t["id"] == me_id and streak else ""), mine=bool(me_id) and t["id"] == me_id)
-                      for t in comp_teams(event["competitions"][0])], "logos": [_logo(me.get("team", {})) or _logo(team)],
+                      for t in comp_teams(event["competitions"][0], seeds=seeds_for(event, entry["sport"], entry["league"]))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line, "next_tv": next_tv,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
@@ -1863,7 +1863,7 @@ def playoff_games(debug=False, days=7):
                 series = comp.get("series", {}).get("summary", "")
                 extra = " · ".join(x for x in (note, series) if x)
                 parts = score_parts(e)
-                row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp), "series": series_info(comp) if state == "post" else None,
+                row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp, seeds=seeds_for(e, sport, league)), "series": series_info(comp) if state == "post" else None,
                        "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                        "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                        "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -2144,7 +2144,7 @@ def pinned_status(pin):
             if s:
                 parts = score_parts(e)
                 return {"tv": tv_channels(e["competitions"][0]) if s[0] in ("in", "pre") else "",
-                        "logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0]),
+                        "logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0], seeds=seeds_for(e, pin["sport"], pin["league"])),
                         "series": series_info(e["competitions"][0]) if s[0] == "post" else None,
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
@@ -4157,7 +4157,7 @@ def run_gui():
             if sc:
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
-            ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            ia_, h = ctext(cx, yy, (t["rank"] + " " if t.get("rank") else "") + t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
             if tos and tos.get("poss") == t["ha"] and r["state"] == "in":  # the ball: a small arrow pointing at the basket it attacks
                 bx_ = canvas.bbox(ia_)
                 d_ = 1 if i == 0 else -1
