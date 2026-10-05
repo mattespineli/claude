@@ -940,13 +940,13 @@ def game_detail_data(data, max_plays=14, max_stats=14, sport="", league=""):
     flow = []  # (away, home, period) after each play that has the score
     for p in plays:
         try:
-            flow.append((float(p["awayScore"]), float(p["homeScore"]), (p.get("period") or {}).get("number")))
+            flow.append((float(p["awayScore"]), float(p["homeScore"]), (p.get("period") or {}).get("number"), (p.get("clock") or {}).get("displayValue") or ""))
         except (KeyError, TypeError, ValueError):
             pass
     out["flow"] = thin(flow) if len(flow) > 1 else []
-    per_of = {str(p.get("id")): (p.get("period") or {}).get("number") for p in plays}
+    per_of = {str(p.get("id")): ((p.get("period") or {}).get("number"), (p.get("clock") or {}).get("displayValue") or "") for p in plays}
     try:  # (the away (left) team's chance, period) through the game
-        out["wp_series"] = thin([(1 - float(p_["homeWinPercentage"]), per_of.get(str(p_.get("playId"))))
+        out["wp_series"] = thin([(1 - float(p_["homeWinPercentage"]), *per_of.get(str(p_.get("playId")), (None, "")))
                                  for p_ in wp if p_.get("homeWinPercentage") is not None])
     except (TypeError, ValueError):
         out["wp_series"] = []
@@ -3264,15 +3264,16 @@ def run_gui():
             yy += h + 1
         return yy - y
 
-    def spark_whens(pers, sport, league):
+    def spark_whens(pers, sport, league, clocks=None):
         """The period each point of a chart falls in, as its column title (Q3, OT, Inn 7...); '' where unknown."""
         known = [p_ for p_ in (pers or []) if isinstance(p_, (int, float)) and p_ >= 1]
         labs = period_labels(sport or "", league or "", int(max(known))) if known else []
         pre = {"baseball": "Inn ", "hockey": "P"}.get(sport, "")
         out = []
-        for p_ in pers or []:
+        for i, p_ in enumerate(pers or []):
             lab = labs[int(p_) - 1] if isinstance(p_, (int, float)) and 1 <= p_ <= len(labs) else ""
-            out.append(pre + lab if lab.isdigit() else lab)
+            clk = clocks[i] if clocks and i < len(clocks) else ""  # the game clock then, when ESPN gives one
+            out.append(" ".join(x for x in (pre + lab if lab.isdigit() else lab, clk) if x))
         return out
 
     def period_marks(x, top, w, H, bgc, pers):
@@ -3283,7 +3284,7 @@ def run_gui():
                 xm = x + w * (i - 0.5) / (n - 1)
                 canvas.create_line(xm, top, xm, top + H, fill=blend(bgc, DIM, 0.35))
 
-    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note="", pers=None, names=None, sport="", league=""):
+    def draw_spark(x, y, w, bgc, vals, ca, cb, label, note="", pers=None, names=None, sport="", league="", clocks=None):
         """A small line of how a game went: vals run from -1 (all right team) to 1 (all left team) through 0 (even). Each stretch
         takes the colour of the team ahead there. Returns the height used."""
         _, h = ctext(x, y + 4, label, FONTS["small"], DIM)
@@ -3329,7 +3330,7 @@ def run_gui():
         canvas.create_oval(ex_ - 2.5, ey_ - 2.5, ex_ + 2.5, ey_ + 2.5, fill=ca if vals[-1] > 0 else cb if vals[-1] < 0 else DIM, outline="")
         if names:  # hovering shows who is favoured at that point, and what the chance is
             texts = [f"{names[0] if v_ >= 0 else names[1]} {round((1 + abs(v_)) * 50)}%" for v_ in vals]
-            session["sparks"].append({"x": x, "w": w, "top": top, "H": H, "bgc": bgc, "when": spark_whens(pers, sport, league),
+            session["sparks"].append({"x": x, "w": w, "top": top, "H": H, "bgc": bgc, "when": spark_whens(pers, sport, league, clocks),
                                       "pts": [[p_] for p_ in pts], "cols": [[ca if v_ > 0 else cb if v_ < 0 else DIM] for v_ in vals], "texts": texts})
         return 4 + h + 2 + H + 4
 
@@ -3350,7 +3351,7 @@ def run_gui():
             canvas.create_oval(pts[-2] - 2.5, pts[-1] - 2.5, pts[-2] + 2.5, pts[-1] + 2.5, fill=col, outline="")
             sides.append(list(zip(pts[::2], pts[1::2])))
         if names:  # hovering shows the score at that point
-            session["sparks"].append({"x": x, "w": w, "top": top, "H": H, "bgc": bgc, "when": spark_whens([f_[2] for f_ in flow], sport, league),
+            session["sparks"].append({"x": x, "w": w, "top": top, "H": H, "bgc": bgc, "when": spark_whens([f_[2] for f_ in flow], sport, league, [f_[3] for f_ in flow]),
                                       "pts": [[sides[0][i], sides[1][i]] for i in range(n)], "cols": [[ca, cb]] * n,
                                       "texts": [f"{names[0]} {f_[0]:g} \u2013 {names[1]} {f_[1]:g}" for f_ in flow]})
         return 4 + h + 2 + H + 4
@@ -3385,8 +3386,8 @@ def run_gui():
                                  "b_name": d["home_abbr"], "b": hw, "a_color": ca, "b_color": cb}, bgc, w)
         ca_, cb_ = d.get("colors", ("#60a5fa", "#f59e0b"))
         if len(d.get("wp_series") or []) > 1 and ui_state.get("sparklines", True):
-            y += draw_spark(x, y, w, bgc, [v_ * 2 - 1 for v_, _p in d["wp_series"]], ca_, cb_, "Win probability over the game",
-                            pers=[p_ for _v, p_ in d["wp_series"]], names=(d["away_abbr"], d["home_abbr"]),
+            y += draw_spark(x, y, w, bgc, [w_[0] * 2 - 1 for w_ in d["wp_series"]], ca_, cb_, "Win probability over the game",
+                            pers=[w_[1] for w_ in d["wp_series"]], clocks=[w_[2] for w_ in d["wp_series"]], names=(d["away_abbr"], d["home_abbr"]),
                             sport=g["sport"] if g else "", league=g["league"] if g else "")
         recent = d["plays"][:8] if d.get("state") != "post" else []  # a finished game has its box score instead
         for title, items in (("Scoring", d["scoring"]), ("Recent plays", recent)):
