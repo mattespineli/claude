@@ -3158,21 +3158,21 @@ def run_gui():
             tween_apply(mk, put_minute)
             return 44
         if kind == "baseball":
-            def base(cx, cy, on):  # a true diamond as tall as the B-S-O rows (y 4 to 40), its home corner left empty
-                r = 7
+            def base(cx, cy, on):  # the old diamond (bases almost touching) at twice the size: as tall as the B-S-O rows (y 4 to 40), no home plate
+                r = 10
                 hl = g.get("color", "#fbbf24")
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else bg,
                                  outline=hl if on else DIM, width=2)
-            base(29, 11, g["bases"][1]); base(51, 33, g["bases"][0]); base(7, 33, g["bases"][2])
+            base(26, 14, g["bases"][1]); base(42, 30, g["bases"][0]); base(10, 30, g["bases"][2])
             ce_, ct_ = session["cur_celeb"]
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
                                                             ("O", min(g["outs"], 3), 3, "#f87171"))):
                 y = 8 + row * 14
-                c.create_text(64, y, text=label, anchor="w", fill=DIM, font=FONTS["smallb"])
+                c.create_text(60, y, text=label, anchor="w", fill=DIM, font=FONTS["smallb"])
                 for i in range(total):
                     on = i < n
-                    c.create_oval(78 + i * 12, y - 4, 86 + i * 12, y + 4, fill=color if on else bg,
+                    c.create_oval(74 + i * 12, y - 4, 82 + i * 12, y + 4, fill=color if on else bg,
                                   outline=color if on else DIM, width=1)
             return 44
         if kind == "football":
