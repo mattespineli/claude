@@ -3293,7 +3293,6 @@ def run_gui():
         mid = top + H / 2
         if pers:
             period_marks(x, top, w, H, bgc, pers)
-        canvas.create_line(x, mid, x + w, mid, fill=blend(bgc, DIM, 0.45), dash=(2, 3))
         n = len(vals)
         pts = [(x + w * i / (n - 1), mid - v_ * H / 2) for i, v_ in enumerate(vals)]
         ext = []  # the points with an extra one wherever the line crosses even, so each stretch lies on one side of it
@@ -3314,6 +3313,7 @@ def run_gui():
             if px_ is not None:
                 run.append((px_, py_, v_))
                 sign = sign or sg
+        canvas.create_line(x, mid, x + w, mid, fill=blend(bgc, DIM, 0.35))  # the even line, solid like the period lines, over the shading
         run_, rcol = [pts[0]], None  # consecutive stretches of one colour make one polyline
         for p1_, v0_, v1_ in zip(pts[1:], vals, vals[1:]):
             m_ = (v0_ + v1_) / 2
