@@ -5533,7 +5533,7 @@ def run_gui():
         lay = {"ce": ce, "bgc": bgc, "banner": [], "fade": [], "flash": None, "ring": None,
                "tag": f"fx{len(session['layers'])}"} if ce else None
         session["cur_layer"], session["ring_center"] = lay, None
-        flashing = bool(ce) and ce["mode"] == "pulse" and ce["side"] is not None
+        flashing = bool(ce) and ce["mode"] == "pulse"  # (a play with no team to credit flashes in neutral grey)
         fk_ = flash_k(ce, ct) if flashing else 0.0
         tc_ = flash_color(ce) if flashing else None
         if flashing:
