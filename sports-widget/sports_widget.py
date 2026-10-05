@@ -5477,8 +5477,8 @@ def run_gui():
             if shakes(ce):
                 lay["shake"] = (head_i, *canvas.coords(head_i)[:2], bfont[1], w)
 
-    FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
-    FLASH_HOLD, FLASH_SETTLE = 0.5, 0.6  # in a chain the colour settles to this level after each spike, so the next animation can surge past it
+    FLASH_IN, FLASH_OUT = 0.15, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
+    FLASH_HOLD, FLASH_SETTLE = 0.5, 0.4  # in a chain the colour settles to this level after each spike, so the next animation can surge past it
 
     def flash_k(ce, t):
         """0..1 strength of the team-colour card background. A lone animation flashes in, holds, and fades out. In a chain each
@@ -5491,7 +5491,7 @@ def run_gui():
         return min(up, down)
 
     def flash_color(ce):
-        return blend(BG, ce.get("tcolor") or ce["color"], 0.4)
+        return blend(BG, ce.get("tcolor") or ce["color"], 0.55)
 
     grad_of = {}  # (canvas, card background id) -> the gradient's cap and strips, which follow the background when it is resized
 
