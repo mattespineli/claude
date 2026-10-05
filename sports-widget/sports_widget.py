@@ -4157,11 +4157,17 @@ def run_gui():
             if sc:
                 draw_score(cx + score_width(sc[i]) / 2, yy - 3, sc[i], c[i], bgc, (rk, i), center=True)
                 yy += 30 + gap
-            ia_, h = ctext(cx, yy, (t["rank"] + " " if t.get("rank") else "") + t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
+            if t.get("rank"):  # the rank or seed, dimmed, so the team stays the prominent part
+                rw_, aw_ = text_width(FONTS["small"], t["rank"]), text_width(FONTS["smallb"], t["abbr"])
+                lx_ = cx - (rw_ + 4 + aw_) / 2
+                ctext(lx_, yy + 1, t["rank"], FONTS["small"], DIM, anchor="nw", tags=tags)
+                ia_, h = ctext(lx_ + rw_ + 4, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="nw", tags=tags)
+            else:
+                ia_, h = ctext(cx, yy, t["abbr"], FONTS["smallb"], FG if r["state"] != "pre" else DIM, anchor="n", tags=tags)
             if tos and tos.get("poss") == t["ha"] and r["state"] == "in":  # the ball: a small arrow pointing at the basket it attacks
                 bx_ = canvas.bbox(ia_)
                 d_ = 1 if i == 0 else -1
-                ax_ = (bx_[2] + 4) if i == 0 else (bx_[0] - 4)
+                ax_ = (bx_[2] + 4) if i == 0 else ((lx_ if t.get("rank") else bx_[0]) - 4)  # beside the whole label, rank included
                 ay_ = yy + h / 2
                 canvas.create_polygon(ax_, ay_ - 4, ax_ + 6 * d_, ay_, ax_, ay_ + 4, fill=COLORS["in"], outline="", tags=tags)
             yy += h
