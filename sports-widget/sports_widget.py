@@ -5478,12 +5478,16 @@ def run_gui():
                 lay["shake"] = (head_i, *canvas.coords(head_i)[:2], bfont[1], w)
 
     FLASH_IN, FLASH_OUT = 0.25, 0.7  # the card takes on the team colour quickly, holds it for the whole animation, then lets it go slowly
-    FLASH_DIP, FLASH_STEP = 0.45, 0.4  # between chained animations it eases down to this much, then each Then animation flashes back up
+    FLASH_HOLD, FLASH_SETTLE = 0.5, 0.6  # in a chain the colour settles to this level after each spike, so the next animation can surge past it
 
     def flash_k(ce, t):
-        """0..1 strength of the team-colour card background: in at the start, a dip and a fresh flash at each chained (Then) animation, out after the last."""
-        up = FLASH_DIP + (1 - FLASH_DIP) * ease(t / FLASH_IN) if ce.get("chained_in") else ease(t / FLASH_IN)
-        down = FLASH_DIP + (1 - FLASH_DIP) * ease((ce["secs"] - t) / FLASH_STEP) if ce.get("chained_out") else ease((ce["secs"] - t) / FLASH_OUT)
+        """0..1 strength of the team-colour card background. A lone animation flashes in, holds, and fades out. In a chain each
+        animation spikes the colour up to full and settles to a lower level, so the next Then animation is a new surge."""
+        chained = ce.get("chained_in") or ce.get("chained_out")
+        up = FLASH_HOLD + (1 - FLASH_HOLD) * ease(t / FLASH_IN) if ce.get("chained_in") else ease(t / FLASH_IN)
+        if chained:
+            up = min(up, 1 - (1 - FLASH_HOLD) * ease(max(0.0, t - FLASH_IN) / FLASH_SETTLE))
+        down = 1.0 if ce.get("chained_out") else ease((ce["secs"] - t) / FLASH_OUT)
         return min(up, down)
 
     def flash_color(ce):
