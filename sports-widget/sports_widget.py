@@ -3158,13 +3158,18 @@ def run_gui():
             tween_apply(mk, put_minute)
             return 44
         if kind == "baseball":
+            K = 36 / 27  # the diamond (second base's top to home plate's bottom) is as tall as the B-S-O rows, y 4 to 40
+            fx_, fy_ = (lambda v: 21 + (v - 21) * K), (lambda v: 4 + (v - 10) * K)
+
             def base(cx, cy, on):
-                r = 5
+                r = 5 * K
                 hl = g.get("color", "#fbbf24")
+                cx, cy = fx_(cx), fy_(cy)
                 c.create_polygon(cx, cy - r, cx + r, cy, cx, cy + r, cx - r, cy, fill=hl if on else bg,
                                  outline=hl if on else DIM, width=2)
             base(21, 15, g["bases"][1]); base(29, 23, g["bases"][0]); base(13, 23, g["bases"][2])
-            c.create_polygon(18, 31, 24, 31, 24, 34, 21, 37, 18, 34, fill=bg, outline=DIM)  # home plate
+            c.create_polygon([fx_(v) if k % 2 == 0 else fy_(v) for k, v in enumerate((18, 31, 24, 31, 24, 34, 21, 37, 18, 34))],
+                             fill=bg, outline=DIM)  # home plate
             ce_, ct_ = session["cur_celeb"]
             for row, (label, n, total, color) in enumerate((("B", min(g["balls"], 3), 3, "#34d399"),
                                                             ("S", min(g["strikes"], 2), 2, "#fbbf24"),
