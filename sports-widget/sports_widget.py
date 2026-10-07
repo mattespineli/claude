@@ -1797,10 +1797,10 @@ def _safe_pregame(entry, event, events):
 
 # Series leaders: (box score category, label, stat column) per sport; the best total over the series games decides, the per-game average is shown
 SERIES_LEADERS = {
-    "basketball": [("", "PTS avg", "PTS"), ("", "REB avg", "REB"), ("", "AST avg", "AST")],
-    "football": [("passing", "Pass YDS avg", "YDS"), ("rushing", "Rush YDS avg", "YDS"), ("receiving", "Rec YDS avg", "YDS"), ("defensive", "Tackles avg", "TOT")],
-    "baseball": [("batting", "Hits avg", "H"), ("batting", "HR avg", "HR"), ("batting", "RBI avg", "RBI"), ("pitching", "K avg", "K")],
-    "hockey": [(("forwards", "defenses"), "Goals avg", "G"), (("forwards", "defenses"), "Assists avg", "A"), ("goalies", "Saves avg", "SV")],
+    "basketball": [("", "PTS", "PTS"), ("", "REB", "REB"), ("", "AST", "AST")],
+    "football": [("passing", "Pass YDS", "YDS"), ("rushing", "Rush YDS", "YDS"), ("receiving", "Rec YDS", "YDS"), ("defensive", "Tackles", "TOT")],
+    "baseball": [("batting", "Hits", "H"), ("batting", "HR", "HR"), ("batting", "RBI", "RBI"), ("pitching", "K", "K")],
+    "hockey": [(("forwards", "defenses"), "Goals", "G"), (("forwards", "defenses"), "Assists", "A"), ("goalies", "Saves", "SV")],
 }
 
 
