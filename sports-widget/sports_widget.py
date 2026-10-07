@@ -1795,6 +1795,52 @@ def _safe_pregame(entry, event, events):
         return None
 
 
+# Series leaders: (box score category, label, stat column) per sport; players' totals over the series games decide
+SERIES_LEADERS = {
+    "basketball": [("", "PTS tot", "PTS"), ("", "REB tot", "REB"), ("", "AST tot", "AST")],
+    "football": [("passing", "Pass YDS tot", "YDS"), ("rushing", "Rush YDS tot", "YDS"), ("receiving", "Rec YDS tot", "YDS"), ("defensive", "Tackles tot", "TOT")],
+    "baseball": [("batting", "Hits tot", "H"), ("batting", "HR tot", "HR"), ("batting", "RBI tot", "RBI"), ("pitching", "K tot", "K")],
+    "hockey": [(("forwards", "defenses"), "Goals tot", "G"), (("forwards", "defenses"), "Assists tot", "A"), ("goalies", "Saves tot", "SV")],
+}
+
+
+def series_leaders(summaries, sport, away, home):
+    """[(label, {team abbr: 'Name total'})]: each team's best player in each category, summing their box score lines over the
+    series' game summaries. `away` / `home`: the upcoming game's team dicts (id, abbr)."""
+    out = []
+    for cat, label, col in SERIES_LEADERS.get(sport, []):
+        cats = cat if isinstance(cat, tuple) else (cat,)
+        tot = {}  # (team id, athlete id) -> [name, total]
+        for data in summaries:
+            for side in (data.get("boxscore") or {}).get("players") or []:
+                tid = str((side.get("team") or {}).get("id"))
+                stats = side.get("statistics") or []
+                for st in stats:
+                    if not (str(st.get("name") or "").lower() in cats or (cat == "" and st is stats[0])):
+                        continue
+                    labels = [str(l) for l in (st.get("labels") or st.get("names") or [])]
+                    if col not in labels:
+                        continue
+                    for a in st.get("athletes") or []:
+                        vals = a.get("stats") or []
+                        m = re.match(r"-?\d+(?:\.\d+)?", str(vals[labels.index(col)])) if labels.index(col) < len(vals) else None
+                        ath = a.get("athlete") or {}
+                        if not m or a.get("didNotPlay"):
+                            continue
+                        rec = tot.setdefault((tid, str(ath.get("id") or ath.get("displayName"))),
+                                             [(ath.get("shortName") or ath.get("displayName") or "?").split(" ")[-1], 0.0])
+                        rec[1] += float(m.group(0))
+        row = {}
+        for t in (away, home):
+            mine = [v for (tid, _a), v in tot.items() if tid == t["id"] and v[1] > 0]
+            if mine:
+                nm, v = max(mine, key=lambda x: x[1])
+                row[t["abbr"]] = f"{nm} {v:g}"
+        if row:
+            out.append((label, row))
+    return out
+
+
 def pregame_info(entry, event, events):
     """What fills the middle of an upcoming game's card: over a playoff series, each team's per-game stats in the games played
     so far; otherwise the season's team stats and leaders from ESPN's scoreboard. None when neither is available."""
@@ -1817,12 +1863,12 @@ def pregame_info(entry, event, events):
                     and {str((c.get("team") or {}).get("id", c.get("id", ""))) for c in c_.get("competitors", [])} == ids):
                 prior.append(e)
         if prior:
-            games = pmap(lambda e: game_detail_data(fetch_summary_cached(sport, league, e["id"], max_age=3600), sport=sport, league=league),
-                         prior[-7:], workers=4)
+            datas = pmap(lambda e: fetch_summary_cached(sport, league, e["id"], max_age=3600), prior[-7:], workers=4)
+            games = [game_detail_data(d_, sport=sport, league=league) for d_ in datas]
             stats = series_stats(games, away["abbr"], home["abbr"])
             if stats:
                 n = len(games)
-                return {"all_stats": stats, "leaders": [], "home_abbr": home["abbr"], "top_pages": [],
+                return {"all_stats": stats, "leaders": series_leaders(datas, sport, away, home), "home_abbr": home["abbr"], "top_pages": [],
                         "note": f"Series averages \u00b7 {n} game{'s' if n != 1 else ''}"}
     sb = scoreboard_event(sport, league, event)
     cs = ((sb or {}).get("competitions") or [{}])[0].get("competitors") or []
