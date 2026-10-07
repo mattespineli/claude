@@ -1795,18 +1795,18 @@ def _safe_pregame(entry, event, events):
         return None
 
 
-# Series leaders: (box score category, label, stat column) per sport; players' totals over the series games decide
+# Series leaders: (box score category, label, stat column) per sport; the best total over the series games decides, the per-game average is shown
 SERIES_LEADERS = {
-    "basketball": [("", "PTS tot", "PTS"), ("", "REB tot", "REB"), ("", "AST tot", "AST")],
-    "football": [("passing", "Pass YDS tot", "YDS"), ("rushing", "Rush YDS tot", "YDS"), ("receiving", "Rec YDS tot", "YDS"), ("defensive", "Tackles tot", "TOT")],
-    "baseball": [("batting", "Hits tot", "H"), ("batting", "HR tot", "HR"), ("batting", "RBI tot", "RBI"), ("pitching", "K tot", "K")],
-    "hockey": [(("forwards", "defenses"), "Goals tot", "G"), (("forwards", "defenses"), "Assists tot", "A"), ("goalies", "Saves tot", "SV")],
+    "basketball": [("", "PTS avg", "PTS"), ("", "REB avg", "REB"), ("", "AST avg", "AST")],
+    "football": [("passing", "Pass YDS avg", "YDS"), ("rushing", "Rush YDS avg", "YDS"), ("receiving", "Rec YDS avg", "YDS"), ("defensive", "Tackles avg", "TOT")],
+    "baseball": [("batting", "Hits avg", "H"), ("batting", "HR avg", "HR"), ("batting", "RBI avg", "RBI"), ("pitching", "K avg", "K")],
+    "hockey": [(("forwards", "defenses"), "Goals avg", "G"), (("forwards", "defenses"), "Assists avg", "A"), ("goalies", "Saves avg", "SV")],
 }
 
 
 def series_leaders(summaries, sport, away, home):
-    """[(label, {team abbr: 'Name total'})]: each team's best player in each category, summing their box score lines over the
-    series' game summaries. `away` / `home`: the upcoming game's team dicts (id, abbr)."""
+    """[(label, {team abbr: 'Name total'})]: each team's best player in each category over the series' game summaries
+    (ranked by total, shown as a per-game average). `away` / `home`: the upcoming game's team dicts (id, abbr)."""
     out = []
     for cat, label, col in SERIES_LEADERS.get(sport, []):
         cats = cat if isinstance(cat, tuple) else (cat,)
@@ -1828,14 +1828,15 @@ def series_leaders(summaries, sport, away, home):
                         if not m or a.get("didNotPlay"):
                             continue
                         rec = tot.setdefault((tid, str(ath.get("id") or ath.get("displayName"))),
-                                             [(ath.get("shortName") or ath.get("displayName") or "?").split(" ")[-1], 0.0])
+                                             [(ath.get("shortName") or ath.get("displayName") or "?").split(" ")[-1], 0.0, 0])
                         rec[1] += float(m.group(0))
+                        rec[2] += 1  # games he played
         row = {}
         for t in (away, home):
             mine = [v for (tid, _a), v in tot.items() if tid == t["id"] and v[1] > 0]
             if mine:
-                nm, v = max(mine, key=lambda x: x[1])
-                row[t["abbr"]] = f"{nm} {v:g}"
+                nm, v, gp = max(mine, key=lambda x: x[1])  # the best total decides, the per-game average is shown
+                row[t["abbr"]] = f"{nm} {_avg_text([v / gp], '')}"
         if row:
             out.append((label, row))
     return out
