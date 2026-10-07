@@ -360,6 +360,12 @@ def _date_label(event):
     return f"{d.astimezone():%a %b} {d.astimezone().day}" if d else ""
 
 
+def starts_today(event):
+    """Does the game start today, by the local clock?"""
+    d = _parse_date(event.get("date"))
+    return bool(d) and d.astimezone().date() == datetime.now().astimezone().date()
+
+
 def _record(c):
     """' (50-32)' for a competitor, or '' when ESPN sends no record."""
     recs = c.get("records") or c.get("record") or []
@@ -1715,7 +1721,7 @@ def team_status(entry):
                           f" \u00b7 {streak}" if t["id"] == me_id and streak else ""), mine=bool(me_id) and t["id"] == me_id)
                       for t in comp_teams(event["competitions"][0], seeds=seeds_for(event, entry["sport"], entry["league"]))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
-            "next": next_line, "next_tv": next_tv,
+            "next": next_line, "next_tv": next_tv, "today": starts_today(event),
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
             "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
@@ -6000,7 +6006,7 @@ def run_gui():
         results, pin_results, playoffs, leagues = last["args"]
         live_view = ui_state.get("view", "full") == "live"
         if live_view:
-            results = [r for r in results if eff(r) == "in"]
+            results = [r for r in results if eff(r) == "in" or r["state"] == "pre" and r.get("today")]  # My Teams keeps today's upcoming games
             pin_results = [r for r in pin_results if eff(r) == "in"]
             playoffs = [r for r in playoffs if eff(r) == "in"]
             leagues = [r for r in leagues if eff(r) == "in"]
