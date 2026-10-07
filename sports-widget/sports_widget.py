@@ -1677,13 +1677,15 @@ def team_status(entry):
         if recent:  # a game that just ended: show the result and when the next one is
             event = recent
             nxt = next_event(events)
+            if nxt and starts_today(nxt):  # game day: the game itself, not yesterday's result with a Next line
+                event, nxt = nxt, None
             if nxt:
                 nxt = with_records(nxt, entry["sport"], entry["league"])
             s_next = summarize_event(nxt, entry["team"], entry["sport"], entry["league"]) if nxt else None
-            if s_next:
+            if event is recent and s_next:
                 next_line = f"Next: {s_next[1]} \u00b7 {s_next[2]}"
                 next_tv = tv_channels(nxt["competitions"][0])
-            else:  # e.g. eliminated while the league's playoffs go on: say when next season starts
+            elif event is recent:  # e.g. eliminated while the league's playoffs go on: say when next season starts
                 start = season_start(entry, (data.get("season") or {}).get("year"))
                 next_line = season_label(start) if start else "No upcoming game scheduled"
     if not event:  # nothing live, soon or just played: still list the team, dimmed
