@@ -1724,6 +1724,7 @@ def team_status(entry):
                       for t in comp_teams(event["competitions"][0], seeds=seeds_for(event, entry["sport"], entry["league"]))], "logos": [_logo(me.get("team", {})) or _logo(team)],
             "score": parts["score"], "status": parts["status"], "clock": live_clock(event, entry["sport"]), "name": name, "state": state, "line": line, "detail": detail, "info": info, "graphic": graphic,
             "next": next_line, "next_tv": next_tv, "today": starts_today(event),
+            "pre": _safe_pregame(entry, event, events) if state == "pre" and starts_today(event) else None,
             "_key": (entry["league"], str(event.get("id"))), "tint": tint_color(team),
             "url": event_url(event, entry["sport"], entry["league"]),
             "game": {"sport": entry["sport"], "league": entry["league"], "id": str(event.get("id"))}}
@@ -1759,6 +1760,94 @@ def season_label(d):
         return "Out of season"
     d = d.astimezone()
     return f"Season starts {d:%b} {d.day}" + (f", {d.year}" if d.year != datetime.now().year else "")
+
+
+def _stat_num(v):
+    """(number, '%' or '') for a plain numeric stat value, else None (made-attempted '10-20' and times are left out)."""
+    m = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*(%?)\s*", str(v))
+    return (float(m.group(1)), m.group(2)) if m else None
+
+
+def _avg_text(vals, suffix):
+    m = sum(vals) / len(vals)
+    return (f"{m:.1f}".rstrip("0").rstrip(".") if m != int(m) else str(int(m))) + suffix
+
+
+def series_stats(games, away_abbr, home_abbr):
+    """Per-game averages of each team's box score stats over `games` (game_detail_data dicts), as [(key, label, away, home)]
+    for the upcoming game's away and home team. Only plain numbers are averaged."""
+    acc = {}
+    for d in games:
+        for key, label, av, hv in d.get("all_stats") or []:
+            sides = (av, hv) if d.get("away_abbr") == away_abbr else (hv, av) if d.get("away_abbr") == home_abbr else None
+            nums = [_stat_num(v) for v in sides] if sides else [None]
+            if sides and all(nums):
+                e = acc.setdefault(key, {"label": label, "a": [], "b": [], "suf": nums[0][1] or nums[1][1]})
+                e["a"].append(nums[0][0])
+                e["b"].append(nums[1][0])
+    return [(k, e["label"], _avg_text(e["a"], e["suf"]), _avg_text(e["b"], e["suf"])) for k, e in acc.items()]
+
+
+def _safe_pregame(entry, event, events):
+    try:
+        return pregame_info(entry, event, events)
+    except Exception:  # extra stats are a nicety: never let them break the card
+        return None
+
+
+def pregame_info(entry, event, events):
+    """What fills the middle of an upcoming game's card: over a playoff series, each team's per-game stats in the games played
+    so far; otherwise the season's team stats and leaders from ESPN's scoreboard. None when neither is available."""
+    sport, league = entry["sport"], entry["league"]
+    comp = event["competitions"][0]
+    teams = comp_teams(comp)
+    if len(teams) != 2:
+        return None
+    away, home = teams
+    if away.get("ha") == "home":
+        away, home = home, away
+    ids = {away["id"], home["id"]}
+    d0 = _parse_date(event.get("date"))
+    if _postseason_event(event) and d0:
+        prior = []
+        for e in events:
+            c_ = (e.get("competitions") or [{}])[0]
+            d_ = _parse_date(e.get("date"))
+            if (_state_of(e) == "post" and _postseason_event(e) and d_ and timedelta(0) < d0 - d_ < timedelta(days=45)
+                    and {str((c.get("team") or {}).get("id", c.get("id", ""))) for c in c_.get("competitors", [])} == ids):
+                prior.append(e)
+        if prior:
+            games = pmap(lambda e: game_detail_data(fetch_summary_cached(sport, league, e["id"], max_age=3600), sport=sport, league=league),
+                         prior[-7:], workers=4)
+            stats = series_stats(games, away["abbr"], home["abbr"])
+            if stats:
+                n = len(games)
+                return {"all_stats": stats, "leaders": [], "home_abbr": home["abbr"], "top_pages": [],
+                        "note": f"Series averages \u00b7 {n} game{'s' if n != 1 else ''}"}
+    sb = scoreboard_event(sport, league, event)
+    cs = ((sb or {}).get("competitions") or [{}])[0].get("competitors") or []
+    by = {str((c.get("team") or {}).get("id", c.get("id", ""))): c for c in cs}
+    ca, ch = by.get(away["id"]), by.get(home["id"])
+    if not ca or not ch:
+        return None
+    sa = {st.get("name"): st for st in ca.get("statistics") or [] if st.get("name")}
+    sh = {st.get("name"): st for st in ch.get("statistics") or [] if st.get("name")}
+    stats = [(k, st.get("abbreviation") or st.get("displayName") or k, str(st.get("displayValue", "")), str(sh[k].get("displayValue", "")))
+             for k, st in sa.items() if k in sh and st.get("displayValue") not in (None, "") and sh[k].get("displayValue") not in (None, "")]
+    lead_by = {}
+    for tm, c in ((away, ca), (home, ch)):
+        for cat in c.get("leaders") or []:
+            top = next(iter(cat.get("leaders") or []), None)
+            if not top:
+                continue
+            ath = top.get("athlete") or {}
+            nm = (ath.get("shortName") or ath.get("displayName") or "").split(" ")[-1]
+            label = cat.get("shortDisplayName") or cat.get("abbreviation") or cat.get("displayName") or ""
+            if nm and label:
+                lead_by.setdefault(label, {})[tm["abbr"]] = f"{nm} {top.get('displayValue', '')}".strip()
+    if not stats and not lead_by:
+        return None
+    return {"all_stats": stats, "leaders": list(lead_by.items()), "home_abbr": home["abbr"], "top_pages": [], "note": "Season"}
 
 
 def quiet_status(entry, events, name, season_year=None, logo=None):
@@ -4041,10 +4130,14 @@ def run_gui():
         at_half = r["state"] == "in" and (inning_break or (r.get("game") or {}).get("sport") != "baseball" and bool(
             re.search(r"\b(half-?time|end of|intermission)\b", stxt_, re.I) or re.search(r"\bHT\b", stxt_)  # soccer's halftime is "HT"
             or quiet_ and re.search(r"\b(break|delay(?:ed)?|suspended)\b", stxt_, re.I)))  # halftime, quarter / period / inning ends always; other breaks and delays when nothing else is shown
-        if (r["state"] == "post" or at_half) and r.get("game"):  # a finished game, or one at halftime: its team stats fill the middle
-            d_ = ensure_stats(r["game"], " ".join(stxt_.split()) if at_half else "")
+        pre_ = r.get("pre") if r["state"] == "pre" else None  # an upcoming game today: series or season stats
+        if ((r["state"] == "post" or at_half) and r.get("game")) or pre_:  # a finished game, or one at halftime: its team stats fill the middle
+            d_ = pre_ or ensure_stats(r["game"], " ".join(stxt_.split()) if at_half else "")
             if isinstance(d_, dict) and d_.get("all_stats"):
                 flip = teams[0]["ha"] == "home" if teams[0].get("ha") else teams[0]["abbr"] == d_["home_abbr"]
+                if d_.get("note"):  # what the numbers are (a series' per-game averages, the season)
+                    _, h = ctext(mx, my, d_["note"], FONTS["small"], DIM, anchor="n", tags=tags)
+                    my += h
                 room = 46 + (30 if sc else 0) + 14 + (13 if any(t.get("record") for t in teams) else 0) - (my - top)  # as many stats as fill the teams' height
                 nrows = max(4, min(6, -(-int(room) // 14)))
                 pool = pick_stats(r["game"]["sport"], d_.get("all_stats", []), None)
