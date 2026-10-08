@@ -1334,7 +1334,7 @@ def series_from_schedule(events, event, team_abbr):
         if not opp or str(opp.get("team", {}).get("id", opp.get("id"))) != oid:
             continue
         st = _state_of(e)
-        if st == "pre":
+        if st in ("pre", "in"):
             ahead += 1
         elif st == "post":
             try:
@@ -1709,11 +1709,11 @@ def team_status(entry):
         info, graphic = situation_text(entry["sport"], comp_), situation_graphic(entry["sport"], comp_, entry["league"])
     parts = score_parts(event, entry["team"])
     streak = streak_text(events, entry["team"])
-    ser = series_info(event["competitions"][0]) if state == "post" else None
+    ser = series_info(event["competitions"][0])
     if state == "post" and not ser:  # schedule data often lacks the series; the scoreboard's copy of the game has it
         sb_ev = scoreboard_event(entry["sport"], entry["league"], event)
         ser = series_info(sb_ev["competitions"][0]) if sb_ev else None
-    if state == "post" and not (ser or {}).get("text") and _postseason_event(event):  # still nothing: count it from the schedule
+    if not (ser or {}).get("text") and _postseason_event(event):  # still nothing: count it from the schedule
         text = series_from_schedule(events, event, entry["team"])
         if text:
             ser = {"head": (ser or {}).get("head", ""), "text": text}
@@ -2007,7 +2007,7 @@ def playoff_games(debug=False, days=7):
                 series = comp.get("series", {}).get("summary", "")
                 extra = " · ".join(x for x in (note, series) if x)
                 parts = score_parts(e)
-                row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp, seeds=seeds_for(e, sport, league)), "series": series_info(comp) if state == "post" else None,
+                row = {"tv": tv_channels(comp) if state in ("in", "pre") else "", "logos": comp_logos(comp), "teams": comp_teams(comp, seeds=seeds_for(e, sport, league)), "series": series_info(comp),
                        "name": matchup, "state": state, "line": name + (f" · {extra}" if extra else ""),
                        "_key": (league, str(e.get("id"))), "tint": home_tint(comp), "url": event_url(e, sport, league),
                        "game": {"sport": sport, "league": league, "id": str(e.get("id"))},
@@ -2289,7 +2289,7 @@ def pinned_status(pin):
                 parts = score_parts(e)
                 return {"tv": tv_channels(e["competitions"][0]) if s[0] in ("in", "pre") else "",
                         "logos": comp_logos(e["competitions"][0]), "teams": comp_teams(e["competitions"][0], seeds=seeds_for(e, pin["sport"], pin["league"])),
-                        "series": series_info(e["competitions"][0]) if s[0] == "post" else None,
+                        "series": series_info(e["competitions"][0]),
                         "score": parts["score"], "status": parts["status"], "clock": live_clock(e, pin["sport"]), "name": s[1], "state": s[0], "line": "", "detail": s[2],
                         "_key": (pin["league"], str(pin["id"])), "tint": home_tint(e["competitions"][0]),
                         "url": event_url(e, pin["sport"], pin["league"]),
@@ -5802,6 +5802,9 @@ def run_gui():
         g_ = r.get("game")
         if r.get("win"):
             yy += graphics(ix, yy, r["win"], bgc, lw)
+        sr_ = r.get("series") or {}
+        if sr_.get("text") and r["state"] in ("in", "pre"):  # a playoff game: where the series stands, in place of the stats
+            info = sr_["text"]
         if info:
             _, h = ctext(ix, yy, info, FONTS["line"], DIM, width=ww, tags=tags)
             yy += h
