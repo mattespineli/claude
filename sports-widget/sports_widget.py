@@ -319,11 +319,13 @@ def cached(key, max_age, fn):
         data = fn()
         now = time.monotonic()
         _cache[key] = (now, data, max_age)
-        if len(_cache) > 300:  # drop entries older than their own max_age (season starts keep 6 h, scoreboards seconds)
-            with _cache_lock:
-                for k in [k for k, v in list(_cache.items()) if now - v[0] > v[2]]:
-                    _cache.pop(k, None)
-                    _key_locks.pop(k, None)
+        with _cache_lock:  # expired entries go at once (a parsed game summary is megabytes), and the oldest beyond a cap
+            for k in [k for k, v in list(_cache.items()) if now - v[0] > v[2]]:
+                _cache.pop(k, None)
+                _key_locks.pop(k, None)
+            for k in sorted(_cache, key=lambda k_: _cache[k_][0])[:max(len(_cache) - 150, 0)]:
+                _cache.pop(k, None)
+                _key_locks.pop(k, None)
         return data
 
 
