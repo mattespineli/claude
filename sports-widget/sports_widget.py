@@ -342,6 +342,34 @@ def fetch_schedule(entry):
     return get_json(API.format(**entry))
 
 
+def _schedule_ttl(data):
+    """How long a team's schedule stays fresh: seconds around a game (it is what notices one starting), else 2 minutes.
+    Live scores and situations come from the scoreboard, not the schedule."""
+    now = datetime.now(timezone.utc)
+    for e in data.get("events", []):
+        if not e.get("competitions"):
+            continue
+        st = _state_of(e)
+        if st == "in":
+            return 10
+        d = _parse_date(e.get("date")) if st == "pre" else None
+        if d and d - timedelta(minutes=20) <= now <= d + timedelta(hours=6):
+            return 10
+    return 120
+
+
+def fetch_schedule_cached(entry):
+    """The team's season schedule (often hundreds of KB), re-downloaded only when it may have changed."""
+    key = ("schedule", API.format(**entry))
+    hit = _cache.get(key)
+    data = cached(key, _schedule_ttl(hit[1]) if hit else 0, lambda: fetch_schedule(entry))
+    with _cache_lock:  # keep it as long as its own games say
+        e_ = _cache.get(key)
+        if e_ and e_[1] is data:
+            _cache[key] = (e_[0], data, _schedule_ttl(data))
+    return data
+
+
 def _score(competitor):
     s = competitor.get("score")
     if isinstance(s, dict):
@@ -1667,7 +1695,7 @@ def with_records(event, sport, league):
 
 
 def team_status(entry):
-    data = fetch_schedule(entry)
+    data = fetch_schedule_cached(entry)
     team = data.get("team", {})
     base_name = entry.get("label") or team.get("displayName") or entry["team"].upper()
     own = team.get("recordSummary") or ((team.get("record") or {}).get("items") or [{}])[0].get("summary")
@@ -3887,17 +3915,26 @@ def run_gui():
             frac = v - k
             ax, ay = canvas.coords(c["anchor"])[:2]
             travel = c["h"] * 0.42  # how far a digit rolls before it is out of sight on the drum
+            last = c.setdefault("last", {})  # what each item was last set to: unchanged settings are not sent to Tk again
             for item, idx, off in ((c["items"][0], k, -frac), (c["items"][1], k + 1, 1 - frac)):
                 if idx >= len(c["seq"]) or abs(off) >= 1:
-                    canvas.itemconfigure(item, text="")
+                    if last.get(item) != "":
+                        last[item] = ""
+                        canvas.itemconfigure(item, text="")
                     continue
                 d = abs(off)
-                canvas.coords(item, ax, ay + off * travel * c["dir"])  # up when counting up, down when counting down
+                y_ = round(ay + off * travel * c["dir"], 1)  # up when counting up, down when counting down
+                if last.get((item, "y")) != (ax, y_):
+                    last[(item, "y")] = (ax, y_)
+                    canvas.coords(item, ax, y_)
                 px_ = max(6, round(px0 * (1 - 0.35 * d)))
                 if c.setdefault("px", {}).get(item) != px_:  # a new font only when the size changes
                     c["px"][item] = px_
                     canvas.itemconfigure(item, font=px_font(FONTS["score"][0], px_))
-                canvas.itemconfigure(item, text=c["seq"][idx], fill=blend(c["color"], c["bg"], d))
+                tf_ = (c["seq"][idx], blend(c["color"], c["bg"], d))
+                if last.get(item) != tf_:
+                    last[item] = tf_
+                    canvas.itemconfigure(item, text=tf_[0], fill=tf_[1])
 
     TEST_POINTS = {"TOUCHDOWN!": 6, "FIELD GOAL": 3, "GOAL!": 1, "HOME RUN!": 1, "INSIDE THE PARK HOME RUN!": 1, "GRAND SLAM!": 4, "THREE-POINTER": 3, "TWO-POINTER": 2, "SLAM DUNK!": 2, "SAFETY": 2,
                    "RUN SCORES": 1, "PICK SIX!": 6, "EXTRA POINT": 1, "2-PT CONVERSION": 2, "BLOCKED PUNT TOUCHDOWN!": 6, "BLOCKED FG TOUCHDOWN!": 6}
@@ -5293,7 +5330,7 @@ def run_gui():
             if t >= ce["secs"]:
                 continue
             bgc = pbgc = lay["bgc"]
-            fk = flash_k(ce, t) if lay["flash"] else None
+            fk = round(flash_k(ce, t) * 48) / 48 if lay["flash"] else None  # in steps too small to see: unchanged frames skip the recolouring
             if lay["flash"]:  # text fades toward the card as it is right now, flash included, so hidden text stays hidden
                 bgc = blend(lay["flash"][2], flash_color(ce), fk)
                 pbgc = blend(lay["flash"][2], flash_color(ce), round(fk * 16) / 16)  # pills in 1/16 steps, so they reuse their images
